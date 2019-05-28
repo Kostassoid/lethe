@@ -7,8 +7,13 @@ fn main() {
 
     let matches = App::new("Lethe")
         .version("0.1.0")
-        .author("https://")
-        .about("Disk wipe")
+        .author("https://github.com/Kostassoid/lethe")
+        .about("Secure disk wipe")
+        .subcommand(SubCommand::with_name("list")
+            .about("list available devices")
+            .arg(Arg::with_name("debug")
+                .short("d")
+                .help("print debug information verbosely")))
         .arg(Arg::with_name("config")
             .short("c")
             .long("config")
@@ -23,13 +28,6 @@ fn main() {
             .short("v")
             .multiple(true)
             .help("Sets the level of verbosity"))
-        .subcommand(SubCommand::with_name("test")
-            .about("controls testing features")
-            .version("1.3")
-            .author("Someone E. <someone_else@other.com>")
-            .arg(Arg::with_name("debug")
-                .short("d")
-                .help("print debug information verbosely")))
         .get_matches();
 
     // Gets a value for config if supplied by user, or defaults to "default.conf"

@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::io::SeekFrom;
-use std::os::macos::fs::MetadataExt;
 use self::super::*;
 
 struct FileContainer {
@@ -18,7 +17,7 @@ impl FileContainer {
     }
 }
 
-impl DataContainer for FileContainer {
+impl StorageContainer for FileContainer {
     fn description(&self) -> &str {
         self.path.to_str().unwrap()
     }
@@ -27,8 +26,21 @@ impl DataContainer for FileContainer {
         File::metadata(&self.file).map(|m| m.len())
     }
 
+    #[cfg(target_os = "linux")]
     fn block_size(&self) -> IoResult<u64> {
-        File::metadata(&self.file).map(|m| m.st_blksize())
+        Ok(4096)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn block_size(&self) -> IoResult<u64> {
+        use std::os::macos::fs::MetadataExt;
+        File::metadata(&self.file)
+            .map(|m| m.st_blksize())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn block_size(&self) -> IoResult<u64> {
+        Ok(4096)
     }
 
     fn position(&mut self) -> IoResult<u64> {
