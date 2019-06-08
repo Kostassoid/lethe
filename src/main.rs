@@ -2,8 +2,15 @@ extern crate clap;
 use clap::{Arg, App, SubCommand};
 
 mod storage;
+use storage::file::*;
+use crate::storage::{StorageEnumerator, StorageReference};
 
 fn main() {
+
+    let enumerator = FileEnumerator::new(std::env::temp_dir());
+    for x in enumerator.iterate().unwrap() {
+        println!("-- {}", x.description());
+    }
 
     let matches = App::new("Lethe")
         .version("0.1.0")
@@ -60,4 +67,5 @@ fn main() {
     // more program logic goes here...
 
     println!("Hello, world!");
+
 }

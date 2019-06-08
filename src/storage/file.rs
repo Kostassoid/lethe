@@ -1,26 +1,30 @@
 use std::fs::File;
+use std::fs::read_dir;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::io::SeekFrom;
 use self::super::*;
 
-struct FileContainer {
-    path: PathBuf,
-    file: File,
+pub struct FileEnumerator {
+    root: PathBuf
+}
+
+pub struct FileReference {
+    path: PathBuf
+}
+
+pub struct FileContainer {
+    file: File
 }
 
 impl FileContainer {
-    fn new<P: AsRef<Path>>(file_path: P) -> IoResult<FileContainer> {
+    pub fn new<P: AsRef<Path>>(file_path: P) -> IoResult<FileContainer> {
         let file = File::open(file_path.as_ref())?;
-        let path = file_path.as_ref().to_path_buf();
-        Ok(FileContainer { path, file })
+        Ok(FileContainer { file })
     }
 }
 
 impl StorageContainer for FileContainer {
-    fn description(&self) -> &str {
-        self.path.to_str().unwrap()
-    }
 
     fn size(&self) -> IoResult<u64> {
         File::metadata(&self.file).map(|m| m.len())
@@ -51,15 +55,55 @@ impl StorageContainer for FileContainer {
         self.file.seek(SeekFrom::Start(position))
     }
 
-    fn read(&self, buffer: &mut [u8]) -> IoResult<u64> {
-        unimplemented!()
+    fn read(&mut self, buffer: &mut [u8]) -> IoResult<u64> {
+        self.file.read(buffer).map(|x| x as u64)
     }
 
     fn write(&mut self, data: &[u8]) -> IoResult<()> {
-        unimplemented!()
+        self.file.write_all(data)
     }
 
     fn sync(&self) -> IoResult<()> {
         self.file.sync_all()
+    }
+}
+
+impl FileReference {
+    pub fn new<P: AsRef<Path>>(path: P) -> FileReference {
+        let p = path.as_ref().to_path_buf();
+        FileReference { path: p }
+    }
+}
+
+impl StorageReference for FileReference {
+    type Container = FileContainer;
+
+    fn description(&self) -> &str {
+        self.path.to_str().unwrap()
+    }
+
+    fn to_container(&self) -> IoResult<Box<Self::Container>> {
+        FileContainer::new(&self.path).map(Box::new)
+    }
+}
+
+impl FileEnumerator {
+    pub fn new<P: AsRef<Path>>(root: P) -> FileEnumerator {
+        let p = root.as_ref().to_path_buf();
+        FileEnumerator { root: p }
+    }
+}
+
+impl StorageEnumerator for FileEnumerator {
+    type Reference = FileReference;
+
+    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Reference>>> {
+        let rd = read_dir(&self.root)?;
+        Ok(
+            Box::new(rd
+                .filter(|de| de.as_ref().unwrap().file_type().unwrap().is_file())
+                .map(|de| FileReference::new(de.unwrap().path()))
+            )
+        )
     }
 }
