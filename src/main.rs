@@ -3,13 +3,14 @@ use clap::{Arg, App, SubCommand};
 
 mod storage;
 use storage::file::*;
-use crate::storage::{StorageEnumerator, StorageReference};
+use crate::storage::{StorageEnumerator, StorageDetails};
 
 fn main() {
 
-    let enumerator = FileEnumerator::new(std::env::temp_dir());
+    let enumerator = FileEnumerator::new(std::env::temp_dir(), |p| p.to_str().unwrap().contains("mov"));
+    //let enumerator = FileEnumerator::new("/dev", |p| p.to_str().unwrap().contains("disk"));
     for x in enumerator.iterate().unwrap() {
-        println!("-- {}", x.description());
+        println!("-- {} ({})", x.name(), x.size().unwrap_or(0));
     }
 
     let matches = App::new("Lethe")
