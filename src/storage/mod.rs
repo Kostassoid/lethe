@@ -1,4 +1,4 @@
-pub mod file;
+pub mod nix;
 
 pub type IoResult<A> = std::io::Result<A>;
 
@@ -7,20 +7,24 @@ pub trait StorageAccess {
     fn seek(&mut self, position: u64) -> IoResult<u64>;
     fn read(&mut self, buffer: &mut [u8]) -> IoResult<u64>;
     fn write(&mut self, data: &[u8]) -> IoResult<()>;
-    fn sync(&self) -> IoResult<()>;
+    fn flush(&self) -> IoResult<()>;
 }
 
-pub trait StorageDetails {
+#[derive(Debug)]
+pub struct StorageDetails {
+    pub size: u64,
+    pub block_size: u64,
+    pub is_readonly: bool
+}
+
+pub trait StorageRef {
     type Access: StorageAccess;
-    fn name(&self) -> &str;
-    fn size(&self) -> IoResult<u64>;
-    fn block_size(&self) -> IoResult<u64>;
-    fn is_readonly(&self) -> bool;
-    fn is_ok(&self) -> bool;
+    fn id(&self) -> &str;
+    fn details(&self) -> &StorageDetails;
     fn access(&self) -> IoResult<Box<Self::Access>>;
 }
 
 pub trait StorageEnumerator {
-    type Details: StorageDetails;
-    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Details>>>;
+    type Ref: StorageRef;
+    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Ref>>>;
 }

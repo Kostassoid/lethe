@@ -2,15 +2,15 @@ extern crate clap;
 use clap::{Arg, App, SubCommand};
 
 mod storage;
-use storage::file::*;
-use crate::storage::{StorageEnumerator, StorageDetails};
+use storage::nix::*;
+use crate::storage::{StorageEnumerator, StorageRef};
 
 fn main() {
 
-    let enumerator = FileEnumerator::new(std::env::temp_dir(), |p| p.to_str().unwrap().contains("mov"));
+    let enumerator = FileEnumerator::new(std::env::temp_dir());
     //let enumerator = FileEnumerator::new("/dev", |p| p.to_str().unwrap().contains("disk"));
     for x in enumerator.iterate().unwrap() {
-        println!("-- {} ({})", x.name(), x.size().unwrap_or(0));
+        println!("-- {} ({:?})", x.id(), x.details());
     }
 
     let matches = App::new("Lethe")
