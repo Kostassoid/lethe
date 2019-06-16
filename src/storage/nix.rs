@@ -1,6 +1,6 @@
 extern crate nix;
 
-use std::fs::{File, DirEntry, OpenOptions, metadata};
+use std::fs::{File, OpenOptions};
 use std::fs::read_dir;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
@@ -8,11 +8,6 @@ use std::io::SeekFrom;
 use self::super::*;
 use std::ffi::CString;
 use nix::*;
-
-// ioctl functions
-
-ioctl_read!(dk_get_block_size, b'd', 24, u32);
-ioctl_read!(dk_get_block_count, b'd', 25, u64);
 
 // FileAccess
 
@@ -73,20 +68,40 @@ impl FileRef {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn get_block_device_size(fd: libc::c_int) -> u64 {
+        ioctl_read!(dk_get_block_size, b'd', 24, u32); // DKIOCGETBLOCKSIZE
+        ioctl_read!(dk_get_block_count, b'd', 25, u64); // DKIOCGETBLOCKCOUNT
+
+        unsafe {
+            let mut block_size: u32 = std::mem::zeroed();
+            let mut block_count: u64 = std::mem::zeroed();
+            dk_get_block_size(fd, &mut block_size).unwrap();
+            dk_get_block_count(fd, &mut block_count).unwrap();
+            (block_size as u64) * block_count
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn get_block_device_size(fd: libc::c_int) -> u64 {
+        // requires linux 2.4.10+
+        ioctl_read!(linux_get_block_size, 0x12, 114, u64); // BLKGETSIZE64
+
+        unsafe {
+            let mut block_size: u64 = std::mem::zeroed();
+            linux_get_block_size(fd, &mut block_size).unwrap();
+            block_size
+        }
+    }
+
     fn resolve_storage_size(storage_type: &StorageType, stat: &libc::stat, path: &PathBuf) -> u64 {
         match storage_type {
             StorageType::File => stat.st_size as u64,
             _ => {
                 use std::os::unix::io::*;
-                let mut f = OpenOptions::new().read(true).create(false).write(false).custom(libc::O_RDONLY).open(path).unwrap();
+                let f = OpenOptions::new().read(true).create(false).write(false).open(path).unwrap();
                 let fd = f.as_raw_fd();
-                unsafe {
-                    let mut block_size: u32 = std::mem::zeroed();
-                    let mut block_count: u64 = std::mem::zeroed();
-                    dk_get_block_size(fd, &mut block_size).unwrap();
-                    dk_get_block_count(fd, &mut block_count).unwrap();
-                    (block_size as u64) * block_count
-                }
+                Self::get_block_device_size(fd)
             }
         }
     }
@@ -152,7 +167,7 @@ impl FileEnumerator {
         FileEnumerator::custom(
             "/dev",
             |p| p.to_str().unwrap().contains("disk0s4"),
-            |m| true
+            |_m| true
         )
     }
 }
