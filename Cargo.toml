@@ -5,6 +5,5 @@ authors = ["kostassoid <k.alexandroff@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+nix = "0.14.1"
 clap = "~2.33"
-regex = "1"
-libc = "0.2"

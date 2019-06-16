@@ -11,10 +11,18 @@ pub trait StorageAccess {
 }
 
 #[derive(Debug)]
+pub enum StorageType {
+    File,
+    Block,
+    Raw,
+    Other
+}
+
+#[derive(Debug)]
 pub struct StorageDetails {
     pub size: u64,
     pub block_size: u64,
-    pub is_readonly: bool
+    pub storage_type: StorageType
 }
 
 pub trait StorageRef {
@@ -24,7 +32,7 @@ pub trait StorageRef {
     fn access(&self) -> IoResult<Box<Self::Access>>;
 }
 
-pub trait StorageEnumerator {
+pub trait StorageEnumerator<'a> {
     type Ref: StorageRef;
-    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Ref>>>;
+    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Ref>  + 'a>>;
 }
