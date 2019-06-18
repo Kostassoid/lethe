@@ -22,7 +22,8 @@ pub enum StorageType {
 pub struct StorageDetails {
     pub size: u64,
     pub block_size: u64,
-    pub storage_type: StorageType
+    pub storage_type: StorageType,
+    pub is_trim_supported: bool,
 }
 
 pub trait StorageRef {

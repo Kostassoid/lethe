@@ -94,15 +94,26 @@ impl FileRef {
         }
     }
 
-    fn resolve_storage_size(storage_type: &StorageType, stat: &libc::stat, path: &PathBuf) -> u64 {
+    #[cfg(target_os = "macos")]
+    fn is_trim_supported(fd: libc::c_int) -> bool {
+        ioctl_read!(dk_get_features, b'd', 76, u32); // DKIOCGETFEATURES
+
+        unsafe {
+            let mut features: u32 = std::mem::zeroed();
+            dk_get_features(fd, &mut features).unwrap();
+            (features & 0x00000010) > 0 // DK_FEATURE_UNMAP
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn is_trim_supported(fd: libc::c_int) -> bool {
+        false
+    }
+
+    fn resolve_storage_size(storage_type: &StorageType, stat: &libc::stat, fd: libc::c_int) -> u64 {
         match storage_type {
             StorageType::File => stat.st_size as u64,
-            _ => {
-                use std::os::unix::io::*;
-                let f = OpenOptions::new().read(true).create(false).write(false).open(path).unwrap();
-                let fd = f.as_raw_fd();
-                Self::get_block_device_size(fd)
-            }
+            _ => Self::get_block_device_size(fd)
         }
     }
 
@@ -114,12 +125,17 @@ impl FileRef {
 
                 let storage_type = Self::resolve_storage_type(stat.st_mode);
 
-                let size = Self::resolve_storage_size(&storage_type, &stat, &path.as_ref().to_path_buf());
+                use std::os::unix::io::*;
+                let f = OpenOptions::new().read(true).create(false).write(false).open(path).unwrap();
+                let fd = f.as_raw_fd();
+
+                let size = Self::resolve_storage_size(&storage_type, &stat, fd);
 
                 Ok(StorageDetails{
                     size,
                     block_size: stat.st_blksize as u64,
-                    storage_type
+                    storage_type,
+                    is_trim_supported: Self::is_trim_supported(fd)
                 })
             } else {
                 Err(std::io::Error::new(std::io::ErrorKind::Other, "Unable to get stat info"))
