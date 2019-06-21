@@ -33,7 +33,7 @@ pub trait StorageRef {
     fn access(&self) -> IoResult<Box<Self::Access>>;
 }
 
-pub trait StorageEnumerator<'a> {
+pub trait StorageEnumerator {
     type Ref: StorageRef;
-    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Ref>  + 'a>>;
+    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Ref>>>;
 }

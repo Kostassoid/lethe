@@ -53,10 +53,10 @@ pub struct FileRef {
 }
 
 impl FileRef {
-    pub fn new<P: AsRef<Path>>(path: P) -> FileRef {
+    pub fn new<P: AsRef<Path>>(path: P) -> IoResult<FileRef> {
         let p = path.as_ref().to_path_buf();
-        let details = Self::build_details(path).unwrap();
-        FileRef { path: p, details }
+        let details = Self::build_details(path)?;
+        Ok(FileRef { path: p, details })
     }
 
     fn resolve_storage_type(mode: u16) -> StorageType {
@@ -100,8 +100,9 @@ impl FileRef {
 
         unsafe {
             let mut features: u32 = std::mem::zeroed();
-            dk_get_features(fd, &mut features).unwrap();
-            (features & 0x00000010) > 0 // DK_FEATURE_UNMAP
+            dk_get_features(fd, &mut features)
+            .map(|_| (features & 0x00000010) > 0) // DK_FEATURE_UNMAP
+            .unwrap_or(false)
         }
     }
 
@@ -112,8 +113,8 @@ impl FileRef {
 
     fn resolve_storage_size(storage_type: &StorageType, stat: &libc::stat, fd: libc::c_int) -> u64 {
         match storage_type {
-            StorageType::File => stat.st_size as u64,
-            _ => Self::get_block_device_size(fd)
+            StorageType::Block | StorageType::Raw => Self::get_block_device_size(fd),
+            _ => stat.st_size as u64
         }
     }
 
@@ -125,8 +126,10 @@ impl FileRef {
 
                 let storage_type = Self::resolve_storage_type(stat.st_mode);
 
+                //println!("!!! {:?}: StorageType = {:?}", path.as_ref().to_str(), storage_type);
+
                 use std::os::unix::io::*;
-                let f = OpenOptions::new().read(true).create(false).write(false).open(path).unwrap();
+                let f = OpenOptions::new().read(true).create(false).write(false).open(path)?;
                 let fd = f.as_raw_fd();
 
                 let size = Self::resolve_storage_size(&storage_type, &stat, fd);
@@ -169,6 +172,7 @@ pub struct FileEnumerator {
 }
 
 impl FileEnumerator {
+    #[allow(dead_code)]
     pub fn custom<P: AsRef<Path>>(
         root: P,
         path_filter: fn(&PathBuf) -> bool,
@@ -178,6 +182,7 @@ impl FileEnumerator {
         FileEnumerator { root: p, path_filter, meta_filter }
     }
 
+    #[allow(dead_code)]
     #[cfg(target_os = "macos")]
     pub fn system_drives() -> FileEnumerator {
         FileEnumerator::custom(
@@ -188,17 +193,17 @@ impl FileEnumerator {
     }
 }
 
-impl<'a> StorageEnumerator<'a> for FileEnumerator {
+impl<'a> StorageEnumerator for FileEnumerator {
     type Ref = FileRef;
 
-    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Ref> + 'a>> {
+    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Ref>>> {
         let rd = read_dir(&self.root)?;
         Ok(Box::new(rd.filter_map(std::io::Result::ok)
             .map(|de| de.path())
             .filter(|path|
                 (self.path_filter)(&path.to_path_buf())
             )
-            .map(FileRef::new)
+            .flat_map(FileRef::new)
             .filter(|r|
                 (self.meta_filter)(&r.details)
             )
