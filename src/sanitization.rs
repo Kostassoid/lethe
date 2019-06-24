@@ -143,8 +143,7 @@ mod test {
 
         let unchanged = data1.iter().zip(create_test_vec().iter()).filter(|t| t.0 == t.1).count();
 
-        println!("!!! unch = {}", unchanged);
-        assert!(unchanged < TEST_SIZE / 10); // 
+        assert!(unchanged < TEST_SIZE / 100); // allows for some edge cases
 
         stage.reset();
         let mut data2 = create_test_vec();
