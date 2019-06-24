@@ -59,34 +59,39 @@ struct Scheme {
     stages: Vec<SantitizationStage>
 }
 
-struct Schemes {
+struct SchemeCollection {
     schemes: HashMap<&'static str, Scheme>
 }
 
-impl Schemes {
-    pub fn new(schemes: HashMap<&'static str, Scheme>) -> Schemes {
-        Schemes { schemes }
+impl SchemeCollection {
+    pub fn new(schemes: HashMap<&'static str, Scheme>) -> SchemeCollection {
+        SchemeCollection { schemes }
     }
 
-    pub fn default() -> Schemes {
+    pub fn default() -> SchemeCollection {
         let mut schemes = HashMap::new();
 
         schemes.insert("zero", Scheme { stages: vec!(
             SantitizationStage::zero()
         )});
+
         schemes.insert("one", Scheme { stages: vec!(
             SantitizationStage::one()
-        ) });
+        )});
 
         schemes.insert("random", Scheme { stages: vec!(
             SantitizationStage::random(thread_rng().next_u64())
-        ) });
+        )});
         
         Self::new(schemes)
     }
 
     pub fn all(&self) -> &HashMap<&'static str, Scheme> {
         &self.schemes
+    }
+
+    pub fn find(&self, name: &str) -> Option<&Scheme> {
+        self.schemes.get(name)
     }
 }
 
@@ -150,6 +155,17 @@ mod test {
 
         assert!(stage_entropy > source_entropy);
         assert!(stage_entropy > 0.9);
+    }
+
+    #[test]
+    fn test_scheme_find() {
+        let repo = SchemeCollection::default();
+
+        assert!(repo.find("missing").is_none());
+
+        let scheme = repo.find("one");
+        assert!(scheme.is_some());
+        //assert_eq!(scheme.unwrap().stages, vec!(SantitizationStage::one()));
     }
 
     fn create_test_vec() -> Vec<u8> {
