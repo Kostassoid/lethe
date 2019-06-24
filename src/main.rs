@@ -6,7 +6,7 @@ use storage::nix::*;
 use storage::{StorageEnumerator, StorageRef};
 
 mod sanitization;
-use sanitization::SanitizationStage;
+use sanitization::*;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
