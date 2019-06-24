@@ -6,8 +6,7 @@ use std::mem;
 
 #[derive(Debug, Clone)]
 enum SantitizationStage {
-    Zero,
-    One,
+    Fill { value: u8 },
     Random { seed: u64, gen: StdRng }
 }
 
@@ -23,11 +22,11 @@ fn unsafe_fill(buffer: &mut [u8], value: u8) -> () {
 
 impl SantitizationStage {
     pub fn zero() -> SantitizationStage { 
-        SantitizationStage::Zero 
+        SantitizationStage::Fill { value: 0x00 } 
     }
 
     pub fn one() -> SantitizationStage { 
-        SantitizationStage::One 
+        SantitizationStage::Fill { value: 0xff } 
     }
 
     pub fn random(seed: u64) -> SantitizationStage { 
@@ -36,11 +35,8 @@ impl SantitizationStage {
 
     fn next(&mut self, buffer: &mut [u8]) -> () {
         match self {
-            SantitizationStage::Zero => {
-                unsafe_fill(buffer, 0);
-            },
-            SantitizationStage::One => { 
-                unsafe_fill(buffer, 0xff);
+            SantitizationStage::Fill { ref value } => {
+                unsafe_fill(buffer, *value);
             },
             SantitizationStage::Random { seed: _, ref mut gen } => { 
                 &mut gen.fill_bytes(buffer);
@@ -50,8 +46,7 @@ impl SantitizationStage {
 
     fn reset(&mut self) -> () {
         match self {
-            SantitizationStage::Zero => (),
-            SantitizationStage::One => (),
+            SantitizationStage::Fill { value: _ } => (),
             SantitizationStage::Random { seed, ref mut gen } => { 
                 *gen = SeedableRng::seed_from_u64(*seed); 
             }
@@ -99,31 +94,16 @@ impl Schemes {
 mod test {
     use super::*;
 
-    const TEST_SIZE: usize = 1024;
+    const TEST_SIZE: usize = 10245;
     const TEST_BLOCK: usize = 256;
 
     #[test]
-    fn test_stage_zero_behaves() {
+    fn test_stage_fill_behaves() {
         let mut data1 = create_test_vec();
-        let mut stage = SantitizationStage::Zero;
+        let mut stage = SantitizationStage::Fill { value: 0x33 };
 
         fill(&mut data1, &mut stage);
-        assert!(data1.iter().find(|x| **x != 0).is_none());
-
-        stage.reset();
-        let mut data2 = create_test_vec();
-        fill(&mut data2, &mut stage);
-
-        assert_eq!(data1, data2);
-    }
-
-    #[test]
-    fn test_stage_one_behaves() {
-        let mut data1 = create_test_vec();
-        let mut stage = SantitizationStage::One;
-
-        fill(&mut data1, &mut stage);
-        assert!(data1.iter().find(|x| **x != 0xff).is_none());
+        assert!(data1.iter().find(|x| **x != 0x33).is_none());
 
         stage.reset();
         let mut data2 = create_test_vec();
@@ -141,7 +121,8 @@ mod test {
 
         assert_ne!(data1, create_test_vec());
 
-        let unchanged = data1.iter().zip(create_test_vec().iter()).filter(|t| t.0 == t.1).count();
+        let unchanged = data1.iter().zip(create_test_vec().iter())
+            .filter(|t| t.0 == t.1).count();
 
         assert!(unchanged < TEST_SIZE / 100); // allows for some edge cases
 
