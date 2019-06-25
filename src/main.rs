@@ -1,6 +1,9 @@
 extern crate clap;
 use clap::{Arg, App, SubCommand, AppSettings};
 
+use console::style;
+use indicatif::{HumanBytes};
+
 mod storage;
 use storage::nix::*;
 use storage::{StorageEnumerator, StorageRef};
@@ -65,17 +68,28 @@ fn main() {
     );
     //let enumerator = FileEnumerator::system_drives();
 
+    let schemes = SchemeRepo::default();
+
     match app.subcommand() {
         ("list", _) => 
-            for x in enumerator.iterate().unwrap() {
-                println!("-- {} ({:?})", x.id(), x.details());
+            for x in enumerator.try_iter().unwrap() {
+                println!("Found devices");
+                println!("{} ({})", style(x.id()).bold(), HumanBytes(x.details().size));
             },
         ("wipe", Some(cmd)) => {
-                let device = cmd.value_of("device").unwrap();
-                let scheme = cmd.value_of("scheme").unwrap();
-                println!("Wiping {} using scheme {}", device, scheme)
+                let deviceId = cmd.value_of("device").unwrap();
+                let schemeId = cmd.value_of("scheme").unwrap();
+
+                let device = enumerator.try_iter().unwrap().find(|d| d.id() == deviceId)
+                    .expect(&format!("Unknown device {}", deviceId));
+                let scheme = schemes.find(schemeId)
+                    .expect(&format!("Unknown scheme {}", schemeId));
+
+                println!("Wiping {} using scheme {}", style(deviceId).bold(), style(schemeId).bold())
             },
-        _ => 
-            println!("{}", app.usage())
+        _ => {
+                println!("{}", app.usage());
+                std::process::exit(1)
+            }
     }
 }

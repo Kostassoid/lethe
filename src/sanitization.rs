@@ -55,20 +55,20 @@ impl SantitizationStage {
 }
 
 #[derive(Debug, Clone)]
-struct Scheme {
+pub struct Scheme {
     stages: Vec<SantitizationStage>
 }
 
-struct SchemeCollection {
+pub struct SchemeRepo {
     schemes: HashMap<&'static str, Scheme>
 }
 
-impl SchemeCollection {
-    pub fn new(schemes: HashMap<&'static str, Scheme>) -> SchemeCollection {
-        SchemeCollection { schemes }
+impl SchemeRepo {
+    pub fn new(schemes: HashMap<&'static str, Scheme>) -> SchemeRepo {
+        SchemeRepo { schemes }
     }
 
-    pub fn default() -> SchemeCollection {
+    pub fn default() -> SchemeRepo {
         let mut schemes = HashMap::new();
 
         schemes.insert("zero", Scheme { stages: vec!(
@@ -159,13 +159,12 @@ mod test {
 
     #[test]
     fn test_scheme_find() {
-        let repo = SchemeCollection::default();
+        let repo = SchemeRepo::default();
 
         assert!(repo.find("missing").is_none());
 
         let scheme = repo.find("one");
         assert!(scheme.is_some());
-        //assert_eq!(scheme.unwrap().stages, vec!(SantitizationStage::one()));
     }
 
     fn create_test_vec() -> Vec<u8> {

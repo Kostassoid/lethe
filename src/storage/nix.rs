@@ -196,7 +196,7 @@ impl FileEnumerator {
 impl<'a> StorageEnumerator for FileEnumerator {
     type Ref = FileRef;
 
-    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Ref>>> {
+    fn try_iter(&self) -> IoResult<Box<Iterator<Item=Self::Ref>>> {
         let rd = read_dir(&self.root)?;
         Ok(Box::new(rd.filter_map(std::io::Result::ok)
             .map(|de| de.path())

@@ -35,5 +35,5 @@ pub trait StorageRef {
 
 pub trait StorageEnumerator {
     type Ref: StorageRef;
-    fn iterate(&self) -> IoResult<Box<Iterator<Item=Self::Ref>>>;
+    fn try_iter(&self) -> IoResult<Box<Iterator<Item=Self::Ref>>>;
 }
