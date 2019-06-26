@@ -1,6 +1,9 @@
 extern crate clap;
 use clap::{Arg, App, SubCommand, AppSettings};
 
+#[macro_use] extern crate prettytable;
+use prettytable::{Table, format};
+
 use console::style;
 use indicatif::{HumanBytes};
 
@@ -71,25 +74,39 @@ fn main() {
     let schemes = SchemeRepo::default();
 
     match app.subcommand() {
-        ("list", _) => 
-            for x in enumerator.try_iter().unwrap() {
-                println!("Found devices");
-                println!("{} ({})", style(x.id()).bold(), HumanBytes(x.details().size));
-            },
-        ("wipe", Some(cmd)) => {
-                let deviceId = cmd.value_of("device").unwrap();
-                let schemeId = cmd.value_of("scheme").unwrap();
-
-                let device = enumerator.try_iter().unwrap().find(|d| d.id() == deviceId)
-                    .expect(&format!("Unknown device {}", deviceId));
-                let scheme = schemes.find(schemeId)
-                    .expect(&format!("Unknown scheme {}", schemeId));
-
-                println!("Wiping {} using scheme {}", style(deviceId).bold(), style(schemeId).bold())
-            },
-        _ => {
-                println!("{}", app.usage());
-                std::process::exit(1)
+        ("list", _) => {
+            let mut t = Table::new();
+            t.set_format(*format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
+            t.set_titles(row!["Device ID", "Size"]);
+            for x in enumerator.list().unwrap() {
+                t.add_row(row![style(x.id()).bold(), HumanBytes(x.details().size)]);
             }
+            t.printstd();
+        },
+        ("wipe", Some(cmd)) => {
+            use std::io::prelude::*;
+
+            let device_id = cmd.value_of("device").unwrap();
+            let scheme_id = cmd.value_of("scheme").unwrap();
+
+            let device = enumerator.list().unwrap().iter().find(|d| d.id() == device_id)
+                .expect(&format!("Unknown device {}", device_id));
+            let scheme = schemes.find(scheme_id)
+                .expect(&format!("Unknown scheme {}", scheme_id));
+
+            println!("Wiping {} using scheme {}.", style(device_id).bold(), style(scheme_id).bold());
+            print!("Are you sure? (type 'yes' to confirm): ");
+            std::io::stdout().flush().unwrap();
+
+            let mut confirm = String::new();
+            if std::io::stdin().read_line(&mut confirm).is_err() || confirm != "yes" {
+                std::process::exit(1);    
+            }
+            println!("OK");
+        },
+        _ => {
+            println!("{}", app.usage());
+            std::process::exit(1)
+        }
     }
 }

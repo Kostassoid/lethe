@@ -196,9 +196,9 @@ impl FileEnumerator {
 impl<'a> StorageEnumerator for FileEnumerator {
     type Ref = FileRef;
 
-    fn try_iter(&self) -> IoResult<Box<Iterator<Item=Self::Ref>>> {
+    fn list(&self) -> IoResult<Vec<Self::Ref>> {
         let rd = read_dir(&self.root)?;
-        Ok(Box::new(rd.filter_map(std::io::Result::ok)
+        let mut refs = rd.filter_map(std::io::Result::ok)
             .map(|de| de.path())
             .filter(|path|
                 (self.path_filter)(&path.to_path_buf())
@@ -207,7 +207,9 @@ impl<'a> StorageEnumerator for FileEnumerator {
             .filter(|r|
                 (self.meta_filter)(&r.details)
             )
-            .collect::<Vec<_>>().into_iter() // todo: is there a better way to avoid lifetime conflicts?
-        ))
+            .collect::<Vec<_>>(); // todo: is there a better way to avoid lifetime conflicts?
+        
+        refs.sort_by(|a, b| a.path.to_str().cmp(&b.path.to_str()));
+        Ok(refs)
     }
 }
