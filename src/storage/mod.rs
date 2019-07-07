@@ -5,7 +5,7 @@ pub type IoResult<A> = std::io::Result<A>;
 pub trait StorageAccess {
     fn position(&mut self) -> IoResult<u64>;
     fn seek(&mut self, position: u64) -> IoResult<u64>;
-    fn read(&mut self, buffer: &mut [u8]) -> IoResult<u64>;
+    fn read(&mut self, buffer: &mut [u8]) -> IoResult<usize>;
     fn write(&mut self, data: &[u8]) -> IoResult<()>;
     fn flush(&self) -> IoResult<()>;
 }
@@ -21,7 +21,7 @@ pub enum StorageType {
 #[derive(Debug)]
 pub struct StorageDetails {
     pub size: u64,
-    pub block_size: u64,
+    pub block_size: usize,
     pub storage_type: StorageType,
     pub is_trim_supported: bool,
 }

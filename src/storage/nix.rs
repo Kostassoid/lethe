@@ -17,7 +17,12 @@ pub struct FileAccess {
 
 impl FileAccess {
     pub fn new<P: AsRef<Path>>(file_path: P) -> IoResult<FileAccess> {
-        let file = File::open(file_path.as_ref())?;
+        let file = OpenOptions::new()
+            .create(false)
+            .append(false)
+            .write(true)
+            .truncate(false)
+            .open(file_path.as_ref())?;
         Ok(FileAccess { file })
     }
 }
@@ -32,8 +37,8 @@ impl StorageAccess for FileAccess {
         self.file.seek(SeekFrom::Start(position))
     }
 
-    fn read(&mut self, buffer: &mut [u8]) -> IoResult<u64> {
-        self.file.read(buffer).map(|x| x as u64)
+    fn read(&mut self, buffer: &mut [u8]) -> IoResult<usize> {
+        self.file.read(buffer)
     }
 
     fn write(&mut self, data: &[u8]) -> IoResult<()> {
@@ -136,7 +141,7 @@ impl FileRef {
 
                 Ok(StorageDetails{
                     size,
-                    block_size: stat.st_blksize as u64,
+                    block_size: stat.st_blksize as usize,
                     storage_type,
                     is_trim_supported: Self::is_trim_supported(fd)
                 })

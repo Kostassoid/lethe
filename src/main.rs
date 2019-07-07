@@ -6,10 +6,11 @@ use prettytable::{Table, format};
 
 use console::style;
 use indicatif::{HumanBytes};
+use streaming_iterator::StreamingIterator;
 
 mod storage;
 use storage::nix::*;
-use storage::{StorageEnumerator, StorageRef};
+use storage::*;
 
 mod sanitization;
 use sanitization::*;
@@ -84,29 +85,49 @@ fn main() {
             t.printstd();
         },
         ("wipe", Some(cmd)) => {
-            use std::io::prelude::*;
-
             let device_id = cmd.value_of("device").unwrap();
             let scheme_id = cmd.value_of("scheme").unwrap();
 
-            let device = enumerator.list().unwrap().iter().find(|d| d.id() == device_id)
+            let device_list = enumerator.list().unwrap();
+            let device = device_list.iter().find(|d| d.id() == device_id)
                 .expect(&format!("Unknown device {}", device_id));
             let scheme = schemes.find(scheme_id)
                 .expect(&format!("Unknown scheme {}", scheme_id));
 
             println!("Wiping {} using scheme {}.", style(device_id).bold(), style(scheme_id).bold());
-            print!("Are you sure? (type 'yes' to confirm): ");
-            std::io::stdout().flush().unwrap();
-
-            let mut confirm = String::new();
-            if std::io::stdin().read_line(&mut confirm).is_err() || confirm != "yes" {
+            if !cmd.is_present("yes") && !ask_for_confirmation() {
                 std::process::exit(1);    
+            } else {
+                let stages = scheme.build_stages();
+                let mut access = device.access().unwrap();
+                for stage in stages.iter() {
+                    println!("Performing {:?}", stage);
+                    access.seek(0u64).unwrap();
+
+                    let mut stream = SanitizationStream::new(
+                        &stage, device.details().size, device.details().block_size);
+
+                    while let Some(chunk) = stream.next() {
+                        access.write(chunk).unwrap();
+                    }
+                    
+                    access.flush().unwrap();
+                }
             }
-            println!("OK");
         },
         _ => {
             println!("{}", app.usage());
             std::process::exit(1)
         }
     }
+}
+
+fn ask_for_confirmation() -> bool {
+    use std::io::prelude::*;
+
+    print!("Are you sure? (type 'yes' to confirm): ");
+    std::io::stdout().flush().unwrap();
+
+    let mut confirm = String::new();
+    std::io::stdin().read_line(&mut confirm).is_ok() && confirm.trim() == "yes"
 }
