@@ -1,16 +1,15 @@
-use std::collections::HashMap;
 use rand::prelude::*;
 use rand::SeedableRng;
 use streaming_iterator::StreamingIterator;
 
 #[derive(Debug)]
-pub enum SantitizationStage {
+pub enum Stage {
     Fill { value: u8 },
     Random { seed: u64 }
 }
 
 #[derive(Debug)]
-pub struct StreamState {
+struct StreamState {
     total_size: u64,
     block_size: usize,
     position: u64,
@@ -20,7 +19,7 @@ pub struct StreamState {
 }
 
 #[derive(Debug)]
-pub enum StreamKind {
+enum StreamKind {
     Fill,
     Random { gen: StdRng }
 }
@@ -31,28 +30,30 @@ pub struct SanitizationStream {
     state: StreamState
 }
 
-impl SantitizationStage {
-    pub fn zero() -> SantitizationStage { 
-        SantitizationStage::Fill { value: 0x00 } 
+impl Stage {
+    pub fn zero() -> Stage { 
+        Stage::Fill { value: 0x00 } 
     }
 
-    pub fn one() -> SantitizationStage { 
-        SantitizationStage::Fill { value: 0xff } 
+    pub fn one() -> Stage { 
+        Stage::Fill { value: 0xff } 
     }
 
-    pub fn random(seed: u64) -> SantitizationStage { 
-        SantitizationStage::Random { seed }
+    pub fn random_with_seed(seed: u64) -> Stage { 
+        Stage::Random { seed }
     }
-}
 
-impl SanitizationStream {
-    pub fn new(stage: &SantitizationStage, total_size: u64, block_size: usize) -> SanitizationStream {
-        let (kind, buf) = match stage {
-            SantitizationStage::Fill { value } => {
+    pub fn random() -> Stage {
+        Stage::random_with_seed(thread_rng().next_u64()) 
+    }
+
+    pub fn stream(&self, total_size: u64, block_size: usize) -> SanitizationStream {
+        let (kind, buf) = match self {
+            Stage::Fill { value } => {
                 let buf = vec![*value; block_size];
                 (StreamKind::Fill, buf)
             },
-            SantitizationStage::Random { seed } => {
+            Stage::Random { seed } => {
                 let buf = vec![0; block_size];
                 let gen = SeedableRng::seed_from_u64(*seed); 
                 (StreamKind::Random { gen }, buf)
@@ -80,8 +81,6 @@ impl StreamingIterator for SanitizationStream {
                 self.state.block_size as u64, 
                 self.state.total_size - self.state.position) as usize;
 
-            println!("!!! stream out chunk_size: {}", chunk_size);
-
             match &mut self.kind {
                 StreamKind::Fill => (),
                 StreamKind::Random { gen } =>
@@ -104,53 +103,6 @@ impl StreamingIterator for SanitizationStream {
     }
 }
 
-#[derive(Debug)]
-pub struct Scheme {
-    stages: Vec<SantitizationStage>
-}
-
-impl Scheme {
-    pub fn build_stages(&self) -> &Vec<SantitizationStage> {
-        &self.stages //TODO: randomize PRNG seed values
-    }
-}
-
-pub struct SchemeRepo {
-    schemes: HashMap<&'static str, Scheme>
-}
-
-impl SchemeRepo {
-    pub fn new(schemes: HashMap<&'static str, Scheme>) -> SchemeRepo {
-        SchemeRepo { schemes }
-    }
-
-    pub fn default() -> SchemeRepo {
-        let mut schemes = HashMap::new();
-
-        schemes.insert("zero", Scheme { stages: vec!(
-            SantitizationStage::zero()
-        )});
-
-        schemes.insert("one", Scheme { stages: vec!(
-            SantitizationStage::one()
-        )});
-
-        schemes.insert("random", Scheme { stages: vec!(
-            SantitizationStage::random(thread_rng().next_u64())
-        )});
-        
-        Self::new(schemes)
-    }
-
-    pub fn all(&self) -> &HashMap<&'static str, Scheme> {
-        &self.schemes
-    }
-
-    pub fn find(&self, name: &str) -> Option<&Scheme> {
-        self.schemes.get(name)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -161,7 +113,7 @@ mod test {
     #[test]
     fn test_stage_fill_behaves() {
         let mut data1 = create_test_vec();
-        let mut stage = SantitizationStage::Fill { value: 0x33 };
+        let mut stage = Stage::Fill { value: 0x33 };
 
         fill(&mut data1, &mut stage);
         assert!(data1.iter().find(|x| **x != 0x33).is_none());
@@ -175,7 +127,7 @@ mod test {
     #[test]
     fn test_stage_random_behaves() {
         let mut data1 = create_test_vec();
-        let mut stage = SantitizationStage::random(666);
+        let mut stage = Stage::random_with_seed(666);
 
         fill(&mut data1, &mut stage);
 
@@ -191,7 +143,7 @@ mod test {
         
         assert_eq!(data1, data2);
 
-        let mut stage3 = SantitizationStage::random(333);
+        let mut stage3 = Stage::random_with_seed(333);
         let mut data3 = create_test_vec();
         fill(&mut data3, &mut stage3);
 
@@ -201,7 +153,7 @@ mod test {
     #[test]
     fn test_stage_random_entropy() {
         let mut data = create_test_vec();
-        let mut stage = SantitizationStage::random(666);
+        let mut stage = Stage::random_with_seed(666);
         fill(&mut data, &mut stage);
 
         let source_entropy = calculate_entropy(create_test_vec().as_ref());
@@ -211,22 +163,12 @@ mod test {
         assert!(stage_entropy > 0.9);
     }
 
-    #[test]
-    fn test_scheme_find() {
-        let repo = SchemeRepo::default();
-
-        assert!(repo.find("missing").is_none());
-
-        let scheme = repo.find("one");
-        assert!(scheme.is_some());
-    }
-
     fn create_test_vec() -> Vec<u8> {
         (0..TEST_SIZE).map(|x| (x % 256) as u8).collect()
     }
 
-    fn fill(v: &mut Vec<u8>, stage: &mut SantitizationStage) -> () {
-        let mut stream = SanitizationStream::new(stage, TEST_SIZE, TEST_BLOCK);
+    fn fill(v: &mut Vec<u8>, stage: &mut Stage) -> () {
+        let mut stream = stage.stream(TEST_SIZE, TEST_BLOCK);
 
         let mut position = 0;
         while let Some(chunk) = stream.next() {

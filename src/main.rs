@@ -3,6 +3,7 @@ use clap::{Arg, App, SubCommand, AppSettings};
 
 #[macro_use] extern crate prettytable;
 use prettytable::{Table, format};
+use format::FormatBuilder;
 
 use console::style;
 use indicatif::{HumanBytes};
@@ -17,15 +18,23 @@ use sanitization::*;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-const SCHEMES_EXPLANATION: &'static str = "Data sanitization schemes:
-    gost        GOST R 50739-95, 2 passes
-    dod         DOD 5220.22-M, 3 passes
-    zero        Single zeroes (0x00) fill, 1 pass
-    one         Single ones (0xFF) fill, 1 pass
-    random      Single random fill, 1 pass
-";
-
 fn main() {
+
+    let indent_table_format = FormatBuilder::new().padding(4, 1).build();
+
+    let schemes = SchemeRepo::default();
+    let scheme_keys: Vec<_> = schemes.all().keys().cloned().collect();
+
+    let schemes_explanation = { 
+        let mut t = Table::new();
+        t.set_format(indent_table_format);
+        for (k, v) in schemes.all().iter() {
+            let stages_count = v.stages.len();
+            let passes = if stages_count > 1 { "passes" } else { "pass" };
+            t.add_row(row![k, format!("{}, {} {}", v.description, stages_count, passes)]);
+        }
+        format!("Data sanitization schemes:\n{}", t) 
+    };
 
     let app = App::new("Lethe")
         .version(VERSION)
@@ -39,7 +48,7 @@ fn main() {
         )
         .subcommand(SubCommand::with_name("wipe")
             .about("Wipe storage device")
-            .after_help(SCHEMES_EXPLANATION)
+            .after_help(schemes_explanation.as_str()) 
             .arg(Arg::with_name("device")
                 .long("device")
                 .short("d")
@@ -51,8 +60,8 @@ fn main() {
                 .long("scheme")
                 .short("s")
                 .takes_value(true)
-                .possible_values(&["zero", "one", "random", "gost", "dod"])
-                .default_value("random")
+                .possible_values(&scheme_keys)
+                .default_value("random2")
                 .help("Data sanitization scheme"))
             .arg(Arg::with_name("verify")
                 .long("verify")
@@ -72,12 +81,10 @@ fn main() {
     );
     //let enumerator = FileEnumerator::system_drives();
 
-    let schemes = SchemeRepo::default();
-
     match app.subcommand() {
         ("list", _) => {
             let mut t = Table::new();
-            t.set_format(*format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
+            t.set_format(*format::consts::FORMAT_CLEAN);
             t.set_titles(row!["Device ID", "Size"]);
             for x in enumerator.list().unwrap() {
                 t.add_row(row![style(x.id()).bold(), HumanBytes(x.details().size)]);
@@ -96,16 +103,18 @@ fn main() {
 
             println!("Wiping {} using scheme {}.", style(device_id).bold(), style(scheme_id).bold());
             if !cmd.is_present("yes") && !ask_for_confirmation() {
+                println!("Aborted.");
                 std::process::exit(1);    
             } else {
-                let stages = scheme.build_stages();
+                let stages = &scheme.stages;
                 let mut access = device.access().unwrap();
                 for stage in stages.iter() {
                     println!("Performing {:?}", stage);
                     access.seek(0u64).unwrap();
 
-                    let mut stream = SanitizationStream::new(
-                        &stage, device.details().size, device.details().block_size);
+                    let mut stream = stage.stream(
+                        device.details().size, 
+                        device.details().block_size);
 
                     while let Some(chunk) = stream.next() {
                         access.write(chunk).unwrap();
