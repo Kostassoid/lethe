@@ -21,6 +21,7 @@ impl FileAccess {
             .create(false)
             .append(false)
             .write(true)
+            .read(true)
             .truncate(false)
             .open(file_path.as_ref())?;
         Ok(FileAccess { file })

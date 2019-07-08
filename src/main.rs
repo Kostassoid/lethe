@@ -121,6 +121,23 @@ fn main() {
                     }
                     
                     access.flush().unwrap();
+
+                    println!("Verifying {:?}", stage);
+                    access.seek(0u64).unwrap();
+
+                    let mut vstream = stage.stream(
+                        device.details().size, 
+                        device.details().block_size);
+
+                    let mut buf: Vec<u8> = vec![0; device.details().block_size];
+
+                    while let Some(chunk) = vstream.next() {
+                        let b = &mut buf[..chunk.len()];
+                        access.read(b).unwrap();
+                        if b != chunk {
+                            panic!("Verification failed!");
+                        }
+                    }
                 }
             }
         },
