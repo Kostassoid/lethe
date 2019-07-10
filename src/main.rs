@@ -16,6 +16,8 @@ use storage::*;
 mod sanitization;
 use sanitization::*;
 
+use indicatif::{ProgressBar, ProgressStyle};
+
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 fn main() {
@@ -30,7 +32,7 @@ fn main() {
         t.set_format(indent_table_format);
         for (k, v) in schemes.all().iter() {
             let stages_count = v.stages.len();
-            let passes = if stages_count > 1 { "passes" } else { "pass" };
+            let passes = if stages_count != 1 { "passes" } else { "pass" };
             t.add_row(row![k, format!("{}, {} {}", v.description, stages_count, passes)]);
         }
         format!("Data sanitization schemes:\n{}", t) 
@@ -66,6 +68,9 @@ fn main() {
             .arg(Arg::with_name("verify")
                 .long("verify")
                 .short("v")
+                .takes_value(true)
+                .possible_values(&["no", "last", "all"])
+                .default_value("last")
                 .help("Verify after completion"))
             .arg(Arg::with_name("yes")
                 .long("yes")
@@ -110,6 +115,10 @@ fn main() {
                 let mut access = device.access().unwrap();
                 for stage in stages.iter() {
                     println!("Performing {:?}", stage);
+
+                    let mut pb = create_progress_bar(device.details().size);
+                    pb.set_message("Doing stuff");
+
                     access.seek(0u64).unwrap();
 
                     let mut stream = stage.stream(
@@ -118,11 +127,17 @@ fn main() {
 
                     while let Some(chunk) = stream.next() {
                         access.write(chunk).unwrap();
+                        pb.inc(chunk.len() as u64);
+                        std::thread::sleep_ms(500);
                     }
                     
                     access.flush().unwrap();
+                    pb.finish_with_message("Done");
 
                     println!("Verifying {:?}", stage);
+                    let mut vb = create_progress_bar(device.details().size);
+                    vb.set_message("Verifying");
+
                     access.seek(0u64).unwrap();
 
                     let mut vstream = stage.stream(
@@ -137,7 +152,12 @@ fn main() {
                         if b != chunk {
                             panic!("Verification failed!");
                         }
+
+                        vb.inc(chunk.len() as u64);
+                        std::thread::sleep_ms(500);
                     }
+
+                    vb.finish_with_message("Done");
                 }
             }
         },
@@ -156,4 +176,14 @@ fn ask_for_confirmation() -> bool {
 
     let mut confirm = String::new();
     std::io::stdin().read_line(&mut confirm).is_ok() && confirm.trim() == "yes"
+}
+
+fn create_progress_bar(size: u64) -> ProgressBar {
+    let mut pb = ProgressBar::new(size);
+
+    pb.set_style(ProgressStyle::default_bar()
+        .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} {msg}")
+        .progress_chars("##-"));
+
+    pb
 }
