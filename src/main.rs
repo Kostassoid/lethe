@@ -1,3 +1,5 @@
+use std::io::{Error, ErrorKind};
+
 extern crate clap;
 use clap::{Arg, App, SubCommand, AppSettings};
 
@@ -15,10 +17,17 @@ use storage::*;
 
 mod sanitization;
 use sanitization::*;
+use sanitization::stage::Stage;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+enum Verify {
+    No,
+    Last,
+    All
+}
 
 fn main() {
 
@@ -99,6 +108,12 @@ fn main() {
         ("wipe", Some(cmd)) => {
             let device_id = cmd.value_of("device").unwrap();
             let scheme_id = cmd.value_of("scheme").unwrap();
+            let verification = match cmd.value_of("verify").unwrap() {
+                "no" => Verify::No,
+                "last" => Verify::Last,
+                "all" => Verify::All,
+                _ => Verify::Last
+            };
 
             let device_list = enumerator.list().unwrap();
             let device = device_list.iter().find(|d| d.id() == device_id)
@@ -111,54 +126,7 @@ fn main() {
                 println!("Aborted.");
                 std::process::exit(1);    
             } else {
-                let stages = &scheme.stages;
-                let mut access = device.access().unwrap();
-                for stage in stages.iter() {
-                    println!("Performing {:?}", stage);
-
-                    let mut pb = create_progress_bar(device.details().size);
-                    pb.set_message("Doing stuff");
-
-                    access.seek(0u64).unwrap();
-
-                    let mut stream = stage.stream(
-                        device.details().size, 
-                        device.details().block_size);
-
-                    while let Some(chunk) = stream.next() {
-                        access.write(chunk).unwrap();
-                        pb.inc(chunk.len() as u64);
-                        std::thread::sleep_ms(500);
-                    }
-                    
-                    access.flush().unwrap();
-                    pb.finish_with_message("Done");
-
-                    println!("Verifying {:?}", stage);
-                    let mut vb = create_progress_bar(device.details().size);
-                    vb.set_message("Verifying");
-
-                    access.seek(0u64).unwrap();
-
-                    let mut vstream = stage.stream(
-                        device.details().size, 
-                        device.details().block_size);
-
-                    let mut buf: Vec<u8> = vec![0; device.details().block_size];
-
-                    while let Some(chunk) = vstream.next() {
-                        let b = &mut buf[..chunk.len()];
-                        access.read(b).unwrap();
-                        if b != chunk {
-                            panic!("Verification failed!");
-                        }
-
-                        vb.inc(chunk.len() as u64);
-                        std::thread::sleep_ms(500);
-                    }
-
-                    vb.finish_with_message("Done");
-                }
+                wipe(device, scheme, verification).unwrap();
             }
         },
         _ => {
@@ -166,6 +134,96 @@ fn main() {
             std::process::exit(1)
         }
     }
+}
+
+fn wipe<A: StorageRef>(device: &A, scheme: &Scheme, verification: Verify) -> IoResult<()> {
+    let stages = &scheme.stages;
+    let mut access = device.access()?;
+    for (i, stage) in stages.iter().enumerate() {
+
+        let stage_num = format!("Stage {}/{}", i + 1, scheme.stages.len());
+        let stage_description = match stage {
+            Stage::Fill { value } => format!("Value Fill ({:02x})", value),
+            Stage::Random { seed: _seed } => String::from("Random Fill")
+        };
+
+        let have_to_verify = match verification {
+            Verify::No => false,
+            Verify::Last if i + 1 == scheme.stages.len() => true,
+            Verify::All => true,
+            _ => false
+        };
+
+        loop {
+            println!("\n{}: Performing {}", stage_num, stage_description);
+            fill(&mut *access, stage, device.details().size, device.details().block_size)?;
+
+            if !have_to_verify {
+                break;
+            }
+
+            println!("\n{}: Verifying {}", stage_num, stage_description);
+            
+            if let Err(err) = verify(&mut *access, stage, device.details().size, device.details().block_size) {
+                println!("Error: {}\nRetrying previous stage.", err);
+            } else {
+                break;
+            }
+        }
+
+    }
+    Ok(())
+}
+
+fn fill<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, block_size: usize) -> IoResult<()> {
+        let pb = create_progress_bar(total_size);
+        pb.set_message("Writing");
+
+        access.seek(0u64)?;
+
+        let mut stream = stage.stream(
+            total_size, 
+            block_size);
+
+        while let Some(chunk) = stream.next() {
+            access.write(chunk)?;
+            pb.inc(chunk.len() as u64);
+            std::thread::sleep_ms(500);
+        };
+
+        access.flush()?;
+        pb.finish_with_message("Done");
+
+        Ok(())
+}
+
+fn verify<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, block_size: usize) -> IoResult<()> {
+        let pb = create_progress_bar(total_size);
+        pb.set_message("Checking");
+
+        access.seek(0u64)?;
+
+        let mut stream = stage.stream(
+            total_size, 
+            block_size);
+
+        let mut buf: Vec<u8> = vec![0; block_size];
+
+        while let Some(chunk) = stream.next() {
+            let b = &mut buf[..chunk.len()];
+            access.read(b)?;
+            if b != chunk {
+                pb.finish_with_message("FAILED!");
+                return Err(Error::new(ErrorKind::InvalidData, "Verification failed!"));
+            }
+
+            pb.inc(chunk.len() as u64);
+            std::thread::sleep_ms(500);
+        }
+
+        pb.finish_with_message("Done");
+
+        Ok(())
 }
 
 fn ask_for_confirmation() -> bool {
@@ -179,11 +237,11 @@ fn ask_for_confirmation() -> bool {
 }
 
 fn create_progress_bar(size: u64) -> ProgressBar {
-    let mut pb = ProgressBar::new(size);
+    let pb = ProgressBar::new(size);
 
     pb.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} {msg}")
-        .progress_chars("##-"));
+        .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} ({eta}) {msg}")
+        .progress_chars("#>-"));
 
     pb
 }
