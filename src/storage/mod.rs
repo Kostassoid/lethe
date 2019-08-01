@@ -1,4 +1,10 @@
+#[cfg(unix)]
+pub use nix::*;
 pub mod nix;
+
+#[cfg(windows)]
+pub use windows::*;
+pub mod windows;
 
 pub type IoResult<A> = std::io::Result<A>;
 
@@ -35,5 +41,8 @@ pub trait StorageRef {
 
 pub trait StorageEnumerator {
     type Ref: StorageRef;
+
     fn list(&self) -> IoResult<Vec<Self::Ref>>;
 }
+
+pub struct System;

@@ -12,7 +12,6 @@ use indicatif::{HumanBytes};
 use streaming_iterator::StreamingIterator;
 
 mod storage;
-use storage::nix::*;
 use storage::*;
 
 mod sanitization;
@@ -88,12 +87,7 @@ fn main() {
         )
         .get_matches();
 
-    let enumerator = FileEnumerator::custom(
-        std::env::temp_dir(), 
-        |x| x.to_str().unwrap().contains("disk"), 
-        |_| true
-    );
-    //let enumerator = FileEnumerator::system_drives();
+    let enumerator = System::system_drives();
 
     match app.subcommand() {
         ("list", _) => {
@@ -188,7 +182,6 @@ fn fill<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, block_
         while let Some(chunk) = stream.next() {
             access.write(chunk)?;
             pb.inc(chunk.len() as u64);
-            std::thread::sleep_ms(500);
         };
 
         access.flush()?;
@@ -218,7 +211,6 @@ fn verify<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, bloc
             }
 
             pb.inc(chunk.len() as u64);
-            std::thread::sleep_ms(500);
         }
 
         pb.finish_with_message("Done");
