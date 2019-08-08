@@ -1,5 +1,7 @@
 pub mod nix;
 
+pub use self::nix::*;
+
 pub type IoResult<A> = std::io::Result<A>;
 
 pub trait StorageAccess {

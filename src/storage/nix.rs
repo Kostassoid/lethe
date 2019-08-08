@@ -124,6 +124,20 @@ impl FileRef {
         }
     }
 
+/*
+    fn get_mounts() -> IoResult<()> {
+        unsafe {
+            let mut stat: [libc::statfs; 16] = std::mem::zeroed();
+            let total = libc::statvfs(stat, 16, 1 /* libc::MNT_WAIT */);
+
+            for i in 0..total {
+                println!("!!! statfs {} = {:?}", i, stat.get(i).unwrap());
+            }
+        }
+
+        Ok(())
+    }
+    */
     fn build_details<P: AsRef<Path>>(path: P) -> IoResult<StorageDetails> {
         unsafe {
             let mut stat: libc::stat = std::mem::zeroed();
@@ -131,8 +145,6 @@ impl FileRef {
             if libc::stat(cpath.as_ptr(), &mut stat) >= 0 {
 
                 let storage_type = Self::resolve_storage_type(stat.st_mode);
-
-                //println!("!!! {:?}: StorageType = {:?}", path.as_ref().to_str(), storage_type);
 
                 use std::os::unix::io::*;
                 let f = OpenOptions::new().read(true).create(false).write(false).open(path)?;
@@ -193,7 +205,7 @@ impl FileEnumerator {
     pub fn system_drives() -> FileEnumerator {
         FileEnumerator::custom(
             "/dev",
-            |p| p.to_str().unwrap().contains("disk0s4"),
+            |p| p.to_str().unwrap().contains("disk"),
             |_m| true
         )
     }
@@ -213,7 +225,7 @@ impl<'a> StorageEnumerator for FileEnumerator {
             .filter(|r|
                 (self.meta_filter)(&r.details)
             )
-            .collect::<Vec<_>>(); // todo: is there a better way to avoid lifetime conflicts?
+            .collect::<Vec<_>>();
         
         refs.sort_by(|a, b| a.path.to_str().cmp(&b.path.to_str()));
         Ok(refs)

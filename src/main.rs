@@ -9,15 +9,12 @@ use format::FormatBuilder;
 
 use console::style;
 use indicatif::{HumanBytes};
-use streaming_iterator::StreamingIterator;
 
 mod storage;
-use storage::nix::*;
 use storage::*;
 
 mod sanitization;
 use sanitization::*;
-use sanitization::stage::Stage;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -31,13 +28,12 @@ enum Verify {
 
 fn main() {
 
-    let indent_table_format = FormatBuilder::new().padding(4, 1).build();
-
     let schemes = SchemeRepo::default();
     let scheme_keys: Vec<_> = schemes.all().keys().cloned().collect();
 
     let schemes_explanation = { 
         let mut t = Table::new();
+        let indent_table_format = FormatBuilder::new().padding(4, 1).build();
         t.set_format(indent_table_format);
         for (k, v) in schemes.all().iter() {
             let stages_count = v.stages.len();
@@ -88,12 +84,14 @@ fn main() {
         )
         .get_matches();
 
+/*
     let enumerator = FileEnumerator::custom(
         std::env::temp_dir(), 
         |x| x.to_str().unwrap().contains("disk"), 
         |_| true
     );
-    //let enumerator = FileEnumerator::system_drives();
+    */
+    let enumerator = FileEnumerator::system_drives();
 
     match app.subcommand() {
         ("list", _) => {
@@ -141,7 +139,7 @@ fn wipe<A: StorageRef>(device: &A, scheme: &Scheme, verification: Verify) -> IoR
     let mut access = device.access()?;
     for (i, stage) in stages.iter().enumerate() {
 
-        let stage_num = format!("Stage {}/{}", i + 1, scheme.stages.len());
+        let stage_num = format!("Stage {}/{}", i + 1, stages.len());
         let stage_description = match stage {
             Stage::Fill { value } => format!("Value Fill ({:02x})", value),
             Stage::Random { seed: _seed } => String::from("Random Fill")
@@ -149,7 +147,7 @@ fn wipe<A: StorageRef>(device: &A, scheme: &Scheme, verification: Verify) -> IoR
 
         let have_to_verify = match verification {
             Verify::No => false,
-            Verify::Last if i + 1 == scheme.stages.len() => true,
+            Verify::Last if i + 1 == stages.len() => true,
             Verify::All => true,
             _ => false
         };
@@ -188,7 +186,7 @@ fn fill<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, block_
         while let Some(chunk) = stream.next() {
             access.write(chunk)?;
             pb.inc(chunk.len() as u64);
-            std::thread::sleep_ms(500);
+            //std::thread::sleep(std::time::Duration::from_millis(500));
         };
 
         access.flush()?;
@@ -218,7 +216,7 @@ fn verify<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, bloc
             }
 
             pb.inc(chunk.len() as u64);
-            std::thread::sleep_ms(500);
+            //std::thread::sleep(std::time::Duration::from_millis(500));
         }
 
         pb.finish_with_message("Done");
@@ -241,7 +239,7 @@ fn create_progress_bar(size: u64) -> ProgressBar {
 
     pb.set_style(ProgressStyle::default_bar()
         .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} ({eta}) {msg}")
-        .progress_chars("#>-"));
+        .progress_chars("█▉▊▋▌▍▎▏  "));
 
     pb
 }

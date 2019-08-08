@@ -1,6 +1,6 @@
 use rand::prelude::*;
 use rand::SeedableRng;
-use streaming_iterator::StreamingIterator;
+pub use streaming_iterator::StreamingIterator;
 
 #[derive(Debug)]
 pub enum Stage {
