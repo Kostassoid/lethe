@@ -84,14 +84,7 @@ fn main() {
         )
         .get_matches();
 
-/*
-    let enumerator = FileEnumerator::custom(
-        std::env::temp_dir(), 
-        |x| x.to_str().unwrap().contains("disk"), 
-        |_| true
-    );
-    */
-    let enumerator = FileEnumerator::system_drives();
+    let enumerator = System::system_drives();
 
     match app.subcommand() {
         ("list", _) => {

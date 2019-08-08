@@ -1,3 +1,4 @@
+#![cfg(unix)]
 extern crate nix;
 
 use std::fs::{File, OpenOptions};
@@ -5,8 +6,8 @@ use std::fs::read_dir;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::io::SeekFrom;
-use self::super::*;
 use std::ffi::CString;
+use crate::storage::*;
 use nix::*;
 
 // FileAccess
@@ -189,7 +190,7 @@ pub struct FileEnumerator {
     meta_filter: fn(&StorageDetails) -> bool
 }
 
-impl FileEnumerator {
+impl System {
     #[allow(dead_code)]
     pub fn custom<P: AsRef<Path>>(
         root: P,
@@ -200,18 +201,17 @@ impl FileEnumerator {
         FileEnumerator { root: p, path_filter, meta_filter }
     }
 
-    #[allow(dead_code)]
     #[cfg(target_os = "macos")]
-    pub fn system_drives() -> FileEnumerator {
-        FileEnumerator::custom(
+    pub fn system_drives() -> Box<impl StorageEnumerator> {
+        Box(FileEnumerator::custom(
             "/dev",
             |p| p.to_str().unwrap().contains("disk"),
             |_m| true
-        )
+        ))
     }
 }
 
-impl<'a> StorageEnumerator for FileEnumerator {
+impl StorageEnumerator for FileEnumerator {
     type Ref = FileRef;
 
     fn list(&self) -> IoResult<Vec<Self::Ref>> {
