@@ -1,5 +1,5 @@
 #[cfg(unix)]
-pub use nix::*;
+pub use self::nix::*;
 pub mod nix;
 
 #[cfg(windows)]

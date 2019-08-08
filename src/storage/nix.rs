@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::io::SeekFrom;
 use std::ffi::CString;
 use crate::storage::*;
-use nix::*;
+use ::nix::*;
 
 // FileAccess
 
@@ -66,7 +66,7 @@ impl FileRef {
         Ok(FileRef { path: p, details })
     }
 
-    fn resolve_storage_type(mode: u16) -> StorageType {
+    fn resolve_storage_type(mode: u32) -> StorageType {
         match mode & libc::S_IFMT {
             libc::S_IFREG => StorageType::File,
             libc::S_IFBLK => StorageType::Block,
@@ -191,7 +191,6 @@ pub struct FileEnumerator {
 }
 
 impl System {
-    #[allow(dead_code)]
     pub fn custom<P: AsRef<Path>>(
         root: P,
         path_filter: fn(&PathBuf) -> bool,
@@ -203,9 +202,18 @@ impl System {
 
     #[cfg(target_os = "macos")]
     pub fn system_drives() -> Box<impl StorageEnumerator> {
-        Box(FileEnumerator::custom(
+        Box::new(System::custom(
             "/dev",
-            |p| p.to_str().unwrap().contains("disk"),
+            |p| p.to_str().unwrap().contains("rdisk"),
+            |_m| true
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn system_drives() -> Box<impl StorageEnumerator> {
+        Box::new(System::custom(
+            "/dev",
+            |p| p.to_str().unwrap().contains("da"),
             |_m| true
         ))
     }
