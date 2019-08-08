@@ -231,7 +231,7 @@ fn create_progress_bar(size: u64) -> ProgressBar {
     let pb = ProgressBar::new(size);
 
     pb.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} ({eta}) {msg}")
+        .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} ({eta} left) {msg}")
         .progress_chars("█▉▊▋▌▍▎▏  "));
 
     pb

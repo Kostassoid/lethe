@@ -13,5 +13,9 @@ console = "0.7.7"
 prettytable-rs = "^0.8"
 streaming-iterator = "0.1.4"
 
+[target.'cfg(windows)'.dependencies.winapi]
+version = "0.3"
+features = ["fileapi", "sysinfoapi", "minwindef", "winbase", "winerror", "ws2def", "ws2ipdef"]
+
 [dev-dependencies]
 flate2 = "1.0"

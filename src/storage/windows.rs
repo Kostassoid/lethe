@@ -1,6 +1,12 @@
 #![cfg(windows)]
 
+extern crate winapi;
+
 use crate::storage::*;
+use winapi::ctypes::c_ulong;
+use winapi::shared::minwindef::FALSE;
+use winapi::um::fileapi::{GetDiskFreeSpaceExW, GetLogicalDriveStringsW, GetVolumeInformationW};
+use winapi::um::winnt::ULARGE_INTEGER;
 
 pub struct StorageDeviceEnumerator {
 }
