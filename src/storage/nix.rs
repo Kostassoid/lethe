@@ -9,6 +9,7 @@ use std::io::SeekFrom;
 use std::ffi::CString;
 use crate::storage::*;
 use ::nix::*;
+use std::os::unix::fs::OpenOptionsExt;
 
 // FileAccess
 
@@ -24,6 +25,7 @@ impl FileAccess {
             .write(true)
             .read(true)
             .truncate(false)
+            .custom_flags(libc::O_DIRECT)
             .open(file_path.as_ref())?;
         Ok(FileAccess { file })
     }
@@ -148,7 +150,7 @@ impl FileRef {
                 let storage_type = Self::resolve_storage_type(stat.st_mode);
 
                 use std::os::unix::io::*;
-                let f = OpenOptions::new().read(true).create(false).write(false).open(path)?;
+                let f = OpenOptions::new().read(true).create(false).write(false).custom_flags(libc::O_DIRECT).open(path)?;
                 let fd = f.as_raw_fd();
 
                 let size = Self::resolve_storage_size(&storage_type, &stat, fd);
@@ -213,7 +215,7 @@ impl System {
     pub fn system_drives() -> Box<impl StorageEnumerator> {
         Box::new(System::custom(
             "/dev",
-            |p| p.to_str().unwrap().contains("da"),
+            |p| p.to_str().unwrap().contains("sd") || p.to_str().unwrap().contains("loop"),
             |_m| true
         ))
     }
