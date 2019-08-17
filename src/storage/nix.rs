@@ -10,8 +10,112 @@ use std::ffi::CString;
 use crate::storage::*;
 use ::nix::*;
 use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::io::*;
 
-// FileAccess
+#[cfg(target_os = "macos")]
+fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> IoResult<File> {
+
+    let file = OpenOptions::new()
+        .create(false)
+        .append(false)
+        .write(write_access)
+        .read(true)
+        .truncate(false)
+        .open(file_path.as_ref())?;
+
+    unsafe {
+        let fd = file.as_raw_fd();
+        nix::libc::fcntl(fd, nix::libc::F_NOCACHE, 1);
+    }
+
+    Ok(file)
+}
+
+#[cfg(target_os = "linux")]
+fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> IoResult<File> {
+    OpenOptions::new()
+        .create(false)
+        .append(false)
+        .write(write_access)
+        .read(true)
+        .truncate(false)
+        .custom_flags(libc::O_DIRECT)
+        .open(file_path.as_ref())
+}
+
+fn resolve_storage_type(mode: libc::mode_t) -> StorageType {
+    match mode & libc::S_IFMT {
+        libc::S_IFREG => StorageType::File,
+        libc::S_IFBLK => StorageType::Block,
+        libc::S_IFCHR => StorageType::Raw,
+        _ => StorageType::Other
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_block_device_size(fd: libc::c_int) -> u64 {
+    ioctl_read!(dk_get_block_size, b'd', 24, u32); // DKIOCGETBLOCKSIZE
+    ioctl_read!(dk_get_block_count, b'd', 25, u64); // DKIOCGETBLOCKCOUNT
+
+    unsafe {
+        let mut block_size: u32 = std::mem::zeroed();
+        let mut block_count: u64 = std::mem::zeroed();
+        dk_get_block_size(fd, &mut block_size).unwrap();
+        dk_get_block_count(fd, &mut block_count).unwrap();
+        (block_size as u64) * block_count
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_block_device_size(fd: RawFd) -> u64 {
+    // requires linux 2.4.10+
+    ioctl_read!(linux_get_block_size, 0x12, 114, u64); // BLKGETSIZE64
+
+    unsafe {
+        let mut block_size: u64 = std::mem::zeroed();
+        linux_get_block_size(fd, &mut block_size).unwrap();
+        block_size
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_trim_supported(fd: RawFd) -> bool {
+    ioctl_read!(dk_get_features, b'd', 76, u32); // DKIOCGETFEATURES
+
+    unsafe {
+        let mut features: u32 = std::mem::zeroed();
+        dk_get_features(fd, &mut features)
+        .map(|_| (features & 0x00000010) > 0) // DK_FEATURE_UNMAP
+        .unwrap_or(false)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn is_trim_supported(fd: RawFd) -> bool {
+    false
+}
+
+fn resolve_storage_size(storage_type: &StorageType, stat: &libc::stat, fd: RawFd) -> u64 {
+    match storage_type {
+        StorageType::Block | StorageType::Raw => get_block_device_size(fd),
+        _ => stat.st_size as u64
+    }
+}
+
+/*
+    fn get_mounts() -> IoResult<()> {
+        unsafe {
+            let mut stat: [libc::statfs; 16] = std::mem::zeroed();
+            let total = libc::statvfs(stat, 16, 1 /* libc::MNT_WAIT */);
+
+            for i in 0..total {
+                println!("!!! statfs {} = {:?}", i, stat.get(i).unwrap());
+            }
+        }
+
+        Ok(())
+    }
+    */
 
 pub struct FileAccess {
     file: File
@@ -19,14 +123,7 @@ pub struct FileAccess {
 
 impl FileAccess {
     pub fn new<P: AsRef<Path>>(file_path: P) -> IoResult<FileAccess> {
-        let file = OpenOptions::new()
-            .create(false)
-            .append(false)
-            .write(true)
-            .read(true)
-            .truncate(false)
-            .custom_flags(libc::O_DIRECT)
-            .open(file_path.as_ref())?;
+        let file = open_file_direct(file_path, true)?;
         Ok(FileAccess { file })
     }
 }
@@ -54,8 +151,6 @@ impl StorageAccess for FileAccess {
     }
 }
 
-// FileRef
-
 pub struct FileRef {
     path: PathBuf,
     details: StorageDetails
@@ -68,98 +163,24 @@ impl FileRef {
         Ok(FileRef { path: p, details })
     }
 
-    fn resolve_storage_type(mode: u32) -> StorageType {
-        match mode & libc::S_IFMT {
-            libc::S_IFREG => StorageType::File,
-            libc::S_IFBLK => StorageType::Block,
-            libc::S_IFCHR => StorageType::Raw,
-            _ => StorageType::Other
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn get_block_device_size(fd: libc::c_int) -> u64 {
-        ioctl_read!(dk_get_block_size, b'd', 24, u32); // DKIOCGETBLOCKSIZE
-        ioctl_read!(dk_get_block_count, b'd', 25, u64); // DKIOCGETBLOCKCOUNT
-
-        unsafe {
-            let mut block_size: u32 = std::mem::zeroed();
-            let mut block_count: u64 = std::mem::zeroed();
-            dk_get_block_size(fd, &mut block_size).unwrap();
-            dk_get_block_count(fd, &mut block_count).unwrap();
-            (block_size as u64) * block_count
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn get_block_device_size(fd: libc::c_int) -> u64 {
-        // requires linux 2.4.10+
-        ioctl_read!(linux_get_block_size, 0x12, 114, u64); // BLKGETSIZE64
-
-        unsafe {
-            let mut block_size: u64 = std::mem::zeroed();
-            linux_get_block_size(fd, &mut block_size).unwrap();
-            block_size
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn is_trim_supported(fd: libc::c_int) -> bool {
-        ioctl_read!(dk_get_features, b'd', 76, u32); // DKIOCGETFEATURES
-
-        unsafe {
-            let mut features: u32 = std::mem::zeroed();
-            dk_get_features(fd, &mut features)
-            .map(|_| (features & 0x00000010) > 0) // DK_FEATURE_UNMAP
-            .unwrap_or(false)
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn is_trim_supported(fd: libc::c_int) -> bool {
-        false
-    }
-
-    fn resolve_storage_size(storage_type: &StorageType, stat: &libc::stat, fd: libc::c_int) -> u64 {
-        match storage_type {
-            StorageType::Block | StorageType::Raw => Self::get_block_device_size(fd),
-            _ => stat.st_size as u64
-        }
-    }
-
-/*
-    fn get_mounts() -> IoResult<()> {
-        unsafe {
-            let mut stat: [libc::statfs; 16] = std::mem::zeroed();
-            let total = libc::statvfs(stat, 16, 1 /* libc::MNT_WAIT */);
-
-            for i in 0..total {
-                println!("!!! statfs {} = {:?}", i, stat.get(i).unwrap());
-            }
-        }
-
-        Ok(())
-    }
-    */
     fn build_details<P: AsRef<Path>>(path: P) -> IoResult<StorageDetails> {
         unsafe {
             let mut stat: libc::stat = std::mem::zeroed();
             let cpath = CString::new(path.as_ref().to_str().unwrap())?;
             if libc::stat(cpath.as_ptr(), &mut stat) >= 0 {
 
-                let storage_type = Self::resolve_storage_type(stat.st_mode);
+                let storage_type = resolve_storage_type(stat.st_mode);
 
-                use std::os::unix::io::*;
-                let f = OpenOptions::new().read(true).create(false).write(false).custom_flags(libc::O_DIRECT).open(path)?;
+                let f = open_file_direct(path, false)?;
                 let fd = f.as_raw_fd();
 
-                let size = Self::resolve_storage_size(&storage_type, &stat, fd);
+                let size = resolve_storage_size(&storage_type, &stat, fd);
 
                 Ok(StorageDetails{
                     size,
                     block_size: stat.st_blksize as usize,
                     storage_type,
-                    is_trim_supported: Self::is_trim_supported(fd)
+                    is_trim_supported: is_trim_supported(fd)
                 })
             } else {
                 Err(std::io::Error::new(std::io::ErrorKind::Other, "Unable to get stat info"))
@@ -183,8 +204,6 @@ impl StorageRef for FileRef {
         FileAccess::new(&self.path).map(Box::new)
     }
 }
-
-// FileEnumerator
 
 pub struct FileEnumerator {
     root: PathBuf,
