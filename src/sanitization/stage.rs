@@ -48,15 +48,28 @@ impl Stage {
     }
 
     pub fn stream(&self, total_size: u64, block_size: usize) -> SanitizationStream {
-        let (kind, buf) = match self {
+
+        let mut buf = unsafe {
+            let buf_layout = std::alloc::Layout::from_size_align_unchecked(block_size, block_size);
+            let buf_ptr = std::alloc::alloc(buf_layout);
+            Vec::from_raw_parts(buf_ptr, block_size, block_size)
+        };
+
+        let kind = match self {
             Stage::Fill { value } => {
-                let buf = vec![*value; block_size];
-                (StreamKind::Fill, buf)
+                // unsafe {
+                //     std::libc::memset(
+                //         buf.as_mut_ptr() as _,
+                //         0,
+                //         buf.len()
+                //     );
+                // };
+                buf.iter_mut().map(|x| *x = *value).count();
+                StreamKind::Fill
             },
             Stage::Random { seed } => {
-                let buf = vec![0; block_size];
                 let gen = SeedableRng::seed_from_u64(*seed); 
-                (StreamKind::Random { gen }, buf)
+                StreamKind::Random { gen }
             }
         };
 
