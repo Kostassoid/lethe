@@ -90,9 +90,9 @@ fn main() {
         ("list", _) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
-            t.set_titles(row!["Device ID", "Size"]);
+            t.set_titles(row!["Device ID", "Size", "Block Size"]);
             for x in enumerator.list().unwrap() {
-                t.add_row(row![style(x.id()).bold(), HumanBytes(x.details().size)]);
+                t.add_row(row![style(x.id()).bold(), HumanBytes(x.details().size), HumanBytes(x.details().block_size as u64)]);
             }
             t.printstd();
         },
@@ -108,16 +108,30 @@ fn main() {
 
             let device_list = enumerator.list().unwrap();
             let device = device_list.iter().find(|d| d.id() == device_id)
-                .expect(&format!("Unknown device {}", device_id));
+                .unwrap_or_else(|| {
+                    eprintln!("Unknown device {}", device_id);
+                    std::process::exit(1);
+                });
             let scheme = schemes.find(scheme_id)
-                .expect(&format!("Unknown scheme {}", scheme_id));
+                .unwrap_or_else(|| {
+                    eprintln!("Unknown scheme {}", scheme_id);
+                    std::process::exit(1);
+                });
 
             println!("Wiping {} using scheme {}.", style(device_id).bold(), style(scheme_id).bold());
             if !cmd.is_present("yes") && !ask_for_confirmation() {
                 println!("Aborted.");
-                std::process::exit(1);    
+                std::process::exit(0);    
             } else {
-                wipe(device, scheme, verification).unwrap();
+                if let Err(e) = wipe(device, scheme, verification) {
+                    eprintln!("Unexpected error: {}", e);
+                    match (e.kind(), e.raw_os_error()) {
+                        (ErrorKind::Other, Some(16)) => 
+                            eprintln!("Make sure the drive is not mounted."),
+                        _ => ()
+                    };
+                    std::process::exit(1);
+                }
             }
         },
         _ => {
@@ -156,7 +170,7 @@ fn wipe<A: StorageRef>(device: &A, scheme: &Scheme, verification: Verify) -> IoR
             println!("\n{}: Verifying {}", stage_num, stage_description);
             
             if let Err(err) = verify(&mut *access, stage, device.details().size, device.details().block_size) {
-                println!("Error: {}\nRetrying previous stage.", err);
+                eprintln!("Error: {}\nRetrying previous stage.", err);
             } else {
                 break;
             }

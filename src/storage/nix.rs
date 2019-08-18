@@ -9,7 +9,6 @@ use std::io::SeekFrom;
 use std::ffi::CString;
 use crate::storage::*;
 use ::nix::*;
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::*;
 
 #[cfg(target_os = "macos")]
@@ -33,13 +32,14 @@ fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> IoResul
 
 #[cfg(target_os = "linux")]
 fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> IoResult<File> {
+    use std::os::unix::fs::OpenOptionsExt;
     OpenOptions::new()
         .create(false)
         .append(false)
         .write(write_access)
         .read(true)
         .truncate(false)
-        .custom_flags(libc::O_DIRECT)
+        .custom_flags(libc::O_DIRECT/* | libc::O_DSYNC*/) // should be enough in linux 2.6+
         .open(file_path.as_ref())
 }
 
@@ -225,7 +225,7 @@ impl System {
     pub fn system_drives() -> Box<impl StorageEnumerator> {
         Box::new(System::custom(
             "/dev",
-            |p| p.to_str().unwrap().contains("rdisk"),
+            |p| p.to_str().unwrap().contains("/dev/rdisk"),
             |_m| true
         ))
     }

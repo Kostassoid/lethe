@@ -1,5 +1,4 @@
 #![cfg(windows)]
-
 extern crate winapi;
 
 use crate::storage::*;
