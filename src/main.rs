@@ -181,14 +181,14 @@ fn wipe<A: StorageRef>(device: &A, scheme: &Scheme, verification: Verify) -> IoR
 }
 
 fn fill<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, block_size: usize) -> IoResult<()> {
+        let mut stream = stage.stream(
+            total_size, 
+            block_size);
+
         let pb = create_progress_bar(total_size);
         pb.set_message("Writing");
 
         access.seek(0u64)?;
-
-        let mut stream = stage.stream(
-            total_size, 
-            block_size);
 
         while let Some(chunk) = stream.next() {
             access.write(chunk)?;

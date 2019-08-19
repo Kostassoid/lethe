@@ -1,11 +1,15 @@
-use rand::prelude::*;
+//extern crate crate::rand;
 use rand::SeedableRng;
+use rand::RngCore;
 pub use streaming_iterator::StreamingIterator;
+
+const RANDOM_SEED_SIZE: usize = 32;
+type RandomGenerator = rand_chacha::ChaCha8Rng;
 
 #[derive(Debug)]
 pub enum Stage {
     Fill { value: u8 },
-    Random { seed: u64 }
+    Random { seed: [u8; RANDOM_SEED_SIZE] }
 }
 
 #[derive(Debug)]
@@ -21,7 +25,7 @@ struct StreamState {
 #[derive(Debug)]
 enum StreamKind {
     Fill,
-    Random { gen: StdRng }
+    Random { gen: RandomGenerator }
 }
 
 #[derive(Debug)]
@@ -39,12 +43,14 @@ impl Stage {
         Stage::Fill { value: 0xff } 
     }
 
-    pub fn random_with_seed(seed: u64) -> Stage { 
+    pub fn random_with_seed(seed: [u8; RANDOM_SEED_SIZE]) -> Stage { 
         Stage::Random { seed }
     }
 
     pub fn random() -> Stage {
-        Stage::random_with_seed(thread_rng().next_u64()) 
+        let mut seed: [u8; RANDOM_SEED_SIZE] = [0; RANDOM_SEED_SIZE];
+        rand::thread_rng().fill_bytes(&mut seed[..]);
+        Stage::random_with_seed(seed) 
     }
 
     pub fn stream(&self, total_size: u64, block_size: usize) -> SanitizationStream {
@@ -64,11 +70,11 @@ impl Stage {
                 //         buf.len()
                 //     );
                 // };
-                buf.iter_mut().map(|x| *x = *value).count();
+                buf.iter_mut().map(|x| *x = *value).count(); //todo: rewrite
                 StreamKind::Fill
             },
             Stage::Random { seed } => {
-                let gen = SeedableRng::seed_from_u64(*seed); 
+                let gen = RandomGenerator::from_seed(*seed); 
                 StreamKind::Random { gen }
             }
         };
@@ -140,7 +146,7 @@ mod test {
     #[test]
     fn test_stage_random_behaves() {
         let mut data1 = create_test_vec();
-        let mut stage = Stage::random_with_seed(666);
+        let mut stage = Stage::random_with_seed([13; 32]);
 
         fill(&mut data1, &mut stage);
 
@@ -156,7 +162,7 @@ mod test {
         
         assert_eq!(data1, data2);
 
-        let mut stage3 = Stage::random_with_seed(333);
+        let mut stage3 = Stage::random_with_seed([66; 32]);
         let mut data3 = create_test_vec();
         fill(&mut data3, &mut stage3);
 
@@ -166,7 +172,7 @@ mod test {
     #[test]
     fn test_stage_random_entropy() {
         let mut data = create_test_vec();
-        let mut stage = Stage::random_with_seed(666);
+        let mut stage = Stage::random_with_seed([13; 32]);
         fill(&mut data, &mut stage);
 
         let source_entropy = calculate_entropy(create_test_vec().as_ref());
