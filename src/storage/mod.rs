@@ -18,9 +18,19 @@ pub trait StorageAccess {
 
 #[derive(Debug)]
 pub enum StorageType {
+    Unknown,
     File,
-    Block,
-    Raw,
+    Partition,
+    Drive,
+    RAID,
+    Other
+}
+
+#[derive(Debug)]
+pub enum MediaType {
+    Unknown,
+    Rotational,
+    SolidState,
     Other
 }
 
@@ -29,7 +39,10 @@ pub struct StorageDetails {
     pub size: u64,
     pub block_size: usize,
     pub storage_type: StorageType,
+    pub media_type: MediaType,
     pub is_trim_supported: bool,
+    pub serial: Option<String>,
+    pub mount_point: Option<String>
 }
 
 pub trait StorageRef {
@@ -37,12 +50,6 @@ pub trait StorageRef {
     fn id(&self) -> &str;
     fn details(&self) -> &StorageDetails;
     fn access(&self) -> IoResult<Box<Self::Access>>;
-}
-
-pub trait StorageEnumerator {
-    type Ref: StorageRef;
-
-    fn list(&self) -> IoResult<Vec<Self::Ref>>;
 }
 
 pub struct System;

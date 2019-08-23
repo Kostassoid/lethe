@@ -18,5 +18,10 @@ streaming-iterator = "0.1.4"
 version = "0.3"
 features = ["fileapi", "sysinfoapi", "minwindef", "winbase", "winerror", "ws2def", "ws2ipdef"]
 
+[target.'cfg(macos)'.dependencies]
+mach = "0.1.1"
+IOKit-sys = "0.1"
+
+
 [dev-dependencies]
 flate2 = "1.0"

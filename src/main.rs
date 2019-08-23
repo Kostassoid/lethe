@@ -84,14 +84,14 @@ fn main() {
         )
         .get_matches();
 
-    let enumerator = System::system_drives();
+    let storage_devices = System::get_storage_devices().unwrap(); //todo: handle errors
 
     match app.subcommand() {
         ("list", _) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
             t.set_titles(row!["Device ID", "Size", "Block Size"]);
-            for x in enumerator.list().unwrap() {
+            for x in storage_devices {
                 t.add_row(row![style(x.id()).bold(), HumanBytes(x.details().size), HumanBytes(x.details().block_size as u64)]);
             }
             t.printstd();
@@ -106,8 +106,7 @@ fn main() {
                 _ => Verify::Last
             };
 
-            let device_list = enumerator.list().unwrap();
-            let device = device_list.iter().find(|d| d.id() == device_id)
+            let device = storage_devices.iter().find(|d| d.id() == device_id)
                 .unwrap_or_else(|| {
                     eprintln!("Unknown device {}", device_id);
                     std::process::exit(1);
