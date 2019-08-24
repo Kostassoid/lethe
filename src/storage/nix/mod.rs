@@ -56,6 +56,7 @@ fn discover_file_based_devices<P: AsRef<Path>>(
     Ok(refs)
 }
 
+#[derive(Debug)]
 pub struct FileAccess {
     file: File
 }
@@ -90,6 +91,7 @@ impl StorageAccess for FileAccess {
     }
 }
 
+#[derive(Debug)]
 pub struct FileRef {
     path: PathBuf,
     details: StorageDetails

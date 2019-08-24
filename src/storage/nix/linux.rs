@@ -3,6 +3,9 @@ use std::path::Path;
 use crate::storage::*;
 use std::os::unix::io::*;
 use ::nix::*;
+use std::io::BufReader;
+use std::io::BufRead;
+use regex::Regex;
 
 pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> IoResult<File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -27,14 +30,24 @@ pub fn get_block_device_size(fd: RawFd) -> u64 {
     }
 }
 
-pub fn is_trim_supported(fd: RawFd) -> bool {
+pub fn is_trim_supported(_fd: RawFd) -> bool {
     false
 }
 
 pub fn get_storage_devices() -> IoResult<Vec<FileRef>> {
-    super::discover_file_based_devices(
-        "/dev",
-        |p| p.to_str().unwrap().contains("sd") || p.to_str().unwrap().contains("loop"),
-        |_m| true
-    )
+    let partitions_file = File::open("/proc/partitions")?;
+    let buf = BufReader::new(partitions_file);
+    let name_regex = Regex::new(r"\s+(?P<name>\w+)$").unwrap();
+    let refs = buf.lines()
+        .filter_map(|io_line| {
+            let line = io_line.unwrap();
+            name_regex
+                .captures(line.as_str())
+                .map(|c| format!("/dev/{}", &c["name"]))
+        })
+        .skip(1)
+        .flat_map(FileRef::new)
+        .collect::<Vec<_>>();
+
+    Ok(refs)
 }
