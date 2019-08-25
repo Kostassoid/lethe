@@ -77,6 +77,11 @@ fn main() {
                 .possible_values(&["no", "last", "all"])
                 .default_value("last")
                 .help("Verify after completion"))
+            .arg(Arg::with_name("blocksize")
+                .long("blocksize")
+                .short("bs")
+                .takes_value(true)
+                .help("Block size override (bytes)"))
             .arg(Arg::with_name("yes")
                 .long("yes")
                 .short("y")
@@ -105,6 +110,12 @@ fn main() {
                 "all" => Verify::All,
                 _ => Verify::Last
             };
+            let block_size_override = cmd.value_of("blocksize")
+                .map(|bs| parse_block_size(bs)
+                    .unwrap_or_else(|err| {
+                        eprintln!("Invalid blocksize value. {}", err);
+                        std::process::exit(1);
+                    }));
 
             let device = storage_devices.iter().find(|d| d.id() == device_id)
                 .unwrap_or_else(|| {
@@ -117,12 +128,18 @@ fn main() {
                     std::process::exit(1);
                 });
 
-            println!("Wiping {} using scheme {}.", style(device_id).bold(), style(scheme_id).bold());
+            let block_size = block_size_override.unwrap_or(device.details().block_size);
+
+            println!("Wiping {} using scheme {} and block size {}.", 
+                style(device_id).bold(), 
+                style(scheme_id).bold(),
+                style(HumanBytes(block_size as u64)).bold()
+            );
             if !cmd.is_present("yes") && !ask_for_confirmation() {
                 println!("Aborted.");
                 std::process::exit(0);    
             } else {
-                if let Err(e) = wipe(device, scheme, verification) {
+                if let Err(e) = wipe(device, block_size, scheme, verification) {
                     eprintln!("Unexpected error: {}", e);
                     match (e.kind(), e.raw_os_error()) {
                         (ErrorKind::Other, Some(16)) => 
@@ -140,7 +157,14 @@ fn main() {
     }
 }
 
-fn wipe<A: StorageRef>(device: &A, scheme: &Scheme, verification: Verify) -> IoResult<()> {
+fn parse_block_size(s: &str) -> Result<usize, std::num::ParseIntError> {
+    s.parse::<usize>()
+}
+
+fn wipe<A: StorageRef>(device: &A, block_size: usize, scheme: &Scheme, verification: Verify) -> IoResult<()> {
+    // ctrlc::set_handler(move || {
+    // }).expect("Error setting Ctrl-C handler");
+
     let stages = &scheme.stages;
     let mut access = device.access()?;
     for (i, stage) in stages.iter().enumerate() {
@@ -160,7 +184,7 @@ fn wipe<A: StorageRef>(device: &A, scheme: &Scheme, verification: Verify) -> IoR
 
         loop {
             println!("\n{}: Performing {}", stage_num, stage_description);
-            fill(&mut *access, stage, device.details().size, device.details().block_size)?;
+            fill(&mut *access, stage, device.details().size, block_size)?;
 
             if !have_to_verify {
                 break;
@@ -168,7 +192,7 @@ fn wipe<A: StorageRef>(device: &A, scheme: &Scheme, verification: Verify) -> IoR
 
             println!("\n{}: Verifying {}", stage_num, stage_description);
             
-            if let Err(err) = verify(&mut *access, stage, device.details().size, device.details().block_size) {
+            if let Err(err) = verify(&mut *access, stage, device.details().size, block_size) {
                 eprintln!("Error: {}\nRetrying previous stage.", err);
             } else {
                 break;
@@ -192,7 +216,6 @@ fn fill<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, block_
         while let Some(chunk) = stream.next() {
             access.write(chunk)?;
             pb.inc(chunk.len() as u64);
-            //std::thread::sleep(std::time::Duration::from_millis(500));
         };
 
         access.flush()?;
@@ -222,7 +245,6 @@ fn verify<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, bloc
             }
 
             pb.inc(chunk.len() as u64);
-            //std::thread::sleep(std::time::Duration::from_millis(500));
         }
 
         pb.finish_with_message("Done");

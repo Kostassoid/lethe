@@ -16,7 +16,7 @@ pub trait StorageAccess {
     fn flush(&self) -> IoResult<()>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StorageType {
     Unknown,
     File,
@@ -26,7 +26,7 @@ pub enum StorageType {
     Other
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MediaType {
     Unknown,
     Rotational,
@@ -34,7 +34,7 @@ pub enum MediaType {
     Other
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StorageDetails {
     pub size: u64,
     pub block_size: usize,
