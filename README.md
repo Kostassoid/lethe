@@ -2,17 +2,19 @@
 
 A secure, free, cross-platform and open-source drive wiping utility.
 
-You might need this tool when you have data on your drive (HDD or SSD) you absolutely don't want anyone else to recover after you sell the disk of throw it away, even with specialized hardware. 
+Should work with any HDD, SSD, flash drives, etc.
 
-The usual method for wiping the disk is filling it with zeroes (or any other constant value) or with randomly generated data. For newer SSDs there's another option: Secure Wipe, but this one is not supported by this tool yet.
+The usual method for wiping the disk is filling it with randomly generated data or zeroes (or any other constant value). But the best results are achieved by performing a combination of these fills. This is basically what this tool does.
+
+For newer SSDs there's another method, ATA Secure Erase, which is not supported yet by `lethe`. This can potentially lower the effectiveness of the method used. So keeping your data encrypted from the start is a good practice.
 
 ## Why another tool like this?
 
-
+Simply because there's no other tool I could find that's truly cross-platform, open-source, easy to use and not owned by a greedy company stating their application is free, but asking money for essential security features. I don't mind paying for a good product but these tactics don't exactly induce trust. So I decided I would pay with my time and effort. And maybe learn something new in the process.
 
 ## Features
-- Supports Mac OS and Linux
-- Fills a drive with zero or random data or a combination of these steps for improved security
+
+- Supports Mac OS and Linux (Windows is planned)
 - Validates the data (reads back) to make sure all write commands were successful
 - Uses fast cryptographic random generator
 - Allows to override OS recommended block size for possibly faster operations
@@ -22,7 +24,8 @@ The usual method for wiping the disk is filling it with zeroes (or any other con
 - Checkpoints (allow to stop wiping at any moment and later resume from that place)
 - Benchmark a drive to pick the optimal buffer (block) size
 - Bad blocks handling
-- ATA Secure Wipe support
+- Secure Erase support
+- Backend mode (simplifies using from another applications/scripts)
 
 ## Download
 
@@ -44,7 +47,7 @@ lethe help wipe
 
 ### Getting a list of drives
 
-To get a list of available system drives, use command `list`:
+To get a list of available system drives use command `list`:
 
 ```
 lethe list
@@ -60,22 +63,30 @@ To wipe a drive you just need to pass the name of the device as an argument to a
 lethe wipe /dev/rdisk3
 ```
 
-This command will use default values for all the other parameters. 
+This command will use a default configuration which should be fine for most normal needs.
+
+But you can tune these parameters if needed:
 
 #### --scheme=\<value\>
 
 *Possible values:* `zero`
 
+*Default value:* `random2`
+
 Wiping scheme is basically a plan, a list of steps that should be performed.
 
 #### --verify=\<value\>
 
-*Possible values:* `no`, `last` (default) or `all`
+*Possible values:* `no`, `last` or `all`
+
+*Default value:* `last`
 
 
 #### --blocksize=\<value\>
 
 *Possible values:* a number of bytes
+
+*Default value:* OS recommended block size
 
 You can override an OS recommended block size with this parameter. The value is a number of bytes. Often, multiplying a base block size 2 or 4 times can improve the performance. But going too low or using unaligned sizes can result in error. 
 
