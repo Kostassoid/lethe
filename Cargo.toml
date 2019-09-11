@@ -1,6 +1,6 @@
 [package]
 name = "lethe"
-version = "0.1.5"
+version = "0.1.6-dev"
 authors = ["kostassoid <k.alexandroff@gmail.com>"]
 edition = "2018"
 
