@@ -30,6 +30,8 @@ deploy:
   file: $CRATE_NAME-$TRAVIS_TAG-$TARGET.*
   on:
     repo: Kostassoid/lethe
+    tags: true
+    branch: master
 cache: cargo
 before_cache:
   - chmod -R a+r $HOME/.cargo
