@@ -321,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "lethe"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "IOKit-sys 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
