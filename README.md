@@ -1,5 +1,7 @@
 # Lethe
 
+[![Build Status](https://travis-ci.org/Kostassoid/lethe.svg?branch=master)](https://travis-ci.org/Kostassoid/lethe)
+
 A secure, free, cross-platform and open-source drive wiping utility.
 
 Should work with any HDD, SSD (read below) and flash drives.
@@ -20,7 +22,17 @@ In case of SSDs, however, it is practically impossible to prove the data was suc
 
 ## Download
 
-//todo
+Current release: **v0.1.4**
+
+Download and unzip binaries for your OS:
+- [macOS x64](https://github.com/Kostassoid/lethe/releases/download/v0.1.4/lethe-v0.1.4-x86_64-apple-darwin.tar.gz)
+- [Linux x64](https://github.com/Kostassoid/lethe/releases/download/v0.1.4/lethe-v0.1.4-x86_64-unknown-linux-musl.tar.gz)
+
+Or build `lethe` yourself using latest [Rust toolchain](https://www.rust-lang.org/tools/install):
+
+```
+cargo build --release
+```
 
 ## Usage
 
