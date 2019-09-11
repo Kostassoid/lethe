@@ -4,25 +4,27 @@ services: docker
 sudo: required
 env:
   global:
-  - CRATE_NAME=lethe
+    - CRATE_NAME=lethe
 matrix:
   include:
-  - env: TARGET=x86_64-unknown-linux-musl
-  - env: TARGET=x86_64-apple-darwin
-    os: osx
+    - env: TARGET=x86_64-unknown-linux-musl
+    - env: TARGET=x86_64-apple-darwin
+      os: osx
 before_install:
-- set -e
-- rustup self update
+  - set -e
+  - rustup self update
 install:
-- sh ci/install.sh
-- source ~/.cargo/env || true
+  - sh ci/install.sh
+  - source ~/.cargo/env || true
 script:
-- bash ci/script.sh
+  - bash ci/script.sh
 after_script: set +e
 before_deploy:
-- sh ci/before_deploy.sh
+  - sh ci/before_deploy.sh
 deploy:
   provider: releases
+  skip_cleanup: true
+  file_glob: true
   api_key:
     secure: OWbn7ImZ4ZXPb9xdhHn28DgQ9yEosFvB6tEQYrpye69wFtOx2NsEVdwbtp1slYOCQSMXNriCo9xWrxtN9PlR9a1W2m3zc3Lg2UV8eTi6EDC8/S8oi0fPR/XSDP2AZJLW9EF4SCXTr2w21eFIUoithEhMXCGsv+rbwsy8P4tj3j+0H9atxiMPzbM6Lic35UcMD6X9lVGMx64+FMTYk24FhwhiwCYyg8acl4z2lUYj7cixOL0ymvt7HLmurqVfAuVVKSi0DfpOmqLIziX1mPrJqf84FTh5Ae6mGOwA8SWkWyilZjfAhFDKSl0O5mfJMUnG8XM3/+8hz5EkroCT4wNi3FqIH1XYY0mVQr7Ew4daYUUE8C/P3T0YCXxn2GdBG9j4ZVSZ8sin/zSW5YslLNeWNsg/mNXlt2JnpafGz/R9jzaHshHQ4mgbU2ltLXhhHBMh+okXEsCRFuxIH+EtuBBCtfn29pzHBPy7Y2odjpBU7KNmX0Mmt+MvqKO0dzfQFG7dXReUV1mQ5aULdzPH5YJSL2A1nbgCkT4u0q5aeFB8YEX8PJX1ETbXl8CqNrCBMuifQlGMZ5FTIJT1vk0FRMIVM3CPlJqgeVEb2Yx13hYwakd7n6Gf/wyxtByy6CDWUkMl3bfFLa5RvBgCn2K84dn5repqkZWp1m1puEMq/d69xSA=
   file: $CRATE_NAME-$TRAVIS_TAG-$TARGET.*
@@ -30,11 +32,11 @@ deploy:
     repo: Kostassoid/lethe
 cache: cargo
 before_cache:
-- chmod -R a+r $HOME/.cargo
+  - chmod -R a+r $HOME/.cargo
 branches:
   only:
-  - "/^v\\d+\\.\\d+\\.\\d+.*$/"
-  - master
+    - /^v\d+\.\d+\.\d+.*$/
+    - master
 notifications:
   email:
     on_success: never
