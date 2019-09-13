@@ -16,17 +16,17 @@ use storage::*;
 mod sanitization;
 use sanitization::*;
 
+mod wiper;
+use wiper::*;
+
 use indicatif::{ProgressBar, ProgressStyle};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-enum Verify {
-    No,
-    Last,
-    All
-}
-
 fn main() {
+
+    // ctrlc::set_handler(move || {
+    // }).expect("Error setting Ctrl-C handler");
 
     let schemes = SchemeRepo::default();
     let scheme_keys: Vec<_> = schemes.all().keys().cloned().collect();
@@ -137,9 +137,14 @@ fn main() {
             );
             if !cmd.is_present("yes") && !ask_for_confirmation() {
                 println!("Aborted.");
-                std::process::exit(0);    
+                std::process::exit(0);
             } else {
-                if let Err(e) = wipe(device, block_size, scheme, verification) {
+                let task = WiperTask::new(scheme.clone(), verification, device.details().size, block_size);
+                let mut state = WiperState::default();
+                let mut access = *device.access().unwrap(); //todo: handle errors
+                let mut frontend = ConsoleFrontend::new();
+                
+                if let Err(e) = wipe(&mut access, &task, &mut state, &mut frontend) {
                     eprintln!("Unexpected error: {}", e);
                     match (e.kind(), e.raw_os_error()) {
                         (ErrorKind::Other, Some(16)) => 
@@ -161,95 +166,74 @@ fn parse_block_size(s: &str) -> Result<usize, std::num::ParseIntError> {
     s.parse::<usize>()
 }
 
-fn wipe<A: StorageRef>(device: &A, block_size: usize, scheme: &Scheme, verification: Verify) -> IoResult<()> {
-    // ctrlc::set_handler(move || {
-    // }).expect("Error setting Ctrl-C handler");
+struct ConsoleFrontend {
+    pb: Option<ProgressBar>
+}
 
-    let stages = &scheme.stages;
-    let mut access = device.access()?;
-    for (i, stage) in stages.iter().enumerate() {
-
-        let stage_num = format!("Stage {}/{}", i + 1, stages.len());
-        let stage_description = match stage {
-            Stage::Fill { value } => format!("Value Fill ({:02x})", value),
-            Stage::Random { seed: _seed } => String::from("Random Fill")
-        };
-
-        let have_to_verify = match verification {
-            Verify::No => false,
-            Verify::Last if i + 1 == stages.len() => true,
-            Verify::All => true,
-            _ => false
-        };
-
-        loop {
-            println!("\n{}: Performing {}", stage_num, stage_description);
-            fill(&mut *access, stage, device.details().size, block_size)?;
-
-            if !have_to_verify {
-                break;
-            }
-
-            println!("\n{}: Verifying {}", stage_num, stage_description);
-            
-            if let Err(err) = verify(&mut *access, stage, device.details().size, block_size) {
-                eprintln!("Error: {}\nRetrying previous stage.", err);
-            } else {
-                break;
-            }
-        }
-
+impl ConsoleFrontend {
+    pub fn new() -> Self {
+        ConsoleFrontend { pb: None }
     }
-    Ok(())
 }
 
-fn fill<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, block_size: usize) -> IoResult<()> {
-        let mut stream = stage.stream(
-            total_size, 
-            block_size);
+impl WiperEventsReceiver for ConsoleFrontend {
+    fn receive(&mut self, event: WiperEvent) -> () {
+        match event {
+            WiperEvent::FillStarted(task, state) => {
+                let stage_num = format!("Stage {}/{}", state.stage + 1, task.scheme.stages.len());
+                let stage = &task.scheme.stages[state.stage];
+                
+                let stage_description = match stage {
+                    Stage::Fill { value } => format!("Value Fill ({:02x})", value),
+                    Stage::Random { seed: _seed } => String::from("Random Fill")
+                };
 
-        let pb = create_progress_bar(total_size);
-        pb.set_message("Writing");
+                println!("\n{}: Performing {}", stage_num, stage_description);
+                let pb = create_progress_bar(task.total_size);
+                pb.set_message("Writing");
 
-        access.seek(0u64)?;
+                self.pb = Some(pb);
+            },
+            WiperEvent::VerificationStarted(task, state) => {
+                let stage_num = format!("Stage {}/{}", state.stage + 1, task.scheme.stages.len());
+                let stage = &task.scheme.stages[state.stage];
+                
+                let stage_description = match stage {
+                    Stage::Fill { value } => format!("Value Fill ({:02x})", value),
+                    Stage::Random { seed: _seed } => String::from("Random Fill")
+                };
 
-        while let Some(chunk) = stream.next() {
-            access.write(chunk)?;
-            pb.inc(chunk.len() as u64);
-        };
+                println!("\n{}: Verifying {}", stage_num, stage_description);
+                let pb = create_progress_bar(task.total_size);
+                pb.set_message("Checking");
 
-        access.flush()?;
-        pb.finish_with_message("Done");
+                self.pb = Some(pb);
+            },
+            WiperEvent::Progress(position) => { 
+                if let Some(pb) = &self.pb {
+                    pb.set_position(position);
+                }
+            },
+            WiperEvent::FillCompleted(result) => {
+                if let Some(pb) = &self.pb {
+                    pb.set_message("Done");
+                }
+            },
+            WiperEvent::VerificationCompleted(result) => {
+                if let Some(pb) = &self.pb {
+                    pb.set_message("Done");
+                }
+            },
+            WiperEvent::WipeAborted(task, state) => {
+                if let Some(pb) = &self.pb {
+                    pb.set_message("Aborted");
+                }
+            },
+            WiperEvent::WipeCompleted(result) => {
 
-        Ok(())
-}
-
-fn verify<A: StorageAccess>(access: &mut A, stage: &Stage, total_size: u64, block_size: usize) -> IoResult<()> {
-        let pb = create_progress_bar(total_size);
-        pb.set_message("Checking");
-
-        access.seek(0u64)?;
-
-        let mut stream = stage.stream(
-            total_size, 
-            block_size);
-
-        let mut buf: Vec<u8> = vec![0; block_size];
-
-        while let Some(chunk) = stream.next() {
-            let b = &mut buf[..chunk.len()];
-            access.read(b)?;
-            if b != chunk {
-                pb.finish_with_message("FAILED!");
-                return Err(Error::new(ErrorKind::InvalidData, "Verification failed!"));
             }
-
-            pb.inc(chunk.len() as u64);
         }
-
-        pb.finish_with_message("Done");
-
-        Ok(())
+    }
 }
 
 fn ask_for_confirmation() -> bool {

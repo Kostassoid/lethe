@@ -3,7 +3,7 @@ pub mod stage;
 use std::collections::BTreeMap;
 pub use stage::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Scheme {
     pub description: String,
     pub stages: Vec<Stage>

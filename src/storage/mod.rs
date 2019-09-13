@@ -17,6 +17,7 @@ pub trait StorageAccess {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum StorageType {
     Unknown,
     File,
@@ -27,6 +28,7 @@ pub enum StorageType {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum MediaType {
     Unknown,
     Rotational,
