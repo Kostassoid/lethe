@@ -2,12 +2,14 @@ use super::sanitization::*;
 use super::storage::{StorageAccess, IoResult};
 use std::io::{Error, ErrorKind};
 
+#[derive(Debug)]
 pub enum Verify {
     No,
     Last,
     All
 }
 
+#[derive(Debug)]
 pub struct WiperTask {
     pub scheme: Scheme,
     pub verify: Verify,
@@ -15,6 +17,7 @@ pub struct WiperTask {
     pub block_size: usize
 }
 
+#[derive(Debug, Clone)]
 pub struct WiperState {
     pub stage: usize,
     pub at_verification: bool,
@@ -38,80 +41,110 @@ impl WiperTask {
     }
 }
 
-pub enum WiperEvent<'a> {
-    FillStarted(&'a WiperTask, &'a WiperState),
-    VerificationStarted(&'a WiperTask, &'a WiperState),
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum WiperEvent {
+    StageStarted,
     Progress(u64),
-    FillCompleted(IoResult<()>),
-    VerificationCompleted(IoResult<()>),
-    WipeAborted(&'a WiperTask, &'a WiperState),
-    WipeCompleted(IoResult<()>)
+    StageCompleted(IoResult<()>),
+    Retrying,
+    Aborted,
+    Completed(IoResult<()>)
 }
 
-pub trait WiperEventsReceiver {
-    fn receive(&mut self, event: WiperEvent) -> ();
+pub trait WiperEventReceiver {
+    fn handle(&mut self, task: &WiperTask, state: &WiperState, event: WiperEvent) -> ();
 }
 
-pub fn wipe(access: &mut StorageAccess, task: &WiperTask, state: &mut WiperState, events_receiver: &mut WiperEventsReceiver) -> IoResult<()> {
+impl WiperTask {
+    pub fn run(self, access: &mut StorageAccess, state: &mut WiperState, frontend: &mut WiperEventReceiver) -> bool {
 
-    let stages = &task.scheme.stages;
-    for (i, stage) in stages.iter().enumerate() {
+        let stages = &self.scheme.stages;
+        for (i, stage) in stages.iter().enumerate() {
 
-        let have_to_verify = match task.verify {
-            Verify::No => false,
-            Verify::Last if i + 1 == stages.len() => true,
-            Verify::All => true,
-            _ => false
-        };
+            let have_to_verify = match self.verify {
+                Verify::No => false,
+                Verify::Last if i + 1 == stages.len() => true,
+                Verify::All => true,
+                _ => false
+            };
 
-        loop {
-            fill(access, task, state, events_receiver)?;
+            state.stage = i;
+            state.position = 0;
+            state.at_verification = false;
 
-            if !have_to_verify {
-                break;
+            loop {
+
+                if !fill(access, &self, state, stage, frontend) {
+                    break;
+                };
+
+                if !have_to_verify {
+                    break;
+                }
+
+                state.position = 0;
+                state.at_verification = true;
+
+                if !verify(access, &self, state, stage, frontend) {
+                    state.at_verification = false;
+
+                    frontend.handle(&self, state, WiperEvent::Retrying)
+                } else {
+                    break;
+                }
             }
 
-            if let Err(err) = verify(access, task, state, events_receiver) {
-                eprintln!("Error: {}\nRetrying previous stage.", err);
-            } else {
-                break;
-            }
         }
 
+        frontend.handle(&self, state, WiperEvent::Completed(Ok(())));
+
+        true
     }
-    Ok(())
 }
 
-fn fill(access: &mut StorageAccess, task: &WiperTask, state: &mut WiperState, events_receiver: &mut WiperEventsReceiver) -> IoResult<()> {
-    let stage = &task.scheme.stages[state.stage];
+fn fill(access: &mut StorageAccess, task: &WiperTask, state: &mut WiperState, stage: &Stage, frontend: &mut WiperEventReceiver) -> bool {
 
     let mut stream = stage.stream(
         task.total_size, 
         task.block_size);
 
-    access.seek(state.position)?;
+    frontend.handle(task, state, WiperEvent::StageStarted);
 
-    events_receiver.receive(WiperEvent::FillStarted(task, state));
+    if let Err(err) = access.seek(state.position) {
+        frontend.handle(task, state, WiperEvent::StageCompleted(Err(err)));
+        return false;
+    }
 
     while let Some(chunk) = stream.next() {
-        access.write(chunk)?;
+
+        if let Err(err) = access.write(chunk) {
+            frontend.handle(task, state, WiperEvent::StageCompleted(Err(err)));
+            return false;
+        }
 
         state.position += chunk.len() as u64;
-        events_receiver.receive(WiperEvent::Progress(state.position));
+        frontend.handle(task, state, WiperEvent::Progress(state.position));
     };
 
-    access.flush()?;
-    events_receiver.receive(WiperEvent::FillCompleted(Ok(())));
+    if let Err(err) = access.flush() {
+        frontend.handle(task, state, WiperEvent::StageCompleted(Err(err)));
+        return false;
+    }
 
-    Ok(())
+    frontend.handle(task, state, WiperEvent::StageCompleted(Ok(())));
+
+    true
 }
 
-fn verify(access: &mut StorageAccess, task: &WiperTask, state: &mut WiperState, events_receiver: &mut WiperEventsReceiver) -> IoResult<()> {
-    let stage = &task.scheme.stages[state.stage];
+fn verify(access: &mut StorageAccess, task: &WiperTask, state: &mut WiperState, stage: &Stage, frontend: &mut WiperEventReceiver) -> bool {
 
-    access.seek(state.position)?;
+    frontend.handle(task, state, WiperEvent::StageStarted);
 
-    events_receiver.receive(WiperEvent::VerificationStarted(task, state));
+    if let Err(err) = access.seek(state.position) {
+        frontend.handle(task, state, WiperEvent::StageCompleted(Err(err)));
+        return false;
+    }
 
     let mut stream = stage.stream(
         task.total_size, 
@@ -121,20 +154,106 @@ fn verify(access: &mut StorageAccess, task: &WiperTask, state: &mut WiperState, 
 
     while let Some(chunk) = stream.next() {
         let b = &mut buf[..chunk.len()];
-        access.read(b)?;
+
+        if let Err(err) = access.read(b) {
+            frontend.handle(task, state, WiperEvent::StageCompleted(Err(err)));
+            return false;
+        }
+
         if b != chunk {
             let error = Error::new(ErrorKind::InvalidData, "Verification failed!");
-            events_receiver.receive(WiperEvent::VerificationCompleted(Err(Error::from(error.kind()))));
-            return Err(Error::from(error.kind()));
+            frontend.handle(task, state, WiperEvent::StageCompleted(Err(Error::from(error.kind()))));
+            return false;
         }
 
         state.position += chunk.len() as u64;
-        events_receiver.receive(WiperEvent::Progress(state.position));
+        frontend.handle(task, state, WiperEvent::Progress(state.position));
     }
 
-    events_receiver.receive(WiperEvent::VerificationCompleted(Ok(())));
+    frontend.handle(task, state, WiperEvent::StageCompleted(Ok(())));
 
-    Ok(())
+    true
 }
 
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::io::{Cursor, Seek, SeekFrom, Read, Write};
+    use assert_matches::*;
+    use WiperEvent::*;
 
+    #[test]
+    fn test_wiping_happy_path() {
+
+        let schemes = SchemeRepo::default();
+        let scheme = schemes.find("zero").unwrap();
+        let mut storage = InMemoryStorage::new(100000);
+        let block_size = 32768;
+        let mut receiver = StubReceiver { collected: Vec::new() };
+
+        let task = WiperTask::new(scheme.clone(), Verify::Last, storage.size as u64, block_size);
+        let mut state = WiperState::default();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
+
+        assert_eq!(result, true);
+        assert_eq!(storage.file.get_ref().iter().filter(|x| **x != 0u8).count(), 0);
+
+        let mut e = receiver.collected.iter();
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(_))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(_))));
+        assert_matches!(e.next(), Some((_, Completed(_))));
+    }
+
+    struct StubReceiver {
+        collected: Vec<(WiperState, WiperEvent)>
+    }
+
+    impl WiperEventReceiver for StubReceiver {
+        fn handle(&mut self, _task: &WiperTask, state: &WiperState, event: WiperEvent) -> () {
+            self.collected.push((state.clone(), event));
+        }
+    }
+
+    struct InMemoryStorage {
+        file: Cursor<Vec<u8>>,
+        size: usize,
+    }
+
+    impl InMemoryStorage {
+        fn new(size: usize) -> Self {
+            InMemoryStorage { file: Cursor::new(vec![0xff; size]), size }
+        }
+    }
+
+    impl StorageAccess for InMemoryStorage {
+        fn position(&mut self) -> IoResult<u64> {
+            self.file.seek(SeekFrom::Current(0))
+        }
+
+        fn seek(&mut self, position: u64) -> IoResult<u64> {
+            self.file.seek(SeekFrom::Start(position))
+        }
+
+        fn read(&mut self, buffer: &mut [u8]) -> IoResult<usize> {
+            self.file.read(buffer)
+        }
+
+        fn write(&mut self, data: &[u8]) -> IoResult<()> {
+            self.file.write_all(data)
+        }
+
+        fn flush(&self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+}

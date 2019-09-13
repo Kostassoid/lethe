@@ -1,5 +1,3 @@
-use std::io::{Error, ErrorKind};
-
 extern crate clap;
 use clap::{Arg, App, SubCommand, AppSettings};
 
@@ -7,7 +5,7 @@ use clap::{Arg, App, SubCommand, AppSettings};
 use prettytable::{Table, format};
 use format::FormatBuilder;
 
-use console::style;
+use ::console::style;
 use indicatif::{HumanBytes};
 
 mod storage;
@@ -19,7 +17,8 @@ use sanitization::*;
 mod wiper;
 use wiper::*;
 
-use indicatif::{ProgressBar, ProgressStyle};
+mod ui;
+use ui::*;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -91,6 +90,8 @@ fn main() {
 
     let storage_devices = System::get_storage_devices().unwrap(); //todo: handle errors
 
+    let mut frontend = cli::ConsoleFrontend::new();
+
     match app.subcommand() {
         ("list", _) => {
             let mut t = Table::new();
@@ -142,15 +143,8 @@ fn main() {
                 let task = WiperTask::new(scheme.clone(), verification, device.details().size, block_size);
                 let mut state = WiperState::default();
                 let mut access = *device.access().unwrap(); //todo: handle errors
-                let mut frontend = ConsoleFrontend::new();
                 
-                if let Err(e) = wipe(&mut access, &task, &mut state, &mut frontend) {
-                    eprintln!("Unexpected error: {}", e);
-                    match (e.kind(), e.raw_os_error()) {
-                        (ErrorKind::Other, Some(16)) => 
-                            eprintln!("Make sure the drive is not mounted."),
-                        _ => ()
-                    };
+                if !task.run(&mut access, &mut state, &mut frontend) {
                     std::process::exit(1);
                 }
             }
@@ -166,76 +160,6 @@ fn parse_block_size(s: &str) -> Result<usize, std::num::ParseIntError> {
     s.parse::<usize>()
 }
 
-struct ConsoleFrontend {
-    pb: Option<ProgressBar>
-}
-
-impl ConsoleFrontend {
-    pub fn new() -> Self {
-        ConsoleFrontend { pb: None }
-    }
-}
-
-impl WiperEventsReceiver for ConsoleFrontend {
-    fn receive(&mut self, event: WiperEvent) -> () {
-        match event {
-            WiperEvent::FillStarted(task, state) => {
-                let stage_num = format!("Stage {}/{}", state.stage + 1, task.scheme.stages.len());
-                let stage = &task.scheme.stages[state.stage];
-                
-                let stage_description = match stage {
-                    Stage::Fill { value } => format!("Value Fill ({:02x})", value),
-                    Stage::Random { seed: _seed } => String::from("Random Fill")
-                };
-
-                println!("\n{}: Performing {}", stage_num, stage_description);
-                let pb = create_progress_bar(task.total_size);
-                pb.set_message("Writing");
-
-                self.pb = Some(pb);
-            },
-            WiperEvent::VerificationStarted(task, state) => {
-                let stage_num = format!("Stage {}/{}", state.stage + 1, task.scheme.stages.len());
-                let stage = &task.scheme.stages[state.stage];
-                
-                let stage_description = match stage {
-                    Stage::Fill { value } => format!("Value Fill ({:02x})", value),
-                    Stage::Random { seed: _seed } => String::from("Random Fill")
-                };
-
-                println!("\n{}: Verifying {}", stage_num, stage_description);
-                let pb = create_progress_bar(task.total_size);
-                pb.set_message("Checking");
-
-                self.pb = Some(pb);
-            },
-            WiperEvent::Progress(position) => { 
-                if let Some(pb) = &self.pb {
-                    pb.set_position(position);
-                }
-            },
-            WiperEvent::FillCompleted(result) => {
-                if let Some(pb) = &self.pb {
-                    pb.set_message("Done");
-                }
-            },
-            WiperEvent::VerificationCompleted(result) => {
-                if let Some(pb) = &self.pb {
-                    pb.set_message("Done");
-                }
-            },
-            WiperEvent::WipeAborted(task, state) => {
-                if let Some(pb) = &self.pb {
-                    pb.set_message("Aborted");
-                }
-            },
-            WiperEvent::WipeCompleted(result) => {
-
-            }
-        }
-    }
-}
-
 fn ask_for_confirmation() -> bool {
     use std::io::prelude::*;
 
@@ -244,14 +168,4 @@ fn ask_for_confirmation() -> bool {
 
     let mut confirm = String::new();
     std::io::stdin().read_line(&mut confirm).is_ok() && confirm.trim() == "yes"
-}
-
-fn create_progress_bar(size: u64) -> ProgressBar {
-    let pb = ProgressBar::new(size);
-
-    pb.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes:>7}/{total_bytes:7} ({eta} left) {msg}")
-        .progress_chars("█▉▊▋▌▍▎▏  "));
-
-    pb
 }
