@@ -1,6 +1,8 @@
 extern crate clap;
 use clap::{Arg, App, SubCommand, AppSettings};
 
+use std::rc::Rc;
+
 #[macro_use] extern crate prettytable;
 use prettytable::{Table, format};
 use format::FormatBuilder;
@@ -14,8 +16,8 @@ use storage::*;
 mod sanitization;
 use sanitization::*;
 
-mod wiper;
-use wiper::*;
+mod actions;
+use actions::*;
 
 mod ui;
 use ui::*;
@@ -90,7 +92,7 @@ fn main() {
 
     let storage_devices = System::get_storage_devices().unwrap(); //todo: handle errors
 
-    let mut frontend = cli::ConsoleFrontend::new();
+    let frontend = cli::ConsoleFrontend::new();
 
     match app.subcommand() {
         ("list", _) => {
@@ -129,22 +131,19 @@ fn main() {
                     std::process::exit(1);
                 });
 
-            let block_size = block_size_override.unwrap_or(device.details().block_size);
+            let block_size = block_size_override
+                .unwrap_or(device.details().block_size);
 
-            println!("Wiping {} using scheme {} and block size {}.", 
-                style(device_id).bold(), 
-                style(scheme_id).bold(),
-                style(HumanBytes(block_size as u64)).bold()
-            );
-            if !cmd.is_present("yes") && !ask_for_confirmation() {
-                println!("Aborted.");
-                std::process::exit(0);
-            } else {
-                let task = WiperTask::new(scheme.clone(), verification, device.details().size, block_size);
-                let mut state = WiperState::default();
-                let mut access = *device.access().unwrap(); //todo: handle errors
-                
-                if !task.run(&mut access, &mut state, &mut frontend) {
+            let task = WipeTask::new(scheme.clone(), verification, device.details().size, block_size);
+            let mut state = WipeState::default();
+            let mut session = frontend.wipe_session(device_id, scheme_id, cmd.is_present("yes"));
+
+            match device.access() {
+                Ok(mut access) => if !task.run(&mut *access, &mut state, &mut session) {
+                    std::process::exit(1);
+                },
+                Err(err) => {
+                    session.handle(&task, &state, WipeEvent::Fatal(Rc::from(err)));
                     std::process::exit(1);
                 }
             }
@@ -157,15 +156,6 @@ fn main() {
 }
 
 fn parse_block_size(s: &str) -> Result<usize, std::num::ParseIntError> {
+
     s.parse::<usize>()
-}
-
-fn ask_for_confirmation() -> bool {
-    use std::io::prelude::*;
-
-    print!("Are you sure? (type 'yes' to confirm): ");
-    std::io::stdout().flush().unwrap();
-
-    let mut confirm = String::new();
-    std::io::stdin().read_line(&mut confirm).is_ok() && confirm.trim() == "yes"
 }

@@ -1,24 +1,51 @@
 use std::io::ErrorKind;
 
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle, HumanBytes};
+use ::console::style;
 
-use crate::wiper::{WiperEventReceiver, WiperEvent, WiperState, WiperTask};
+use crate::actions::{WipeEventReceiver, WipeEvent, WipeState, WipeTask};
 use crate::stage::Stage;
 
 pub struct ConsoleFrontend {
-    pb: Option<ProgressBar>
 }
 
 impl ConsoleFrontend {
     pub fn new() -> Self {
-        ConsoleFrontend { pb: None }
+        ConsoleFrontend { }
+    }
+
+    pub fn wipe_session(self, device_id: &str, scheme_id: &str, auto_confirm: bool) -> ConsoleWipeSession {
+        ConsoleWipeSession { 
+            device_id: String::from(device_id), 
+            scheme_id: String::from(scheme_id),
+            auto_confirm, 
+            pb: None 
+        }
     }
 }
 
-impl WiperEventReceiver for ConsoleFrontend {
-    fn handle(&mut self, task: &WiperTask, state: &WiperState, event: WiperEvent) -> () {
+pub struct ConsoleWipeSession {
+    device_id: String,
+    scheme_id: String,
+    auto_confirm: bool,
+    pb: Option<ProgressBar>
+}
+
+impl WipeEventReceiver for ConsoleWipeSession {
+    fn handle(&mut self, task: &WipeTask, state: &WipeState, event: WipeEvent) -> () {
         match event {
-            WiperEvent::StageStarted => {
+            WipeEvent::Started => {
+                println!("Wiping {} using scheme {} and block size {}.", 
+                    style(&self.device_id).bold(), 
+                    style(&self.scheme_id).bold(),
+                    style(HumanBytes(task.block_size as u64)).bold()
+                );
+                if !self.auto_confirm && !ask_for_confirmation() {
+                    println!("Aborted.");
+                    std::process::exit(0);
+                }
+            },
+            WipeEvent::StageStarted => {
                 let stage_num = format!("Stage {}/{}", state.stage + 1, task.scheme.stages.len());
                 let stage = &task.scheme.stages[state.stage];
                 
@@ -43,32 +70,32 @@ impl WiperEventReceiver for ConsoleFrontend {
 
                 self.pb = Some(pb);
             },
-            WiperEvent::Progress(position) => { 
+            WipeEvent::Progress(position) => { 
                 if let Some(pb) = &self.pb {
                     pb.set_position(position);
                 }
             },
-            WiperEvent::StageCompleted(result) => {
+            WipeEvent::StageCompleted(result) => {
                 if let Some(pb) = &self.pb {
                     match result {
-                        Ok(_) => pb.finish_with_message("Done"),
-                        Err(err) => { 
+                        None => pb.finish_with_message("Done"),
+                        Some(err) => { 
                             pb.finish_with_message("FAILED!");
                             eprintln!("Error: {}", err);
                         },
                     }
                 }
             },
-            WiperEvent::Retrying => {
+            WipeEvent::Retrying => {
                 eprintln!("Retrying previous stage at {}.", state.position);
             },
-            WiperEvent::Aborted => {
+            WipeEvent::Aborted => {
                 eprintln!("Aborted.");
             },
-            WiperEvent::Completed(result) => {
+            WipeEvent::Completed(result) => {
                 match result {
-                    Ok(_) => println!("Done."),
-                    Err(e) => {
+                    None => println!("Done."),
+                    Some(e) => {
                         eprintln!("Unexpected error: {}", e);
                         match (e.kind(), e.raw_os_error()) {
                             (ErrorKind::Other, Some(16)) => 
@@ -78,9 +105,22 @@ impl WiperEventReceiver for ConsoleFrontend {
                     }
                 }
 
+            },
+            WipeEvent::Fatal(err) => {
+                eprintln!("Fatal: {}", err);
             }
         }
     }
+}
+
+fn ask_for_confirmation() -> bool {
+    use std::io::prelude::*;
+
+    print!("Are you sure? (type 'yes' to confirm): ");
+    std::io::stdout().flush().unwrap();
+
+    let mut confirm = String::new();
+    std::io::stdin().read_line(&mut confirm).is_ok() && confirm.trim() == "yes"
 }
 
 fn create_progress_bar(size: u64) -> ProgressBar {
