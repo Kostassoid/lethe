@@ -53,7 +53,7 @@ impl Stage {
         Stage::random_with_seed(seed) 
     }
 
-    pub fn stream(&self, total_size: u64, block_size: usize) -> SanitizationStream {
+    pub fn stream(&self, total_size: u64, block_size: usize, start_from: u64) -> SanitizationStream {
 
         let mut buf = unsafe {
             let buf_layout = std::alloc::Layout::from_size_align_unchecked(block_size, block_size);
@@ -74,15 +74,16 @@ impl Stage {
                 StreamKind::Fill
             },
             Stage::Random { seed } => {
-                let gen = RandomGenerator::from_seed(*seed); 
+                let mut gen = RandomGenerator::from_seed(*seed);
+                gen.set_word_pos((start_from >> 2) as u128);
                 StreamKind::Random { gen }
             }
         };
 
         let state = StreamState {
-            total_size, 
-            block_size, 
-            position: 0, 
+            total_size,
+            block_size,
+            position: start_from,
             buf,
             eof: false,
             current_block_size: 0
@@ -187,7 +188,7 @@ mod test {
     }
 
     fn fill(v: &mut Vec<u8>, stage: &mut Stage) -> () {
-        let mut stream = stage.stream(TEST_SIZE, TEST_BLOCK);
+        let mut stream = stage.stream(TEST_SIZE, TEST_BLOCK, 0);
 
         let mut position = 0;
         while let Some(chunk) = stream.next() {

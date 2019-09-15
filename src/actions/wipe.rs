@@ -83,6 +83,8 @@ impl WipeTask {
 
             let stage_error = loop {
 
+                let watermark = state.position;
+
                 if let Some(err) = fill(access, &self, state, stage, frontend) {
                     break Some(err);
                 };
@@ -91,12 +93,11 @@ impl WipeTask {
                     break None;
                 }
 
-                state.position = 0;
+                state.position = watermark;
                 state.at_verification = true;
 
                 if verify(access, &self, state, stage, frontend).is_some() {
                     state.at_verification = false;
-                    state.position = 0; //todo: optimize by starting from latest good position
                     frontend.handle(&self, state, WipeEvent::Retrying)
                 } else {
                     break None;
@@ -119,8 +120,10 @@ impl WipeTask {
 fn fill(access: &mut StorageAccess, task: &WipeTask, state: &mut WipeState, stage: &Stage, frontend: &mut WipeEventReceiver) -> Option<Rc<Error>> {
 
     let mut stream = stage.stream(
-        task.total_size, 
-        task.block_size);
+        task.total_size,
+        task.block_size,
+        state.position
+    );
 
     frontend.handle(task, state, WipeEvent::StageStarted);
 
@@ -164,8 +167,10 @@ fn verify(access: &mut StorageAccess, task: &WipeTask, state: &mut WipeState, st
     }
 
     let mut stream = stage.stream(
-        task.total_size, 
-        task.block_size);
+        task.total_size,
+        task.block_size,
+        state.position
+    );
 
     let mut buf: Vec<u8> = vec![0; task.block_size];
 
@@ -266,7 +271,7 @@ mod test {
     fn test_wiping_validation_failure() {
 
         let schemes = SchemeRepo::default();
-        let scheme = schemes.find("zero").unwrap();
+        let scheme = schemes.find("random").unwrap();
         let mut storage = InMemoryStorage::new(100000);
         let block_size = 32768;
         let mut receiver = StubReceiver::new();
@@ -291,21 +296,17 @@ mod test {
         assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, StageCompleted(Some(_)))));
         assert_matches!(e.next(), Some((_, Retrying)));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 0/*32768*/);
-        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 32768);
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 0);
-        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 32768);
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
         assert_matches!(e.next(), Some((_, Completed(None))));
-
-        assert_eq!(storage.file.get_ref().iter().filter(|x| **x != 0u8).count(), 0);
     }
 
     struct StubReceiver {
