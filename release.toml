@@ -2,6 +2,6 @@ disable-publish = true
 dev-version-ext = "dev"
 pre-release-replacements = [
     {file="README.md", search="v[0-9]+\\.[0-9]+\\.[0-9]+", replace="v{{version}}"},
-    {file="CHANGELOG.md", search="$Unreleased", replace="{{version}}"},
-    {file="CHANGELOG.md", search="$ReleaseDate", replace="{{date}}"}
+    {file="CHANGELOG.md", search="_Unreleased_", replace="{{version}}"},
+    {file="CHANGELOG.md", search="_ReleaseDate_", replace="{{date}}"}
 ]

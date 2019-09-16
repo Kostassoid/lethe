@@ -1,6 +1,6 @@
 # Change Log
 
-## [$Unreleased] - $ReleaseDate
+## [0.2.0] - 2019-09-16
 
 This release is mostly laying the groundwork for a more serious improvements.
 
