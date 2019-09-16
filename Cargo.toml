@@ -1,6 +1,6 @@
 [package]
 name = "lethe"
-version = "0.1.6-dev"
+version = "0.2.0"
 authors = ["Konstantin Alexandroff <k.alexandroff@gmail.com>"]
 description = "A command-line tool to generate cryptocurrency wallets"
 homepage = "https://github.com/Kostassoid/lethe"
