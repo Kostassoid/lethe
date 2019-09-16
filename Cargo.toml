@@ -1,8 +1,18 @@
 [package]
 name = "lethe"
 version = "0.1.6-dev"
-authors = ["kostassoid <k.alexandroff@gmail.com>"]
+authors = ["Konstantin Alexandroff <k.alexandroff@gmail.com>"]
+description = "A command-line tool to generate cryptocurrency wallets"
+homepage = "https://github.com/Kostassoid/lethe"
+repository = "https://github.com/Kostassoid/lethe"
+categories = ["command-line-utilities"]
+keywords = ["security", "command-line", "disk", "erase", "wipe", "storage"]
+readme = "README.md"
+license = "Apache-2.0"
 edition = "2018"
+
+[badges]
+travis-ci = { repository = "Kostassoid/lethe", branch = "master" }
 
 [dependencies]
 nix = "0.14.1"

@@ -114,7 +114,7 @@ fn main() {
                 _ => Verify::Last
             };
             let block_size_override = cmd.value_of("blocksize")
-                .map(|bs| parse_block_size(bs)
+                .map(|bs| ui::args::parse_block_size(bs)
                     .unwrap_or_else(|err| {
                         eprintln!("Invalid blocksize value. {}", err);
                         std::process::exit(1);
@@ -153,9 +153,4 @@ fn main() {
             std::process::exit(1)
         }
     }
-}
-
-fn parse_block_size(s: &str) -> Result<usize, std::num::ParseIntError> {
-
-    s.parse::<usize>()
 }
