@@ -5,7 +5,7 @@ use uuid::Uuid;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::io::{BufReader, BufWriter};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use serde::{Serialize, Deserialize};
 use chrono::{Utc, DateTime};
 
@@ -29,7 +29,6 @@ fn calculate_fingerprint(sample: &[u8]) -> Fingerprint {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Checkpoint {
     id: Uuid,
-    //#[serde(with = "serde_instant")]
     timestamp: DateTime<Utc>,
     total_size: u64,
     block_size: usize,
@@ -70,17 +69,20 @@ struct CheckpointStore {
 
 impl CheckpointStore {
     fn load_from<P: AsRef<Path>>(path: P) -> IoResult<Self> {
-        let file = File::open(&path)?;
-        let buffered_reader = BufReader::new(file);
-        //let serialized:Vec<u8> = Vec::new();
-        //buffered_reader.read_to_end(&serialized)?;
 
-        let list: Vec<Checkpoint> = serde_json::from_reader(buffered_reader).unwrap();
+        let index = File::open(&path)
+            .map(|f| {
+                let buffered_reader = BufReader::new(f);
 
-        let mut index: HashMap<Uuid, Checkpoint> = HashMap::new();
-        for c in list.iter() {
-            index.insert(c.id, c.clone());
-        }
+                let list: Vec<Checkpoint> = serde_json::from_reader(buffered_reader).unwrap();
+
+                let mut map: HashMap<Uuid, Checkpoint> = HashMap::new();
+                for c in list.iter() {
+                    map.insert(c.id, c.clone());
+                }
+                map
+            })
+            .unwrap_or(HashMap::new());
 
         Ok(CheckpointStore { 
             path: path.as_ref().to_path_buf(),
@@ -89,7 +91,10 @@ impl CheckpointStore {
     }
 
     fn default() -> IoResult<Self> {
-        CheckpointStore::load_from(resolve_data_path())
+        let data_path = resolve_data_path();
+        std::fs::create_dir_all(&data_path);
+        let file_path = format!("{}/checkpoints.json", data_path);
+        CheckpointStore::load_from(file_path)
     }
 
     fn find(self, total_size: u64, sample: &[u8]) -> Vec<Checkpoint> {
@@ -116,10 +121,8 @@ impl CheckpointStore {
             list.push(v.clone());
         }
 
-        let file = File::open(&self.path)?;
+        let file = OpenOptions::new().create(true).write(true).truncate(true).open(&self.path)?;
         let buffered_writer = BufWriter::new(file);
-
-        //let serialized = serde_json::to_string(&list).unwrap();
 
         serde_json::to_writer(buffered_writer, &list).unwrap();
         Ok(())
@@ -129,6 +132,8 @@ impl CheckpointStore {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sanitization::SchemeRepo;
+    use crate::actions::{WipeTask, WipeState, Verify};
 
     #[test]
     fn test_resolve_data_path() {
@@ -144,5 +149,25 @@ mod test {
         assert_eq!(calculate_fingerprint(&sample1), calculate_fingerprint(&sample1));
         assert_eq!(calculate_fingerprint(&sample2), calculate_fingerprint(&sample2));
         assert_ne!(calculate_fingerprint(&sample1), calculate_fingerprint(&sample2));
+    }
+
+    #[test]
+    fn test_checkpoint_store() {
+
+        let mut store = CheckpointStore::load_from("/Users/kostassoid/xxx.json").unwrap();
+
+        let repo = SchemeRepo::default();
+        let scheme = repo.find("random2").unwrap();
+        let task = WipeTask::new(scheme.clone(), Verify::All, 12345000, 4096);
+        let state = WipeState { stage: 1, at_verification: true, position: 65536 };
+        let sample = [0x67u8; 128];
+        let cp = Checkpoint::new(&task, &state, &sample);
+
+        store.update(cp);
+
+        store.flush().unwrap();
+
+        //assert!(store.index.is_empty());
+
     }
 }
