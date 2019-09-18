@@ -4,8 +4,10 @@ pub use stage::*;
 pub mod mem;
 
 use std::collections::BTreeMap;
+pub use stage::*;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Scheme {
     pub description: String,
     pub stages: Vec<Stage>

@@ -2,13 +2,14 @@
 use rand::SeedableRng;
 use rand::RngCore;
 pub use streaming_iterator::StreamingIterator;
+use serde::{Serialize, Deserialize};
 
 use super::mem::*;
 
 const RANDOM_SEED_SIZE: usize = 32;
 type RandomGenerator = rand_chacha::ChaCha8Rng;
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Stage {
     Fill { value: u8 },
     Random { seed: [u8; RANDOM_SEED_SIZE] }

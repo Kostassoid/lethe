@@ -60,16 +60,16 @@ Tested on Macbook Pro 2015 with Mac OS 10.14.4 (Mojave) using a Sandisk 64G Flas
 
  Command | Block size | Time taken (seconds)
 ---------|------------|----------
- `dd if=/dev/zero of=/dev/rdisk3 bs=131072` | 128k | 2667.21
+ `dd if=/dev/zero of=/dev/rdisk3 bs=128k` | 128k | 2667.21
  `lethe wipe --scheme=zero --verify=no /dev/rdisk3` | 128k | 2725.77
  `dd if=/dev/zero of=/dev/rdisk3 bs=1m` | 1m | 2134.99
- `lethe wipe --scheme=zero --blocksize=1048576 --verify=no /dev/rdisk3` | 1m | 2129.61
+ `lethe wipe --scheme=zero --blocksize=1m --verify=no /dev/rdisk3` | 1m | 2129.61
 
 **Random fill**
 
  Command | Block size | Time taken (seconds)
 ---------|------------|----------
- `dd if=/dev/urandom of=/dev/rdisk3 bs=131072` | 128k | 4546.48
+ `dd if=/dev/urandom of=/dev/rdisk3 bs=128k` | 128k | 4546.48
  `lethe wipe --scheme=random --verify=no /dev/rdisk3` | 128k | 2758.11
 
 ## License
