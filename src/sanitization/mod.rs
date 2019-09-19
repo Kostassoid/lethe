@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 pub use stage::*;
 use serde::{Serialize, Deserialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Scheme {
     pub description: String,
     pub stages: Vec<Stage>

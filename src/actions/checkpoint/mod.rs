@@ -26,7 +26,7 @@ fn calculate_fingerprint(sample: &[u8]) -> Fingerprint {
     fingerprint
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 struct Checkpoint {
     id: Uuid,
     timestamp: DateTime<Utc>,
@@ -62,6 +62,7 @@ impl Checkpoint {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 struct CheckpointStore {
     path: PathBuf,
     index: HashMap<Uuid, Checkpoint>
@@ -115,7 +116,7 @@ impl CheckpointStore {
         ()
     }
 
-    fn flush(self) -> IoResult<()> {
+    fn flush(&self) -> IoResult<()> {
         let mut list: Vec<Checkpoint> = Vec::with_capacity(self.index.len());
         for (_, v) in self.index.iter() {
             list.push(v.clone());
@@ -152,22 +153,69 @@ mod test {
     }
 
     #[test]
-    fn test_checkpoint_store() {
+    fn test_checkpoint_store_save_load() {
 
-        let mut store = CheckpointStore::load_from("/Users/kostassoid/xxx.json").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoints_path = dir.path().join("checkpoints.json");
+
+        let mut new_store = CheckpointStore::load_from(&checkpoints_path).unwrap();
 
         let repo = SchemeRepo::default();
         let scheme = repo.find("random2").unwrap();
         let task = WipeTask::new(scheme.clone(), Verify::All, 12345000, 4096);
-        let state = WipeState { stage: 1, at_verification: true, position: 65536 };
+        let mut state = WipeState { stage: 1, at_verification: true, position: 0 };
         let sample = [0x67u8; 128];
-        let cp = Checkpoint::new(&task, &state, &sample);
 
-        store.update(cp);
+        let cp1 = Checkpoint::new(&task, &state, &sample);
+        new_store.update(cp1);
 
-        store.flush().unwrap();
+        state.position = 32768;
+        let cp2 = Checkpoint::new(&task, &state, &sample);
+        new_store.update(cp2);
 
-        //assert!(store.index.is_empty());
+        state.position = 65536;
+        let cp3 = Checkpoint::new(&task, &state, &sample);
+        new_store.update(cp3);
 
+        new_store.flush().unwrap();
+
+        let loaded_store = CheckpointStore::load_from(&checkpoints_path).unwrap();
+
+        assert_eq!(&new_store, &loaded_store);
+    }
+
+    #[test]
+    fn test_checkpoint_store_find() {
+
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoints_path = dir.path().join("checkpoints.json");
+
+        let mut new_store = CheckpointStore::load_from(&checkpoints_path).unwrap();
+
+        // let repo = SchemeRepo::default();
+        // let scheme = repo.find("random2").unwrap();
+        // let task = WipeTask::new(scheme.clone(), Verify::All, 12345000, 4096);
+        // let mut state = WipeState { stage: 1, at_verification: true, position: 0 };
+        // let sample = [0x67u8; 128];
+
+        // let cp1 = Checkpoint::new(&task, &state, &sample);
+        // let cp1id = cp1.id.clone();
+        // new_store.update(cp1);
+
+        // state.position = 32768;
+        // let cp2 = Checkpoint::new(&task, &state, &sample);
+        // new_store.update(cp2);
+
+        // state.position = 65536;
+        // let cp3 = Checkpoint::new(&task, &state, &sample);
+        // new_store.update(cp3);
+
+        // new_store.flush().unwrap();
+
+        // let mut loaded_store = CheckpointStore::load_from(&checkpoints_path).unwrap();
+
+        // loaded_store.remove(&cp1id);
+
+        // assert_eq!(&new_store, &loaded_store);
     }
 }
