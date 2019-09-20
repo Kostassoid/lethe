@@ -166,3 +166,11 @@ fn main() {
         }
     }
 }
+
+fn resolve_checkpoints_path() -> String {
+    let root = std::env::var("XDG_DATA_HOME")
+        .unwrap_or("~/.local/share".to_owned());
+
+    format!("{}/lethe", &root)
+}
+

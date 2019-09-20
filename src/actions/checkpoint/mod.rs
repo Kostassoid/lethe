@@ -4,20 +4,14 @@ use blake2::{Blake2b, Digest};
 use uuid::Uuid;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::io::{BufReader, BufWriter};
-use std::fs::{File, OpenOptions};
+use std::fs::{read_dir, read_to_string, write, remove_file, create_dir_all};
 use serde::{Serialize, Deserialize};
 use chrono::{Utc, DateTime};
 
 type Fingerprint = [u8; 32];
 type IoResult<A> = std::io::Result<A>;
 
-fn resolve_data_path() -> String {
-    let root = std::env::var("XDG_DATA_HOME")
-        .unwrap_or("~/.local/share".to_owned());
-
-    format!("{}/lethe", &root)
-}
+const CHECKPOINT_EXT: &str = ".checkpoint";
 
 fn calculate_fingerprint(sample: &[u8]) -> Fingerprint {
     let mut fingerprint: Fingerprint = Default::default();
@@ -63,39 +57,37 @@ impl Checkpoint {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+enum CheckpointOperation {
+    Update(Checkpoint),
+    Remove
+}
+
+#[derive(Debug, PartialEq, Eq)]
 struct CheckpointStore {
-    path: PathBuf,
-    index: HashMap<Uuid, Checkpoint>
+    index: HashMap<Uuid, Checkpoint>,
+    pending: HashMap<Uuid, CheckpointOperation>
 }
 
 impl CheckpointStore {
-    fn load_from<P: AsRef<Path>>(path: P) -> IoResult<Self> {
-
-        let index = File::open(&path)
-            .map(|f| {
-                let buffered_reader = BufReader::new(f);
-
-                let list: Vec<Checkpoint> = serde_json::from_reader(buffered_reader).unwrap();
-
-                let mut map: HashMap<Uuid, Checkpoint> = HashMap::new();
-                for c in list.iter() {
-                    map.insert(c.id, c.clone());
-                }
-                map
-            })
-            .unwrap_or(HashMap::new());
-
-        Ok(CheckpointStore { 
-            path: path.as_ref().to_path_buf(),
-            index
-        })
+    fn new() -> Self {
+        CheckpointStore { index: HashMap::new(), pending: HashMap::new() }
     }
 
-    fn default() -> IoResult<Self> {
-        let data_path = resolve_data_path();
-        std::fs::create_dir_all(&data_path);
-        let file_path = format!("{}/checkpoints.json", data_path);
-        CheckpointStore::load_from(file_path)
+    fn load_from<P: AsRef<Path>>(&mut self, path: P) -> IoResult<()> {
+        create_dir_all(&path)?;
+
+        let rd = read_dir(&path)?;
+        let index = rd
+            .filter_map(std::io::Result::ok)
+            .map(|de| de.path())
+            .filter(|path| path.to_str().unwrap().ends_with(CHECKPOINT_EXT))
+            .flat_map(read_to_string)
+            .flat_map(|json| serde_json::from_str::<Checkpoint>(&json))
+            .map(|cp| (cp.id, cp))
+            .collect::<HashMap<_, _>>();
+
+        self.index = index;
+        Ok(())
     }
 
     fn find(self, total_size: u64, sample: &[u8]) -> Vec<Checkpoint> {
@@ -107,25 +99,31 @@ impl CheckpointStore {
     }
 
     fn update(&mut self, checkpoint: Checkpoint) -> () {
+        self.pending.insert(checkpoint.id.clone(), CheckpointOperation::Update(checkpoint.clone()));
         self.index.insert(checkpoint.id, checkpoint);
         ()
     }
 
     fn remove(&mut self, id: &Uuid) -> () {
+        self.pending.insert(id.clone(), CheckpointOperation::Remove);
         self.index.remove(id);
         ()
     }
 
-    fn flush(&self) -> IoResult<()> {
-        let mut list: Vec<Checkpoint> = Vec::with_capacity(self.index.len());
-        for (_, v) in self.index.iter() {
-            list.push(v.clone());
+    fn flush<P: AsRef<Path>>(&mut self, path: P) -> IoResult<()> {
+        std::fs::create_dir_all(&path)?;
+        
+        for (id, op) in self.pending.iter() {
+            let file_path = path.as_ref().join(format!("{}{}", id, CHECKPOINT_EXT));
+
+            match op {
+                CheckpointOperation::Update(cp) => write(file_path, serde_json::to_string(cp).unwrap())?,
+                CheckpointOperation::Remove => remove_file(file_path)?
+            };
         }
 
-        let file = OpenOptions::new().create(true).write(true).truncate(true).open(&self.path)?;
-        let buffered_writer = BufWriter::new(file);
+        self.pending.clear();
 
-        serde_json::to_writer(buffered_writer, &list).unwrap();
         Ok(())
     }
 }
@@ -135,11 +133,12 @@ mod test {
     use super::*;
     use crate::sanitization::SchemeRepo;
     use crate::actions::{WipeTask, WipeState, Verify};
+    use assert_matches::assert_matches;
 
-    #[test]
-    fn test_resolve_data_path() {
-        assert_eq!(resolve_data_path(), "~/.local/share/lethe");
-    }
+    // #[test]
+    // fn test_resolve_data_path() {
+    //     assert_eq!(resolve_data_path(), "~/.local/share/lethe");
+    // }
 
     #[test]
     fn test_fingerprint_calculation() {
@@ -156,66 +155,74 @@ mod test {
     fn test_checkpoint_store_save_load() {
 
         let dir = tempfile::tempdir().unwrap();
-        let checkpoints_path = dir.path().join("checkpoints.json");
+        //let dir = "/Users/kostassoid/proj/tmp/lethe";
 
-        let mut new_store = CheckpointStore::load_from(&checkpoints_path).unwrap();
+        let mut new_store = CheckpointStore::new();
 
-        let repo = SchemeRepo::default();
-        let scheme = repo.find("random2").unwrap();
-        let task = WipeTask::new(scheme.clone(), Verify::All, 12345000, 4096);
-        let mut state = WipeState { stage: 1, at_verification: true, position: 0 };
-        let sample = [0x67u8; 128];
-
-        let cp1 = Checkpoint::new(&task, &state, &sample);
+        let cp1 = create_checkpoint(&[0x11u8; 128]);
         new_store.update(cp1);
 
-        state.position = 32768;
-        let cp2 = Checkpoint::new(&task, &state, &sample);
+        let cp2 = create_checkpoint(&[0x22u8; 128]);
         new_store.update(cp2);
 
-        state.position = 65536;
-        let cp3 = Checkpoint::new(&task, &state, &sample);
+        let cp3 = create_checkpoint(&[0x33u8; 128]);
         new_store.update(cp3);
 
-        new_store.flush().unwrap();
+        new_store.flush(&dir).unwrap();
 
-        let loaded_store = CheckpointStore::load_from(&checkpoints_path).unwrap();
+        let mut loaded_store = CheckpointStore::new();
+        loaded_store.load_from(&dir).unwrap();
 
         assert_eq!(&new_store, &loaded_store);
     }
 
     #[test]
-    fn test_checkpoint_store_find() {
+    fn test_checkpoint_store_basic_operations() {
+        let mut store = CheckpointStore::new();
 
-        let dir = tempfile::tempdir().unwrap();
-        let checkpoints_path = dir.path().join("checkpoints.json");
+        let sample = [0x67u8; 128];
 
-        let mut new_store = CheckpointStore::load_from(&checkpoints_path).unwrap();
+        let mut cp1 = create_checkpoint(&sample);
+        let cp1id = cp1.id.clone();
 
-        // let repo = SchemeRepo::default();
-        // let scheme = repo.find("random2").unwrap();
-        // let task = WipeTask::new(scheme.clone(), Verify::All, 12345000, 4096);
-        // let mut state = WipeState { stage: 1, at_verification: true, position: 0 };
-        // let sample = [0x67u8; 128];
+        let cp2 = create_checkpoint(&sample);
+        let cp2id = cp2.id.clone();
 
-        // let cp1 = Checkpoint::new(&task, &state, &sample);
-        // let cp1id = cp1.id.clone();
-        // new_store.update(cp1);
+        store.update(cp1.clone());
 
-        // state.position = 32768;
-        // let cp2 = Checkpoint::new(&task, &state, &sample);
-        // new_store.update(cp2);
+        assert_eq!(store.index.len(), 1);
+        assert_eq!(store.pending.len(), 1);
 
-        // state.position = 65536;
-        // let cp3 = Checkpoint::new(&task, &state, &sample);
-        // new_store.update(cp3);
+        cp1.position = 1000;
+        store.update(cp1.clone());
 
-        // new_store.flush().unwrap();
+        assert_eq!(store.index.len(), 1);
+        assert_eq!(store.index.get(&cp1id), Some(&cp1));
 
-        // let mut loaded_store = CheckpointStore::load_from(&checkpoints_path).unwrap();
+        assert_eq!(store.pending.len(), 1);
+        assert_eq!(store.pending.get(&cp1id), Some(&CheckpointOperation::Update(cp1.clone())));
 
-        // loaded_store.remove(&cp1id);
+        store.update(cp2.clone());
 
-        // assert_eq!(&new_store, &loaded_store);
+        assert_eq!(store.index.len(), 2);
+        assert_eq!(store.pending.len(), 2);
+
+        store.remove(&cp1id);        
+
+        assert_eq!(store.index.len(), 1);
+        assert_eq!(store.index.get(&cp1id), None);
+        assert_eq!(store.index.get(&cp2id), Some(&cp2));
+
+        assert_eq!(store.pending.len(), 2);
+        assert_eq!(store.pending.get(&cp1id), Some(&CheckpointOperation::Remove));
+        assert_eq!(store.pending.get(&cp2id), Some(&CheckpointOperation::Update(cp2.clone())));
+    }
+
+    fn create_checkpoint(sample: &[u8]) -> Checkpoint {
+        let repo = SchemeRepo::default();
+        let scheme = repo.find("random2").unwrap();
+        let task = WipeTask::new(scheme.clone(), Verify::All, 12345000, 4096);
+        let state = WipeState { stage: 1, at_verification: true, position: 0 };
+        Checkpoint::new(&task, &state, &sample)
     }
 }
