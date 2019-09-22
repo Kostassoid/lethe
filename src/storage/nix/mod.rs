@@ -1,8 +1,5 @@
 #![cfg(unix)]
-extern crate nix;
-
 use std::fs::File;
-use std::fs::read_dir;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::io::SeekFrom;
@@ -33,27 +30,6 @@ fn resolve_storage_size(file_type: &FileType, stat: &libc::stat, fd: RawFd) -> u
         FileType::Block | FileType::Raw => os::get_block_device_size(fd),
         _ => stat.st_size as u64
     }
-}
-
-fn discover_file_based_devices<P: AsRef<Path>>(
-    root: P,
-    path_filter: fn(&PathBuf) -> bool,
-    meta_filter: fn(&StorageDetails) -> bool
-) -> IoResult<Vec<FileRef>> {
-    let rd = read_dir(&root)?;
-    let mut refs = rd.filter_map(std::io::Result::ok)
-        .map(|de| de.path())
-        .filter(|path|
-            (path_filter)(&path.to_path_buf())
-        )
-        .flat_map(FileRef::new)
-        .filter(|r|
-            (meta_filter)(&r.details)
-        )
-        .collect::<Vec<_>>();
-    
-    refs.sort_by(|a, b| a.path.to_str().cmp(&b.path.to_str()));
-    Ok(refs)
 }
 
 #[derive(Debug)]

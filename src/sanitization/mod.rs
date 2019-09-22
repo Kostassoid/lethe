@@ -1,7 +1,9 @@
 pub mod stage;
+pub use stage::*;
+
+pub mod mem;
 
 use std::collections::BTreeMap;
-pub use stage::*;
 
 #[derive(Debug, Clone)]
 pub struct Scheme {

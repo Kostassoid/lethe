@@ -3,6 +3,8 @@ use rand::SeedableRng;
 use rand::RngCore;
 pub use streaming_iterator::StreamingIterator;
 
+use super::mem::*;
+
 const RANDOM_SEED_SIZE: usize = 32;
 type RandomGenerator = rand_chacha::ChaCha8Rng;
 
@@ -55,22 +57,11 @@ impl Stage {
 
     pub fn stream(&self, total_size: u64, block_size: usize, start_from: u64) -> SanitizationStream {
 
-        let mut buf = unsafe {
-            let buf_layout = std::alloc::Layout::from_size_align_unchecked(block_size, block_size);
-            let buf_ptr = std::alloc::alloc(buf_layout);
-            Vec::from_raw_parts(buf_ptr, block_size, block_size)
-        };
+        let mut buf = alloc_aligned_byte_vec(block_size, block_size);
 
         let kind = match self {
             Stage::Fill { value } => {
-                // unsafe {
-                //     std::libc::memset(
-                //         buf.as_mut_ptr() as _,
-                //         0,
-                //         buf.len()
-                //     );
-                // };
-                buf.iter_mut().map(|x| *x = *value).count(); //todo: rewrite
+                fill_byte_slice(&mut buf, *value);
                 StreamKind::Fill
             },
             Stage::Random { seed } => {

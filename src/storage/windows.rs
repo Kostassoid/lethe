@@ -7,12 +7,9 @@ use winapi::shared::minwindef::FALSE;
 use winapi::um::fileapi::{GetDiskFreeSpaceExW, GetLogicalDriveStringsW, GetVolumeInformationW};
 use winapi::um::winnt::ULARGE_INTEGER;
 
-pub struct StorageDeviceEnumerator {
-}
-
 impl System {
-    pub fn system_drives() -> Box<impl StorageEnumerator> {
-        Box::new(StorageDeviceEnumerator{})
+    pub fn get_storage_devices() -> IoResult<Vec<impl StorageRef>> {
+        Ok(vec![DeviceRef{}])
     }
 }
 
@@ -69,10 +66,3 @@ impl StorageRef for DeviceRef {
     }
 }
 
-impl StorageEnumerator for StorageDeviceEnumerator {
-    type Ref = DeviceRef;
-
-    fn list(&self) -> IoResult<Vec<DeviceRef>> {
-        Ok(Vec::default())
-    }
-}

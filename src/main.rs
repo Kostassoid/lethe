@@ -90,8 +90,20 @@ fn main() {
         )
         .get_matches();
 
-    let storage_devices = System::get_storage_devices().unwrap(); //todo: handle errors
+    let storage_devices = System::get_storage_devices()
+        .unwrap_or_else(|err| {
+            eprintln!("Unable to enumerate storage devices. {}", err);
 
+            let is_wsl = std::fs::read_to_string("/proc/version")
+                .map(|v| v.contains("Microsoft"))
+                .unwrap_or(false);
+
+            if is_wsl {
+                eprintln!("WSL is not supported at the moment as it doesn't provide direct storage device access.");
+            }
+
+            std::process::exit(1);
+        });
     let frontend = cli::ConsoleFrontend::new();
 
     match app.subcommand() {

@@ -1,4 +1,5 @@
 use crate::sanitization::*;
+use crate::sanitization::mem::*;
 use crate::storage::StorageAccess;
 use std::io::{Error, ErrorKind};
 use std::rc::Rc;
@@ -60,7 +61,7 @@ pub trait WipeEventReceiver {
 }
 
 impl WipeTask {
-    pub fn run(self, access: &mut StorageAccess, state: &mut WipeState, frontend: &mut WipeEventReceiver) -> bool {
+    pub fn run(self, access: &mut dyn StorageAccess, state: &mut WipeState, frontend: &mut dyn WipeEventReceiver) -> bool {
 
         frontend.handle(&self, state, WipeEvent::Started);
 
@@ -117,7 +118,7 @@ impl WipeTask {
     }
 }
 
-fn fill(access: &mut StorageAccess, task: &WipeTask, state: &mut WipeState, stage: &Stage, frontend: &mut WipeEventReceiver) -> Option<Rc<Error>> {
+fn fill(access: &mut dyn StorageAccess, task: &WipeTask, state: &mut WipeState, stage: &Stage, frontend: &mut dyn WipeEventReceiver) -> Option<Rc<Error>> {
 
     let mut stream = stage.stream(
         task.total_size,
@@ -156,7 +157,7 @@ fn fill(access: &mut StorageAccess, task: &WipeTask, state: &mut WipeState, stag
     None
 }
 
-fn verify(access: &mut StorageAccess, task: &WipeTask, state: &mut WipeState, stage: &Stage, frontend: &mut WipeEventReceiver) -> Option<Rc<Error>> {
+fn verify(access: &mut dyn StorageAccess, task: &WipeTask, state: &mut WipeState, stage: &Stage, frontend: &mut dyn WipeEventReceiver) -> Option<Rc<Error>> {
 
     frontend.handle(task, state, WipeEvent::StageStarted);
 
@@ -172,7 +173,7 @@ fn verify(access: &mut StorageAccess, task: &WipeTask, state: &mut WipeState, st
         state.position
     );
 
-    let mut buf: Vec<u8> = vec![0; task.block_size];
+    let mut buf = alloc_aligned_byte_vec(task.block_size, task.block_size);
 
     while let Some(chunk) = stream.next() {
         let b = &mut buf[..chunk.len()];

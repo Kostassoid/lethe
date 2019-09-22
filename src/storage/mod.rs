@@ -1,9 +1,11 @@
 #[cfg(unix)]
 pub use self::nix::*;
+#[cfg(unix)]
 pub mod nix;
 
 #[cfg(windows)]
 pub use windows::*;
+#[cfg(windows)]
 pub mod windows;
 
 pub type IoResult<A> = std::io::Result<A>;

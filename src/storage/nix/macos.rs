@@ -1,9 +1,11 @@
 //extern crate IOKit_sys as iokit;
 use std::fs::{File, OpenOptions};
-use std::path::Path;
-use crate::storage::*;
+use std::path::{Path, PathBuf};
+use std::fs::read_dir;
 use std::os::unix::io::*;
 use ::nix::*;
+
+use crate::storage::*;
 
 pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> IoResult<File> {
 
@@ -48,11 +50,32 @@ pub fn is_trim_supported(fd: RawFd) -> bool {
 }
 
 pub fn get_storage_devices() -> IoResult<Vec<FileRef>> {
-    super::discover_file_based_devices(
+    discover_file_based_devices(
         "/dev",
         |p| p.to_str().unwrap().contains("/dev/rdisk"),
         |_m| true
     )
+}
+
+fn discover_file_based_devices<P: AsRef<Path>>(
+    root: P,
+    path_filter: fn(&PathBuf) -> bool,
+    meta_filter: fn(&StorageDetails) -> bool
+) -> IoResult<Vec<FileRef>> {
+    let rd = read_dir(&root)?;
+    let mut refs = rd.filter_map(std::io::Result::ok)
+        .map(|de| de.path())
+        .filter(|path|
+            (path_filter)(&path.to_path_buf())
+        )
+        .flat_map(FileRef::new)
+        .filter(|r|
+            (meta_filter)(&r.details)
+        )
+        .collect::<Vec<_>>();
+    
+    refs.sort_by(|a, b| a.path.to_str().cmp(&b.path.to_str()));
+    Ok(refs)
 }
 
 /*
