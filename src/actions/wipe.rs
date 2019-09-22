@@ -130,9 +130,7 @@ fn fill(
     stage: &Stage,
     frontend: &mut dyn WipeEventReceiver,
 ) -> Option<Rc<anyhow::Error>> {
-    let mut stream = stage
-        .stream(task.total_size, task.block_size, state.position)
-        .expect("fix me"); //todo: this
+    let mut stream = stage.stream(task.total_size, task.block_size, state.position);
 
     frontend.handle(task, state, WipeEvent::StageStarted);
 
