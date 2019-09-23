@@ -1,6 +1,16 @@
 # Change Log
 
-## [0.2.0] - 2019-09-16
+## [Unreleased] - ReleaseDate
+
+### Fixed
+
+* Fixed verification stage on Linux.
+
+### Changed
+
+* Improved error messages, especially for WSL.
+
+## [v0.2.0] - 2019-09-16
 
 This release is mostly laying the groundwork for a more serious improvements.
 

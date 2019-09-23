@@ -15,7 +15,7 @@ In case of SSDs, however, it is practically impossible to prove the data was suc
 
 ## Features
 
-- Supports Mac OS and Linux (Windows is planned)
+- Supports Mac OS and Linux (but not WSL). Windows support is planned.
 - Validates the data (reads back) to make sure all write commands were successful
 - Uses fast cryptographic random generator
 - Allows to override OS recommended block size for possibly faster operations
