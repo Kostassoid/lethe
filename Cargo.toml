@@ -2,7 +2,7 @@
 name = "lethe"
 version = "0.2.2-dev"
 authors = ["Konstantin Alexandroff <k.alexandroff@gmail.com>"]
-description = "A command-line tool to generate cryptocurrency wallets"
+description = "A secure, free, cross-platform and open-source drive wiping utility"
 homepage = "https://github.com/Kostassoid/lethe"
 repository = "https://github.com/Kostassoid/lethe"
 categories = ["command-line-utilities"]
