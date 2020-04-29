@@ -22,9 +22,11 @@ use actions::*;
 mod ui;
 use ui::*;
 
+use anyhow::{Context, Result, anyhow};
+
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-fn main() {
+fn main() -> Result<()> {
 
     // ctrlc::set_handler(move || {
     // }).expect("Error setting Ctrl-C handler");
@@ -127,21 +129,13 @@ fn main() {
             };
             let block_size_override = cmd.value_of("blocksize")
                 .map(|bs| ui::args::parse_block_size(bs)
-                    .unwrap_or_else(|err| {
-                        eprintln!("Invalid blocksize value. {}", err);
-                        std::process::exit(1);
-                    }));
-
+                .with_context(|| format!("Invalid blocksize value: {}", bs))
+            )?;
+                
             let device = storage_devices.iter().find(|d| d.id() == device_id)
-                .unwrap_or_else(|| {
-                    eprintln!("Unknown device {}", device_id);
-                    std::process::exit(1);
-                });
+                .ok_or(anyhow!("Unknown device {}", device_id))?;
             let scheme = schemes.find(scheme_id)
-                .unwrap_or_else(|| {
-                    eprintln!("Unknown scheme {}", scheme_id);
-                    std::process::exit(1);
-                });
+                .ok_or(anyhow!("Unknown scheme {}", scheme_id))?;
 
             let block_size = block_size_override
                 .unwrap_or(device.details().block_size);
@@ -165,4 +159,6 @@ fn main() {
             std::process::exit(1)
         }
     }
+
+    Ok(())
 }

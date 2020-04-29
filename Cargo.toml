@@ -15,6 +15,7 @@ edition = "2018"
 travis-ci = { repository = "Kostassoid/lethe", branch = "master" }
 
 [dependencies]
+anyhow = { version = "1.0" }
 nix = "0.14.1"
 clap = "~2.33"
 rand = "0.7.0"

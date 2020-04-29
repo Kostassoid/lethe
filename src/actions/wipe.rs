@@ -331,7 +331,7 @@ mod test {
         size: usize,
         total_written: usize,
         total_read: usize,
-        failures: Vec<(usize)>
+        failures: Vec<usize>
     }
 
     impl InMemoryStorage {
