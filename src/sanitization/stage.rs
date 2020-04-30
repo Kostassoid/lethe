@@ -1,6 +1,6 @@
 //extern crate crate::rand;
-use rand::SeedableRng;
 use rand::RngCore;
+use rand::SeedableRng;
 pub use streaming_iterator::StreamingIterator;
 
 use super::mem::*;
@@ -11,59 +11,66 @@ type RandomGenerator = rand_chacha::ChaCha8Rng;
 #[derive(Debug, Clone)]
 pub enum Stage {
     Fill { value: u8 },
-    Random { seed: [u8; RANDOM_SEED_SIZE] }
+    Random { seed: [u8; RANDOM_SEED_SIZE] },
 }
 
-#[derive(Debug)]
+//#[derive(Debug)]
 struct StreamState {
     total_size: u64,
     block_size: usize,
     position: u64,
-    buf: Vec<u8>,
+    //buf: Vec<u8>,
+    buf: AlignedBuffer,
     current_block_size: usize,
-    eof: bool
+    eof: bool,
 }
 
 #[derive(Debug)]
 enum StreamKind {
     Fill,
-    Random { gen: RandomGenerator }
+    Random { gen: RandomGenerator },
 }
 
-#[derive(Debug)]
+//#[derive(Debug)]
 pub struct SanitizationStream {
     kind: StreamKind,
-    state: StreamState
+    state: StreamState,
 }
 
 impl Stage {
-    pub fn zero() -> Stage { 
-        Stage::Fill { value: 0x00 } 
+    pub fn zero() -> Stage {
+        Stage::Fill { value: 0x00 }
     }
 
-    pub fn one() -> Stage { 
-        Stage::Fill { value: 0xff } 
+    pub fn one() -> Stage {
+        Stage::Fill { value: 0xff }
     }
 
-    pub fn random_with_seed(seed: [u8; RANDOM_SEED_SIZE]) -> Stage { 
+    pub fn random_with_seed(seed: [u8; RANDOM_SEED_SIZE]) -> Stage {
         Stage::Random { seed }
     }
 
     pub fn random() -> Stage {
         let mut seed: [u8; RANDOM_SEED_SIZE] = [0; RANDOM_SEED_SIZE];
         rand::thread_rng().fill_bytes(&mut seed[..]);
-        Stage::random_with_seed(seed) 
+        Stage::random_with_seed(seed)
     }
 
-    pub fn stream(&self, total_size: u64, block_size: usize, start_from: u64) -> SanitizationStream {
-
-        let mut buf = alloc_aligned_byte_vec(block_size, block_size);
+    pub fn stream(
+        &self,
+        total_size: u64,
+        block_size: usize,
+        start_from: u64,
+    ) -> anyhow::Result<SanitizationStream> {
+        //let mut buf = alloc_aligned_byte_vec(block_size, block_size)?;
+        let mut buf = AlignedBuffer::new(block_size, block_size);
 
         let kind = match self {
             Stage::Fill { value } => {
-                fill_byte_slice(&mut buf, *value);
+                //fill_byte_slice(&mut buf, *value);
+                buf.fill(*value);
                 StreamKind::Fill
-            },
+            }
             Stage::Random { seed } => {
                 let mut gen = RandomGenerator::from_seed(*seed);
                 gen.set_word_pos((start_from >> 2) as u128);
@@ -77,9 +84,9 @@ impl Stage {
             position: start_from,
             buf,
             eof: false,
-            current_block_size: 0
+            current_block_size: 0,
         };
-        SanitizationStream { kind, state }
+        Ok(SanitizationStream { kind, state })
     }
 }
 
@@ -89,13 +96,13 @@ impl StreamingIterator for SanitizationStream {
     fn advance(&mut self) {
         if !self.state.eof && self.state.position < self.state.total_size {
             let chunk_size = std::cmp::min(
-                self.state.block_size as u64, 
-                self.state.total_size - self.state.position) as usize;
+                self.state.block_size as u64,
+                self.state.total_size - self.state.position,
+            ) as usize;
 
             match &mut self.kind {
                 StreamKind::Fill => (),
-                StreamKind::Random { gen } =>
-                    gen.fill_bytes(&mut self.state.buf)
+                StreamKind::Random { gen } => gen.fill_bytes(self.state.buf.as_mut_slice()),
             };
 
             self.state.current_block_size = chunk_size;
@@ -107,7 +114,7 @@ impl StreamingIterator for SanitizationStream {
 
     fn get(&self) -> Option<&Self::Item> {
         if !self.state.eof {
-            Some(&self.state.buf[..self.state.current_block_size as usize])
+            Some(&self.state.buf.as_mut_slice()[..self.state.current_block_size as usize])
         } else {
             None
         }
@@ -144,14 +151,17 @@ mod test {
 
         assert_ne!(data1, create_test_vec());
 
-        let unchanged = data1.iter().zip(create_test_vec().iter())
-            .filter(|t| t.0 == t.1).count() as u64;
+        let unchanged = data1
+            .iter()
+            .zip(create_test_vec().iter())
+            .filter(|t| t.0 == t.1)
+            .count() as u64;
 
         assert!(unchanged < TEST_SIZE / 100); // allows for some edge cases
 
         let mut data2 = create_test_vec();
         fill(&mut data2, &mut stage);
-        
+
         assert_eq!(data1, data2);
 
         let mut stage3 = Stage::random_with_seed([66; 32]);
@@ -179,7 +189,7 @@ mod test {
     }
 
     fn fill(v: &mut Vec<u8>, stage: &mut Stage) -> () {
-        let mut stream = stage.stream(TEST_SIZE, TEST_BLOCK, 0);
+        let mut stream = stage.stream(TEST_SIZE, TEST_BLOCK, 0).unwrap();
 
         let mut position = 0;
         while let Some(chunk) = stream.next() {
@@ -190,13 +200,12 @@ mod test {
     }
 
     fn calculate_entropy(v: &[u8]) -> f64 {
-        use std::io::Write;
         use flate2::{write::ZlibEncoder, Compression};
+        use std::io::Write;
 
         let mut e = ZlibEncoder::new(Vec::new(), Compression::best());
         e.write_all(v).unwrap();
         let compressed_bytes = e.finish();
         compressed_bytes.unwrap().len() as f64 / v.len() as f64
     }
-
 }

@@ -4,8 +4,6 @@ use self::nix::*;
 mod nix;
 
 #[cfg(windows)]
-use windows::*;
-#[cfg(windows)]
 mod windows;
 
 pub type IoResult<A> = std::io::Result<A>;
@@ -26,7 +24,7 @@ pub enum StorageType {
     Partition,
     Drive,
     RAID,
-    Other
+    Other,
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +33,7 @@ pub enum MediaType {
     Unknown,
     Rotational,
     SolidState,
-    Other
+    Other,
 }
 
 #[derive(Debug, Clone)]
@@ -46,7 +44,7 @@ pub struct StorageDetails {
     pub media_type: MediaType,
     pub is_trim_supported: bool,
     pub serial: Option<String>,
-    pub mount_point: Option<String>
+    pub mount_point: Option<String>,
 }
 
 pub trait StorageRef {

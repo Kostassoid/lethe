@@ -1,14 +1,15 @@
-use crate::sanitization::*;
 use crate::sanitization::mem::*;
+use crate::sanitization::*;
 use crate::storage::StorageAccess;
 use std::io::{Error, ErrorKind};
 use std::rc::Rc;
+use winapi::um::winuser::AddClipboardFormatListener;
 
 #[derive(Debug)]
 pub enum Verify {
     No,
     Last,
-    All
+    All,
 }
 
 #[derive(Debug)]
@@ -16,7 +17,7 @@ pub struct WipeTask {
     pub scheme: Scheme,
     pub verify: Verify,
     pub total_size: u64,
-    pub block_size: usize
+    pub block_size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -28,17 +29,21 @@ pub struct WipeState {
 
 impl Default for WipeState {
     fn default() -> Self {
-        WipeState { stage: 0, at_verification: false, position: 0 }
+        WipeState {
+            stage: 0,
+            at_verification: false,
+            position: 0,
+        }
     }
 }
 
 impl WipeTask {
     pub fn new(scheme: Scheme, verify: Verify, total_size: u64, block_size: usize) -> Self {
-        WipeTask { 
-            scheme, 
-            verify, 
+        WipeTask {
+            scheme,
+            verify,
             total_size,
-            block_size
+            block_size,
         }
     }
 }
@@ -53,7 +58,7 @@ pub enum WipeEvent {
     Retrying,
     Aborted,
     Completed(Option<Rc<Error>>),
-    Fatal(Rc<Error>)
+    Fatal(Rc<Error>),
 }
 
 pub trait WipeEventReceiver {
@@ -61,8 +66,12 @@ pub trait WipeEventReceiver {
 }
 
 impl WipeTask {
-    pub fn run(self, access: &mut dyn StorageAccess, state: &mut WipeState, frontend: &mut dyn WipeEventReceiver) -> bool {
-
+    pub fn run(
+        self,
+        access: &mut dyn StorageAccess,
+        state: &mut WipeState,
+        frontend: &mut dyn WipeEventReceiver,
+    ) -> bool {
         frontend.handle(&self, state, WipeEvent::Started);
 
         let stages = &self.scheme.stages;
@@ -70,12 +79,11 @@ impl WipeTask {
         let mut wipe_error = None;
 
         for (i, stage) in stages.iter().enumerate() {
-
             let have_to_verify = match self.verify {
                 Verify::No => false,
                 Verify::Last if i + 1 == stages.len() => true,
                 Verify::All => true,
-                _ => false
+                _ => false,
             };
 
             state.stage = i;
@@ -83,7 +91,6 @@ impl WipeTask {
             state.at_verification = false;
 
             let stage_error = loop {
-
                 let watermark = state.position;
 
                 if let Some(err) = fill(access, &self, state, stage, frontend) {
@@ -109,7 +116,7 @@ impl WipeTask {
                 wipe_error = stage_error;
                 break;
             };
-        };
+        }
 
         let result = wipe_error.is_none();
         frontend.handle(&self, state, WipeEvent::Completed(wipe_error));
@@ -118,37 +125,51 @@ impl WipeTask {
     }
 }
 
-fn fill(access: &mut dyn StorageAccess, task: &WipeTask, state: &mut WipeState, stage: &Stage, frontend: &mut dyn WipeEventReceiver) -> Option<Rc<Error>> {
-
-    let mut stream = stage.stream(
-        task.total_size,
-        task.block_size,
-        state.position
-    );
+fn fill(
+    access: &mut dyn StorageAccess,
+    task: &WipeTask,
+    state: &mut WipeState,
+    stage: &Stage,
+    frontend: &mut dyn WipeEventReceiver,
+) -> Option<Rc<Error>> {
+    let mut stream = stage
+        .stream(task.total_size, task.block_size, state.position)
+        .expect("fix me"); //todo: this
 
     frontend.handle(task, state, WipeEvent::StageStarted);
 
     if let Err(err) = access.seek(state.position) {
         let err_rc = Rc::from(err);
-        frontend.handle(task, state, WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))));
+        frontend.handle(
+            task,
+            state,
+            WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
+        );
         return Some(Rc::clone(&err_rc));
     }
 
     while let Some(chunk) = stream.next() {
-
         if let Err(err) = access.write(chunk) {
             let err_rc = Rc::from(err);
-            frontend.handle(task, state, WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))));
+            frontend.handle(
+                task,
+                state,
+                WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
+            );
             return Some(Rc::clone(&err_rc));
         }
 
         state.position += chunk.len() as u64;
         frontend.handle(task, state, WipeEvent::Progress(state.position));
-    };
+    }
 
     if let Err(err) = access.flush() {
         let err_rc = Rc::from(err);
-        frontend.handle(task, state, WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))));
+        frontend.handle(
+            task,
+            state,
+            WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
+        );
         return Some(Rc::clone(&err_rc));
     }
 
@@ -157,36 +178,52 @@ fn fill(access: &mut dyn StorageAccess, task: &WipeTask, state: &mut WipeState, 
     None
 }
 
-fn verify(access: &mut dyn StorageAccess, task: &WipeTask, state: &mut WipeState, stage: &Stage, frontend: &mut dyn WipeEventReceiver) -> Option<Rc<Error>> {
-
+fn verify(
+    access: &mut dyn StorageAccess,
+    task: &WipeTask,
+    state: &mut WipeState,
+    stage: &Stage,
+    frontend: &mut dyn WipeEventReceiver,
+) -> Option<Rc<Error>> {
     frontend.handle(task, state, WipeEvent::StageStarted);
 
     if let Err(err) = access.seek(state.position) {
         let err_rc = Rc::from(err);
-        frontend.handle(task, state, WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))));
+        frontend.handle(
+            task,
+            state,
+            WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
+        );
         return Some(Rc::clone(&err_rc));
     }
 
-    let mut stream = stage.stream(
-        task.total_size,
-        task.block_size,
-        state.position
-    );
+    let mut stream = stage
+        .stream(task.total_size, task.block_size, state.position)
+        .expect("fix me"); //todo: this
 
-    let mut buf = alloc_aligned_byte_vec(task.block_size, task.block_size);
+    //let mut buf = alloc_aligned_byte_vec(task.block_size, task.block_size).expect("fix me"); //todo: this
+    let mut buf = AlignedBuffer::new(task.block_size, task.block_size);
 
     while let Some(chunk) = stream.next() {
-        let b = &mut buf[..chunk.len()];
+        let b = &mut buf.as_mut_slice()[..chunk.len()];
 
         if let Err(err) = access.read(b) {
             let err_rc = Rc::from(err);
-            frontend.handle(task, state, WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))));
+            frontend.handle(
+                task,
+                state,
+                WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
+            );
             return Some(Rc::clone(&err_rc));
         }
 
         if b != chunk {
             let error = Rc::from(Error::new(ErrorKind::InvalidData, "Verification failed!"));
-            frontend.handle(task, state, WipeEvent::StageCompleted(Some(Rc::clone(&error))));
+            frontend.handle(
+                task,
+                state,
+                WipeEvent::StageCompleted(Some(Rc::clone(&error))),
+            );
             return Some(Rc::clone(&error));
         }
 
@@ -203,20 +240,24 @@ fn verify(access: &mut dyn StorageAccess, task: &WipeTask, state: &mut WipeState
 mod test {
     use super::*;
     use crate::storage::IoResult;
-    use std::io::{Cursor, Seek, SeekFrom, Read, Write};
     use assert_matches::*;
+    use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use WipeEvent::*;
 
     #[test]
     fn test_wiping_happy_path() {
-
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("zero").unwrap();
         let mut storage = InMemoryStorage::new(100000);
         let block_size = 32768;
         let mut receiver = StubReceiver::new();
 
-        let task = WipeTask::new(scheme.clone(), Verify::Last, storage.size as u64, block_size);
+        let task = WipeTask::new(
+            scheme.clone(),
+            Verify::Last,
+            storage.size as u64,
+            block_size,
+        );
         let mut state = WipeState::default();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -238,12 +279,14 @@ mod test {
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
         assert_matches!(e.next(), Some((_, Completed(None))));
 
-        assert_eq!(storage.file.get_ref().iter().filter(|x| **x != 0u8).count(), 0);
+        assert_eq!(
+            storage.file.get_ref().iter().filter(|x| **x != 0u8).count(),
+            0
+        );
     }
 
     #[test]
     fn test_wiping_fill_failure() {
-
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("zero").unwrap();
         let mut storage = InMemoryStorage::new(100000);
@@ -252,7 +295,12 @@ mod test {
 
         storage.fail_after_any(50000);
 
-        let task = WipeTask::new(scheme.clone(), Verify::Last, storage.size as u64, block_size);
+        let task = WipeTask::new(
+            scheme.clone(),
+            Verify::Last,
+            storage.size as u64,
+            block_size,
+        );
         let mut state = WipeState::default();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -265,12 +313,14 @@ mod test {
         assert_matches!(e.next(), Some((_, StageCompleted(Some(_)))));
         assert_matches!(e.next(), Some((_, Completed(Some(_)))));
 
-        assert_eq!(storage.file.get_ref().iter().filter(|x| **x != 0u8).count(), 100000 - 32768);
+        assert_eq!(
+            storage.file.get_ref().iter().filter(|x| **x != 0u8).count(),
+            100000 - 32768
+        );
     }
 
     #[test]
     fn test_wiping_validation_failure() {
-
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("random").unwrap();
         let mut storage = InMemoryStorage::new(100000);
@@ -279,7 +329,12 @@ mod test {
 
         storage.fail_after_any(150000);
 
-        let task = WipeTask::new(scheme.clone(), Verify::Last, storage.size as u64, block_size);
+        let task = WipeTask::new(
+            scheme.clone(),
+            Verify::Last,
+            storage.size as u64,
+            block_size,
+        );
         let mut state = WipeState::default();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -311,12 +366,14 @@ mod test {
     }
 
     struct StubReceiver {
-        collected: Vec<(WipeState, WipeEvent)>
+        collected: Vec<(WipeState, WipeEvent)>,
     }
 
     impl StubReceiver {
         pub fn new() -> Self {
-            StubReceiver { collected: Vec::new() }
+            StubReceiver {
+                collected: Vec::new(),
+            }
         }
     }
 
@@ -331,17 +388,17 @@ mod test {
         size: usize,
         total_written: usize,
         total_read: usize,
-        failures: Vec<usize>
+        failures: Vec<usize>,
     }
 
     impl InMemoryStorage {
         fn new(size: usize) -> Self {
-            InMemoryStorage { 
-                file: Cursor::new(vec![0xff; size]), 
+            InMemoryStorage {
+                file: Cursor::new(vec![0xff; size]),
                 size,
                 total_written: 0,
                 total_read: 0,
-                failures: Vec::new()
+                failures: Vec::new(),
             }
         }
 
@@ -357,10 +414,10 @@ mod test {
             self.total_written += amount_written;
 
             match self.failures.iter().find(|x| **x >= old_total) {
-                Some(v) if old_total + amount_read + amount_written > *v => 
-                    Err(Error::from(ErrorKind::Interrupted)), 
-                _ => 
-                    Ok(())
+                Some(v) if old_total + amount_read + amount_written > *v => {
+                    Err(Error::from(ErrorKind::Interrupted))
+                }
+                _ => Ok(()),
             }
         }
     }
