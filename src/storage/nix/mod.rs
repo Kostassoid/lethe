@@ -1,19 +1,23 @@
 #![cfg(unix)]
-use std::fs::File;
-use std::io::prelude::*;
-use std::path::{Path, PathBuf};
-use std::io::SeekFrom;
-use std::ffi::CString;
 use crate::storage::*;
 use ::nix::*;
+use anyhow::{Context, Result};
+use std::ffi::CString;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::SeekFrom;
 use std::os::unix::io::*;
+use std::path::{Path, PathBuf};
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "macos", path = "macos.rs")]
 mod os;
 
 enum FileType {
-    File, Block, Raw, Other
+    File,
+    Block,
+    Raw,
+    Other,
 }
 
 fn resolve_file_type(mode: libc::mode_t) -> FileType {
@@ -21,71 +25,79 @@ fn resolve_file_type(mode: libc::mode_t) -> FileType {
         libc::S_IFREG => FileType::File,
         libc::S_IFBLK => FileType::Block,
         libc::S_IFCHR => FileType::Raw,
-        _ => FileType::Other
+        _ => FileType::Other,
     }
 }
 
 fn resolve_storage_size(file_type: &FileType, stat: &libc::stat, fd: RawFd) -> u64 {
     match file_type {
         FileType::Block | FileType::Raw => os::get_block_device_size(fd),
-        _ => stat.st_size as u64
+        _ => stat.st_size as u64,
     }
 }
 
 #[derive(Debug)]
 pub struct FileAccess {
-    file: File
+    file: File,
 }
 
 impl FileAccess {
-    pub fn new<P: AsRef<Path>>(file_path: P) -> IoResult<FileAccess> {
+    pub fn new<P: AsRef<Path>>(file_path: P) -> Result<FileAccess> {
         let file = os::open_file_direct(file_path, true)?;
         Ok(FileAccess { file })
     }
 }
 
 impl StorageAccess for FileAccess {
-
-    fn position(&mut self) -> IoResult<u64> {
-        self.file.seek(SeekFrom::Current(0))
+    fn position(&mut self) -> Result<u64> {
+        self.file
+            .seek(SeekFrom::Current(0))
+            .context("Seek failed or not supported for the storage")
     }
 
-    fn seek(&mut self, position: u64) -> IoResult<u64> {
-        self.file.seek(SeekFrom::Start(position))
+    fn seek(&mut self, position: u64) -> Result<u64> {
+        self.file
+            .seek(SeekFrom::Start(position))
+            .context("Seek failed or not supported for the storage")
     }
 
-    fn read(&mut self, buffer: &mut [u8]) -> IoResult<usize> {
-        self.file.read(buffer)
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
+        self.file
+            .read(buffer)
+            .context("Can't read from the storage")
     }
 
-    fn write(&mut self, data: &[u8]) -> IoResult<()> {
-        self.file.write_all(data)
+    fn write(&mut self, data: &[u8]) -> Result<()> {
+        self.file
+            .write_all(data)
+            .context("Writing to storage failed")
     }
 
-    fn flush(&self) -> IoResult<()> {
-        self.file.sync_all()
+    fn flush(&self) -> Result<()> {
+        self.file
+            .sync_all()
+            .context("Unable to flush data to the storage")
     }
 }
 
 #[derive(Debug)]
 pub struct FileRef {
     path: PathBuf,
-    details: StorageDetails
+    details: StorageDetails,
 }
 
 impl FileRef {
-    pub fn new<P: AsRef<Path>>(path: P) -> IoResult<FileRef> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<FileRef> {
         let p = path.as_ref().to_path_buf();
         let details = Self::build_details(path)?;
         Ok(FileRef { path: p, details })
     }
 
-    fn build_details<P: AsRef<Path>>(path: P) -> IoResult<StorageDetails> {
+    fn build_details<P: AsRef<Path>>(path: P) -> Result<StorageDetails> {
         unsafe {
             let mut stat: libc::stat = std::mem::zeroed();
             let cpath = CString::new(path.as_ref().to_str().unwrap())?;
             if libc::stat(cpath.as_ptr(), &mut stat) >= 0 {
-
                 let file_type = resolve_file_type(stat.st_mode);
 
                 let f = os::open_file_direct(path, false)?;
@@ -97,17 +109,17 @@ impl FileRef {
                 let serial = None; //TODO: this
                 let mount_point = None; //TODO: this
 
-                Ok(StorageDetails{
+                Ok(StorageDetails {
                     size,
                     block_size: stat.st_blksize as usize,
                     storage_type,
                     media_type,
                     is_trim_supported: os::is_trim_supported(fd),
                     serial,
-                    mount_point
+                    mount_point,
                 })
             } else {
-                Err(std::io::Error::new(std::io::ErrorKind::Other, "Unable to get stat info"))
+                Err(anyhow!("Unable to get stat info"))
             }
         }
     }
@@ -124,13 +136,13 @@ impl StorageRef for FileRef {
         &self.details
     }
 
-    fn access(&self) -> IoResult<Box<Self::Access>> {
+    fn access(&self) -> Result<Box<Self::Access>> {
         FileAccess::new(&self.path).map(Box::new)
     }
 }
 
 impl System {
-    pub fn get_storage_devices() -> IoResult<Vec<impl StorageRef>> {
+    pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
         os::get_storage_devices()
     }
 }

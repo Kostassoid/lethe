@@ -6,14 +6,14 @@ mod nix;
 #[cfg(windows)]
 mod windows;
 
-pub type IoResult<A> = std::io::Result<A>;
+use anyhow::Result;
 
 pub trait StorageAccess {
-    fn position(&mut self) -> IoResult<u64>;
-    fn seek(&mut self, position: u64) -> IoResult<u64>;
-    fn read(&mut self, buffer: &mut [u8]) -> IoResult<usize>;
-    fn write(&mut self, data: &[u8]) -> IoResult<()>;
-    fn flush(&self) -> IoResult<()>;
+    fn position(&mut self) -> Result<u64>;
+    fn seek(&mut self, position: u64) -> Result<u64>;
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize>;
+    fn write(&mut self, data: &[u8]) -> Result<()>;
+    fn flush(&self) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +51,7 @@ pub trait StorageRef {
     type Access: StorageAccess;
     fn id(&self) -> &str;
     fn details(&self) -> &StorageDetails;
-    fn access(&self) -> IoResult<Box<Self::Access>>;
+    fn access(&self) -> Result<Box<Self::Access>>;
 }
 
 pub struct System;

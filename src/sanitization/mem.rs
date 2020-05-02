@@ -20,7 +20,7 @@ impl AlignedBuffer {
     }
 
     pub(crate) fn fill(&mut self, value: u8) -> () {
-        self.as_mut_slice().iter_mut().map(|x| *x = value).count(); //todo: rewrite
+        unsafe { self.ptr.write_bytes(value, self.layout.size()) }
     }
 
     pub(crate) fn as_mut_slice(&self) -> &mut [u8] {
@@ -55,7 +55,9 @@ mod test {
         let mut buf = AlignedBuffer::new(1024, 1024);
 
         buf.fill(0xff);
-
         assert_eq!(buf.as_mut_slice().iter().filter(|x| **x != 0xff).count(), 0);
+
+        buf.fill(0x11);
+        assert_eq!(buf.as_mut_slice().iter().filter(|x| **x != 0x11).count(), 0);
     }
 }

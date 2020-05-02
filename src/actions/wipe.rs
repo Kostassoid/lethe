@@ -1,6 +1,7 @@
 use crate::sanitization::mem::*;
 use crate::sanitization::*;
 use crate::storage::StorageAccess;
+use anyhow::Result;
 use std::io::{Error, ErrorKind};
 use std::rc::Rc;
 use winapi::um::winuser::AddClipboardFormatListener;
@@ -54,11 +55,11 @@ pub enum WipeEvent {
     Started,
     StageStarted,
     Progress(u64),
-    StageCompleted(Option<Rc<Error>>),
+    StageCompleted(Option<Rc<anyhow::Error>>),
     Retrying,
     Aborted,
-    Completed(Option<Rc<Error>>),
-    Fatal(Rc<Error>),
+    Completed(Option<Rc<anyhow::Error>>),
+    Fatal(Rc<anyhow::Error>),
 }
 
 pub trait WipeEventReceiver {
@@ -131,7 +132,7 @@ fn fill(
     state: &mut WipeState,
     stage: &Stage,
     frontend: &mut dyn WipeEventReceiver,
-) -> Option<Rc<Error>> {
+) -> Option<Rc<anyhow::Error>> {
     let mut stream = stage
         .stream(task.total_size, task.block_size, state.position)
         .expect("fix me"); //todo: this
@@ -184,7 +185,7 @@ fn verify(
     state: &mut WipeState,
     stage: &Stage,
     frontend: &mut dyn WipeEventReceiver,
-) -> Option<Rc<Error>> {
+) -> Option<Rc<anyhow::Error>> {
     frontend.handle(task, state, WipeEvent::StageStarted);
 
     if let Err(err) = access.seek(state.position) {
@@ -201,7 +202,6 @@ fn verify(
         .stream(task.total_size, task.block_size, state.position)
         .expect("fix me"); //todo: this
 
-    //let mut buf = alloc_aligned_byte_vec(task.block_size, task.block_size).expect("fix me"); //todo: this
     let mut buf = AlignedBuffer::new(task.block_size, task.block_size);
 
     while let Some(chunk) = stream.next() {
@@ -218,7 +218,7 @@ fn verify(
         }
 
         if b != chunk {
-            let error = Rc::from(Error::new(ErrorKind::InvalidData, "Verification failed!"));
+            let error = Rc::from(anyhow!("Verification failed!"));
             frontend.handle(
                 task,
                 state,
@@ -239,7 +239,7 @@ fn verify(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::storage::IoResult;
+    use anyhow::Context;
     use assert_matches::*;
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use WipeEvent::*;
@@ -407,7 +407,7 @@ mod test {
             self.failures.sort();
         }
 
-        fn check_and_fail(&mut self, amount_read: usize, amount_written: usize) -> IoResult<()> {
+        fn check_and_fail(&mut self, amount_read: usize, amount_written: usize) -> Result<()> {
             let old_total = self.total_read + self.total_written;
 
             self.total_read += amount_read;
@@ -415,7 +415,7 @@ mod test {
 
             match self.failures.iter().find(|x| **x >= old_total) {
                 Some(v) if old_total + amount_read + amount_written > *v => {
-                    Err(Error::from(ErrorKind::Interrupted))
+                    Err(anyhow!("Mocked IO failure"))
                 }
                 _ => Ok(()),
             }
@@ -423,25 +423,27 @@ mod test {
     }
 
     impl StorageAccess for InMemoryStorage {
-        fn position(&mut self) -> IoResult<u64> {
-            self.file.seek(SeekFrom::Current(0))
+        fn position(&mut self) -> Result<u64> {
+            self.file.seek(SeekFrom::Current(0)).context("unexpected")
         }
 
-        fn seek(&mut self, position: u64) -> IoResult<u64> {
-            self.file.seek(SeekFrom::Start(position))
+        fn seek(&mut self, position: u64) -> Result<u64> {
+            self.file
+                .seek(SeekFrom::Start(position))
+                .context("unexpected")
         }
 
-        fn read(&mut self, buffer: &mut [u8]) -> IoResult<usize> {
+        fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
             self.check_and_fail(buffer.len(), 0)?;
-            self.file.read(buffer)
+            self.file.read(buffer).context("unexpected")
         }
 
-        fn write(&mut self, data: &[u8]) -> IoResult<()> {
+        fn write(&mut self, data: &[u8]) -> Result<()> {
             self.check_and_fail(0, data.len())?;
-            self.file.write_all(data)
+            self.file.write_all(data).context("unexpected")
         }
 
-        fn flush(&self) -> IoResult<()> {
+        fn flush(&self) -> Result<()> {
             Ok(())
         }
     }
