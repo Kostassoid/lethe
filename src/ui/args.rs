@@ -7,9 +7,7 @@ pub fn parse_block_size(s: &str) -> Result<usize> {
 
     match captures {
         Some(groups) => {
-            let units = groups[1]
-                .parse::<usize>()
-                .with_context(|| "Not a number.")?;
+            let units = groups[1].parse::<usize>().context("Not a number.")?;
             let unit_size = match groups.get(3).map(|m| m.as_str().to_uppercase()) {
                 Some(ref u) if u == "K" => 1024,
                 Some(ref u) if u == "M" => 1024 * 1024,

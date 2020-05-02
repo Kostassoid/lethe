@@ -102,7 +102,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 Some(e) => {
                     eprintln!("Unexpected error: {}", e);
 
-                    if let Some(ioe) = e.root_cause().downcast_ref::<std::io::Error>() {
+                    if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                         if ioe.kind() == ErrorKind::Other && ioe.raw_os_error() == Some(16) {
                             eprintln!("Make sure the drive is not mounted.")
                         }

@@ -149,7 +149,7 @@ fn main() -> Result<()> {
                 .value_of("blocksize")
                 .map(|bs| {
                     ui::args::parse_block_size(bs)
-                        .with_context(|| format!("Invalid blocksize value: {}", bs))
+                        .context(format!("Invalid blocksize value: {}", bs))
                 })
                 .map_or(Ok(None), |v| v.map(Some))?; //todo: extract
 
