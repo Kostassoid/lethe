@@ -28,7 +28,7 @@ Vagrant.configure("2") do |config|
   end
 
   config.vm.define "macos" do |macos|
-    macos.vm.box = "yzgyyang/macOS-10.14"
+    macos.vm.box = "gobadiah/macos-mojave"
   end
 
 end
