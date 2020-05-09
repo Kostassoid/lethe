@@ -1,6 +1,6 @@
 use crate::storage::*;
 use ::nix::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use regex::Regex;
 use std::fs::{File, OpenOptions};
 use std::io::BufRead;
@@ -18,6 +18,10 @@ pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> Res
         .truncate(false)
         .custom_flags(libc::O_DIRECT /* | libc::O_DSYNC*/) // should be enough in linux 2.6+
         .open(file_path.as_ref())
+        .context(format!(
+            "Unable to open file-device {}",
+            file_path.as_ref().to_str().unwrap_or("?")
+        ))
 }
 
 pub fn get_block_device_size(fd: RawFd) -> u64 {

@@ -1,6 +1,4 @@
-use std::mem;
-use winapi::_core::mem::ManuallyDrop;
-use winapi::_core::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
+use std::ptr::slice_from_raw_parts_mut;
 
 pub(crate) struct AlignedBuffer {
     ptr: *mut u8,

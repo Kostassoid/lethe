@@ -1,10 +1,7 @@
 use crate::sanitization::mem::*;
 use crate::sanitization::*;
 use crate::storage::StorageAccess;
-use anyhow::Result;
-use std::io::{Error, ErrorKind};
 use std::rc::Rc;
-use winapi::um::winuser::AddClipboardFormatListener;
 
 #[derive(Debug)]
 pub enum Verify {
@@ -202,7 +199,7 @@ fn verify(
         .stream(task.total_size, task.block_size, state.position)
         .expect("fix me"); //todo: this
 
-    let mut buf = AlignedBuffer::new(task.block_size, task.block_size);
+    let buf = AlignedBuffer::new(task.block_size, task.block_size);
 
     while let Some(chunk) = stream.next() {
         let b = &mut buf.as_mut_slice()[..chunk.len()];
@@ -239,7 +236,7 @@ fn verify(
 #[cfg(test)]
 mod test {
     use super::*;
-    use anyhow::Context;
+    use anyhow::{Context, Result};
     use assert_matches::*;
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use WipeEvent::*;
