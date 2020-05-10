@@ -193,9 +193,7 @@ fn verify(
         return Some(Rc::clone(&err_rc));
     }
 
-    let mut stream = stage
-        .stream(task.total_size, task.block_size, state.position)
-        .expect("fix me"); //todo: this
+    let mut stream = stage.stream(task.total_size, task.block_size, state.position);
 
     let buf = AlignedBuffer::new(task.block_size, task.block_size);
 

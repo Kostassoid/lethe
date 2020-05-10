@@ -16,6 +16,7 @@ travis-ci = { repository = "Kostassoid/lethe", branch = "master" }
 
 [dependencies]
 anyhow = "1.0"
+libc = "^0.2"
 nix = "0.14.1"
 clap = "~2.33"
 rand = "0.7.0"
@@ -30,7 +31,8 @@ ctrlc = { version = "3.0", features = ["termination"] }
 
 [target.'cfg(windows)'.dependencies.winapi]
 version = "0.3"
-features = ["fileapi", "sysinfoapi", "minwindef", "winbase", "winerror", "ws2def", "ws2ipdef"]
+features = ["cguid", "commapi", "errhandlingapi", "fileapi", "guiddef", "handleapi", "minwinbase",
+            "minwindef", "ntdef", "setupapi", "winbase", "winerror", "winnt", "winioctl"]
 
 [target.'cfg(macos)'.dependencies]
 mach = "0.1.1"

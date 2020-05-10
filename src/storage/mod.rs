@@ -47,6 +47,20 @@ pub struct StorageDetails {
     pub mount_point: Option<String>,
 }
 
+impl Default for StorageDetails {
+    fn default() -> Self {
+        StorageDetails {
+            size: 0,
+            block_size: 0,
+            storage_type: StorageType::Unknown,
+            media_type: MediaType::Unknown,
+            is_trim_supported: false,
+            serial: None,
+            mount_point: None,
+        }
+    }
+}
+
 pub trait StorageRef {
     type Access: StorageAccess;
     fn id(&self) -> &str;
