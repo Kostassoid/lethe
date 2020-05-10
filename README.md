@@ -15,7 +15,7 @@ In case of SSDs, however, it is practically impossible to prove the data was suc
 
 ## Features
 
-- Supports Mac OS and Linux (but not WSL). Windows support is planned.
+- Supports macOS and Linux (but not WSL). Windows support is planned.
 - Validates the data (reads back) to make sure all write commands were successful
 - Uses fast cryptographic random generator
 - Allows to override OS recommended block size for possibly faster operations
@@ -28,10 +28,10 @@ Download and unzip binaries for your OS:
 - [macOS x64](https://github.com/Kostassoid/lethe/releases/download/v0.2.2/lethe-v0.2.2-x86_64-apple-darwin.tar.gz)
 - [Linux x64](https://github.com/Kostassoid/lethe/releases/download/v0.2.2/lethe-v0.2.2-x86_64-unknown-linux-musl.tar.gz)
 
-Or build `lethe` yourself using latest [Rust toolchain](https://www.rust-lang.org/tools/install):
+Or install `lethe` from sources using latest [Rust toolchain](https://www.rust-lang.org/tools/install):
 
 ```
-cargo build --release
+cargo install lethe
 ```
 
 ## Usage
@@ -52,9 +52,9 @@ Note that `lethe` operates on a low level and will require a root access (e.g. `
 
 ## Benchmarks
 
-### Mac OS
+### macOS
 
-Tested on Macbook Pro 2015 with Mac OS 10.14.4 (Mojave) using a Sandisk 64G Flash Drive with USB 3.0 interface. OS recommended block size is 128k.
+Tested on Macbook Pro 2015 with macOS 10.14.4 (Mojave) using a Sandisk 64G Flash Drive with USB 3.0 interface. OS recommended block size is 128k.
 
 **Zero fill**
 
