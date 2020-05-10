@@ -8,11 +8,11 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct Scheme {
     pub description: String,
-    pub stages: Vec<Stage>
+    pub stages: Vec<Stage>,
 }
 
 pub struct SchemeRepo {
-    schemes: BTreeMap<&'static str, Scheme>
+    schemes: BTreeMap<&'static str, Scheme>,
 }
 
 impl SchemeRepo {
@@ -23,52 +23,62 @@ impl SchemeRepo {
     pub fn default() -> SchemeRepo {
         let mut schemes = BTreeMap::new();
 
-        schemes.insert("zero", Scheme {
-            description: "Single zeroes fill".to_string(),
-            stages: vec!(
-                Stage::zero()
-            )});
+        schemes.insert(
+            "zero",
+            Scheme {
+                description: "Single zeroes fill".to_string(),
+                stages: vec![Stage::zero()],
+            },
+        );
 
-        schemes.insert("random", Scheme { 
-            description: "Single random fill".to_string(),
-            stages: vec!(
-                Stage::random()
-            )});
-        
-        schemes.insert("random2", Scheme {
-            description: "Double random fill".to_string(),
-            stages: vec!(
-                Stage::random(),
-                Stage::random()
-            )});
-        
-        schemes.insert("gost", Scheme {
-            description: "GOST R 50739-95 (fake)".to_string(),
-            stages: vec!(
-                Stage::zero(),
-                Stage::random()
-            )});
-        
-        schemes.insert("dod", Scheme {
-            description: "DoD 5220.22-M / CSEC ITSG-06 / NAVSO P-5239-26".to_string(),
-            stages: vec!(
-                Stage::zero(),
-                Stage::one(),
-                Stage::random()
-            )});
-        
-        schemes.insert("vsitr", Scheme {
-            description: "VSITR / RCMP TSSIT OPS-II".to_string(),
-            stages: vec!(
-                Stage::zero(),
-                Stage::one(),
-                Stage::zero(),
-                Stage::one(),
-                Stage::zero(),
-                Stage::one(),
-                Stage::random()
-            )});
-        
+        schemes.insert(
+            "random",
+            Scheme {
+                description: "Single random fill".to_string(),
+                stages: vec![Stage::random()],
+            },
+        );
+
+        schemes.insert(
+            "random2",
+            Scheme {
+                description: "Double random fill".to_string(),
+                stages: vec![Stage::random(), Stage::random()],
+            },
+        );
+
+        schemes.insert(
+            "gost",
+            Scheme {
+                description: "GOST R 50739-95 (fake)".to_string(),
+                stages: vec![Stage::zero(), Stage::random()],
+            },
+        );
+
+        schemes.insert(
+            "dod",
+            Scheme {
+                description: "DoD 5220.22-M / CSEC ITSG-06 / NAVSO P-5239-26".to_string(),
+                stages: vec![Stage::zero(), Stage::one(), Stage::random()],
+            },
+        );
+
+        schemes.insert(
+            "vsitr",
+            Scheme {
+                description: "VSITR / RCMP TSSIT OPS-II".to_string(),
+                stages: vec![
+                    Stage::zero(),
+                    Stage::one(),
+                    Stage::zero(),
+                    Stage::one(),
+                    Stage::zero(),
+                    Stage::one(),
+                    Stage::random(),
+                ],
+            },
+        );
+
         Self::new(schemes)
     }
 
@@ -94,5 +104,4 @@ mod test {
         let scheme = repo.find("random");
         assert!(scheme.is_some());
     }
-
 }

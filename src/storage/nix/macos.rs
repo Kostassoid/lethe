@@ -1,14 +1,14 @@
 //extern crate IOKit_sys as iokit;
-use std::fs::{File, OpenOptions};
-use std::path::{Path, PathBuf};
-use std::fs::read_dir;
-use std::os::unix::io::*;
 use ::nix::*;
+use anyhow::Result;
+use std::fs::read_dir;
+use std::fs::{File, OpenOptions};
+use std::os::unix::io::*;
+use std::path::{Path, PathBuf};
 
 use crate::storage::*;
 
-pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> IoResult<File> {
-
+pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> Result<File> {
     let file = OpenOptions::new()
         .create(false)
         .append(false)
@@ -44,55 +44,51 @@ pub fn is_trim_supported(fd: RawFd) -> bool {
     unsafe {
         let mut features: u32 = std::mem::zeroed();
         dk_get_features(fd, &mut features)
-        .map(|_| (features & 0x00000010) > 0) // DK_FEATURE_UNMAP
-        .unwrap_or(false)
+            .map(|_| (features & 0x00000010) > 0) // DK_FEATURE_UNMAP
+            .unwrap_or(false)
     }
 }
 
-pub fn get_storage_devices() -> IoResult<Vec<FileRef>> {
+pub fn get_storage_devices() -> Result<Vec<FileRef>> {
     discover_file_based_devices(
         "/dev",
         |p| p.to_str().unwrap().contains("/dev/rdisk"),
-        |_m| true
+        |_m| true,
     )
 }
 
 fn discover_file_based_devices<P: AsRef<Path>>(
     root: P,
     path_filter: fn(&PathBuf) -> bool,
-    meta_filter: fn(&StorageDetails) -> bool
-) -> IoResult<Vec<FileRef>> {
+    meta_filter: fn(&StorageDetails) -> bool,
+) -> Result<Vec<FileRef>> {
     let rd = read_dir(&root)?;
-    let mut refs = rd.filter_map(std::io::Result::ok)
+    let mut refs = rd
+        .filter_map(std::io::Result::ok)
         .map(|de| de.path())
-        .filter(|path|
-            (path_filter)(&path.to_path_buf())
-        )
+        .filter(|path| (path_filter)(&path.to_path_buf()))
         .flat_map(FileRef::new)
-        .filter(|r|
-            (meta_filter)(&r.details)
-        )
+        .filter(|r| (meta_filter)(&r.details))
         .collect::<Vec<_>>();
-    
+
     refs.sort_by(|a, b| a.path.to_str().cmp(&b.path.to_str()));
     Ok(refs)
 }
 
 /*
-    fn get_mounts() -> IoResult<()> {
-        unsafe {
-            let mut stat: [libc::statfs; 16] = std::mem::zeroed();
-            let total = libc::statvfs(stat, 16, 1 /* libc::MNT_WAIT */);
+fn get_mounts() -> IoResult<()> {
+    unsafe {
+        let mut stat: [libc::statfs; 16] = std::mem::zeroed();
+        let total = libc::statvfs(stat, 16, 1 /* libc::MNT_WAIT */);
 
-            for i in 0..total {
-                println!("!!! statfs {} = {:?}", i, stat.get(i).unwrap());
-            }
+        for i in 0..total {
+            println!("!!! statfs {} = {:?}", i, stat.get(i).unwrap());
         }
-
-        Ok(())
     }
-    */
 
+    Ok(())
+}
+*/
 
 // #[cfg(target_os = "macos")]
 // pub struct IOKitEnumerator {}
@@ -114,4 +110,3 @@ fn discover_file_based_devices<P: AsRef<Path>>(
 //         Ok(Vec::new())
 //     }
 // }
-

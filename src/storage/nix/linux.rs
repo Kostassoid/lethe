@@ -1,13 +1,14 @@
-use std::fs::{File, OpenOptions};
-use std::path::Path;
 use crate::storage::*;
-use std::os::unix::io::*;
 use ::nix::*;
-use std::io::BufReader;
-use std::io::BufRead;
+use anyhow::{Context, Result};
 use regex::Regex;
+use std::fs::{File, OpenOptions};
+use std::io::BufRead;
+use std::io::BufReader;
+use std::os::unix::io::*;
+use std::path::Path;
 
-pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> IoResult<File> {
+pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     OpenOptions::new()
         .create(false)
@@ -15,8 +16,12 @@ pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> IoR
         .write(write_access)
         .read(true)
         .truncate(false)
-        .custom_flags(libc::O_DIRECT/* | libc::O_DSYNC*/) // should be enough in linux 2.6+
+        .custom_flags(libc::O_DIRECT /* | libc::O_DSYNC*/) // should be enough in linux 2.6+
         .open(file_path.as_ref())
+        .context(format!(
+            "Unable to open file-device {}",
+            file_path.as_ref().to_str().unwrap_or("?")
+        ))
 }
 
 pub fn get_block_device_size(fd: RawFd) -> u64 {
@@ -34,11 +39,12 @@ pub fn is_trim_supported(_fd: RawFd) -> bool {
     false
 }
 
-pub fn get_storage_devices() -> IoResult<Vec<FileRef>> {
+pub fn get_storage_devices() -> Result<Vec<FileRef>> {
     let partitions_file = File::open("/proc/partitions")?;
     let buf = BufReader::new(partitions_file);
     let name_regex = Regex::new(r"\s+(?P<name>\w+)$").unwrap();
-    let refs = buf.lines()
+    let refs = buf
+        .lines()
         .filter_map(|io_line| {
             let line = io_line.unwrap();
             name_regex

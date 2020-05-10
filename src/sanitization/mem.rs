@@ -1,44 +1,61 @@
-pub fn alloc_aligned_byte_vec(size: usize, align: usize) -> Vec<u8> {
-    unsafe {
-        let buf_layout = std::alloc::Layout::from_size_align_unchecked(size, align);
-        let buf_ptr = std::alloc::alloc(buf_layout);
-        Vec::from_raw_parts(buf_ptr, size, size)
+use std::ptr::slice_from_raw_parts_mut;
+
+pub(crate) struct AlignedBuffer {
+    ptr: *mut u8,
+    layout: std::alloc::Layout,
+}
+
+impl AlignedBuffer {
+    pub(crate) fn new(size: usize, align: usize) -> Self {
+        unsafe {
+            let buf_layout = std::alloc::Layout::from_size_align_unchecked(size, align);
+            let buf_ptr = std::alloc::alloc(buf_layout);
+            AlignedBuffer {
+                ptr: buf_ptr,
+                layout: buf_layout,
+            }
+        }
+    }
+
+    pub(crate) fn fill(&mut self, value: u8) -> () {
+        unsafe { self.ptr.write_bytes(value, self.layout.size()) }
+    }
+
+    pub(crate) fn as_mut_slice(&self) -> &mut [u8] {
+        unsafe { &mut *slice_from_raw_parts_mut(self.ptr, self.layout.size()) }
     }
 }
 
-pub fn fill_byte_slice(buf: &mut [u8], value: u8) {
-    // unsafe {
-    //     std::libc::memset(
-    //         buf.as_mut_ptr() as _,
-    //         0,
-    //         buf.len()
-    //     );
-    // };
-    buf.iter_mut().map(|x| *x = value).count(); //todo: rewrite
+impl Drop for AlignedBuffer {
+    fn drop(&mut self) {
+        unsafe { std::alloc::dealloc(self.ptr as *mut u8, self.layout) }
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::thread::sleep;
 
     #[test]
     fn test_aligned_allocation() {
         let size = 65536;
         let align = 4096;
 
-        let buf = alloc_aligned_byte_vec(size, align);
+        let buf = AlignedBuffer::new(size, align);
 
-        assert_eq!(buf.len(), size);
-        assert_eq!(buf.as_ptr() as usize % align, 0);
+        assert_eq!(buf.as_mut_slice().len(), size);
+        assert_eq!(buf.ptr as usize % align, 0);
     }
 
     #[test]
     fn test_vec_fill() {
-        let mut buf = vec![0x00; 1024];
+        let mut buf = AlignedBuffer::new(1024, 1024);
 
-        fill_byte_slice(&mut buf, 0xff);
+        buf.fill(0xff);
+        assert_eq!(buf.as_mut_slice().iter().filter(|x| **x != 0xff).count(), 0);
 
-        assert_eq!(buf.iter().filter(|x| **x != 0xff).count(), 0);
+        buf.fill(0x11);
+        assert_eq!(buf.as_mut_slice().iter().filter(|x| **x != 0x11).count(), 0);
     }
-
 }
