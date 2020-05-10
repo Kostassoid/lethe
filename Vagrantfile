@@ -6,8 +6,9 @@ Vagrant.configure("2") do |config|
     v.memory = 1024
     v.cpus = 2
 
-    v.customize ["modifyvm", :id, "--usb", "on"]
+    v.customize ["modifyvm", :id, "--usb", "off"]
     v.customize ["modifyvm", :id, "--usbehci", "off"]
+    v.customize ["modifyvm", :id, "--usbxhci", "off"]
     v.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
     v.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
 
@@ -27,8 +28,9 @@ Vagrant.configure("2") do |config|
     linux.vm.provision "shell", inline: "curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal"
   end
 
+  # BROKEN
   config.vm.define "macos" do |macos|
-    macos.vm.box = "gobadiah/macos-mojave"
+    macos.vm.box = "ashiq/osx-10.14"
   end
 
 end
