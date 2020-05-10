@@ -1,4 +1,3 @@
-//extern crate crate::rand;
 use rand::RngCore;
 use rand::SeedableRng;
 pub use streaming_iterator::StreamingIterator;
@@ -14,12 +13,10 @@ pub enum Stage {
     Random { seed: [u8; RANDOM_SEED_SIZE] },
 }
 
-//#[derive(Debug)]
 struct StreamState {
     total_size: u64,
     block_size: usize,
     position: u64,
-    //buf: Vec<u8>,
     buf: AlignedBuffer,
     current_block_size: usize,
     eof: bool,
@@ -31,7 +28,6 @@ enum StreamKind {
     Random { gen: RandomGenerator },
 }
 
-//#[derive(Debug)]
 pub struct SanitizationStream {
     kind: StreamKind,
     state: StreamState,
@@ -62,7 +58,6 @@ impl Stage {
         block_size: usize,
         start_from: u64,
     ) -> anyhow::Result<SanitizationStream> {
-        //let mut buf = alloc_aligned_byte_vec(block_size, block_size)?;
         let mut buf = AlignedBuffer::new(block_size, block_size);
 
         let kind = match self {
