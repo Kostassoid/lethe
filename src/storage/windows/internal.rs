@@ -1,13 +1,16 @@
 use libc;
-use std::mem;
-use std::slice;
-use winapi::um::setupapi::*;
 
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
+use std::slice;
+use std::{mem, ptr};
 
 extern crate winapi;
 use winapi::shared::minwindef::*;
+use winapi::um::setupapi::*;
+use winapi::um::winioctl::GUID_DEVINTERFACE_DISK;
+
+use crate::storage::*;
 
 macro_rules! offset_of {
     ($ty:ty, $field:ident) => {
@@ -68,4 +71,101 @@ impl Drop for DeviceInterfaceDetailData {
     fn drop(&mut self) {
         unsafe { libc::free(self.data as *mut libc::c_void) };
     }
+}
+
+pub struct DiskDeviceEnumerator {
+    device_info_list: HDEVINFO,
+    device_index: DWORD,
+}
+
+impl DiskDeviceEnumerator {
+    pub fn new() -> Self {
+        let device_info_list = unsafe {
+            SetupDiGetClassDevsW(
+                &GUID_DEVINTERFACE_DISK,
+                ptr::null(),
+                ptr::null_mut(),
+                DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
+            )
+        };
+
+        DiskDeviceEnumerator {
+            device_info_list,
+            device_index: 0,
+        }
+    }
+}
+
+impl Drop for DiskDeviceEnumerator {
+    fn drop(&mut self) {
+        unsafe {
+            SetupDiDestroyDeviceInfoList(self.device_info_list);
+        }
+    }
+}
+
+impl Iterator for DiskDeviceEnumerator {
+    type Item = DiskDeviceInfo;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut device_interface_data = unsafe { mem::uninitialized::<SP_DEVICE_INTERFACE_DATA>() };
+        device_interface_data.cbSize = mem::size_of::<SP_DEVICE_INTERFACE_DATA>() as UINT;
+
+        let result = unsafe {
+            SetupDiEnumDeviceInterfaces(
+                self.device_info_list,
+                ptr::null_mut(),
+                &GUID_DEVINTERFACE_DISK,
+                self.device_index,
+                &mut device_interface_data,
+            )
+        };
+
+        self.device_index += 1;
+
+        if result == 0 {
+            return None;
+        }
+
+        let mut required_size: u32 = 0;
+
+        unsafe {
+            SetupDiGetDeviceInterfaceDetailW(
+                self.device_info_list,
+                &mut device_interface_data,
+                ptr::null_mut(),
+                0,
+                &mut required_size,
+                ptr::null_mut(),
+            )
+        };
+
+        if required_size == 0 {
+            return None;
+        }
+
+        let mut interface_details = DeviceInterfaceDetailData::new(required_size as usize).unwrap(); //todo: handle errors
+
+        unsafe {
+            SetupDiGetDeviceInterfaceDetailW(
+                self.device_info_list,
+                &mut device_interface_data,
+                interface_details.get(),
+                required_size,
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+
+        Some(DiskDeviceInfo {
+            id: interface_details.path(),
+            details: StorageDetails::default(),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct DiskDeviceInfo {
+    pub(crate) id: String,
+    pub(crate) details: StorageDetails,
 }
