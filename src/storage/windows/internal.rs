@@ -5,12 +5,22 @@ use std::os::windows::ffi::OsStringExt;
 use std::slice;
 use std::{mem, ptr};
 
-extern crate winapi;
-use winapi::shared::minwindef::*;
-use winapi::um::setupapi::*;
-use winapi::um::winioctl::GUID_DEVINTERFACE_DISK;
-
 use crate::storage::*;
+use anyhow::Result;
+
+extern crate winapi;
+use winapi::_core::ptr::{null, null_mut};
+use winapi::shared::minwindef::*;
+use winapi::um::errhandlingapi::GetLastError;
+use winapi::um::fileapi::OPEN_EXISTING;
+use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+use winapi::um::setupapi::*;
+use winapi::um::winbase::{FormatMessageW, LocalFree};
+use winapi::um::winioctl::GUID_DEVINTERFACE_DISK;
+use winapi::um::winnt::{
+    FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GENERIC_READ, HANDLE, LPWSTR, WCHAR,
+};
+use winapi::um::{fileapi, ioapiset, winioctl};
 
 macro_rules! offset_of {
     ($ty:ty, $field:ident) => {
@@ -30,20 +40,21 @@ pub struct DeviceInterfaceDetailData {
 }
 
 impl DeviceInterfaceDetailData {
-    pub fn new(size: usize) -> Option<Self> {
+    pub fn new(size: usize) -> Result<Self> {
         let mut cb_size = mem::size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>();
         if cfg!(target_pointer_width = "32") {
             cb_size = 4 + 2; // 4-byte uint + default TCHAR size. size_of is inaccurate.
         }
 
         if size < cb_size {
-            //warn!("DeviceInterfaceDetailData is too small. {}", size);
-            return None;
+            return Err(anyhow!("DeviceInterfaceDetailData is too small. {}", size));
         }
 
         let data = unsafe { libc::malloc(size) as PSP_DEVICE_INTERFACE_DETAIL_DATA_W };
         if data.is_null() {
-            return None;
+            return Err(anyhow!(
+                "Unable to allocate memory for PSP_DEVICE_INTERFACE_DETAIL_DATA_W."
+            ));
         }
 
         // Set total size of the structure.
@@ -52,7 +63,7 @@ impl DeviceInterfaceDetailData {
         // Compute offset of `SP_DEVICE_INTERFACE_DETAIL_DATA_W.DevicePath`.
         let offset = offset_of!(SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath);
 
-        Some(Self {
+        Ok(Self {
             data,
             path_len: size - offset,
         })
@@ -79,7 +90,7 @@ pub struct DiskDeviceEnumerator {
 }
 
 impl DiskDeviceEnumerator {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self> {
         let device_info_list = unsafe {
             SetupDiGetClassDevsW(
                 &GUID_DEVINTERFACE_DISK,
@@ -88,11 +99,14 @@ impl DiskDeviceEnumerator {
                 DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
             )
         };
+        if device_info_list == INVALID_HANDLE_VALUE {
+            return Err(anyhow!("Unable to initialize disk device enumeration"));
+        }
 
-        DiskDeviceEnumerator {
+        Ok(DiskDeviceEnumerator {
             device_info_list,
             device_index: 0,
-        }
+        })
     }
 }
 
@@ -105,7 +119,7 @@ impl Drop for DiskDeviceEnumerator {
 }
 
 impl Iterator for DiskDeviceEnumerator {
-    type Item = DiskDeviceInfo;
+    type Item = Vec<DiskPartitionInfo>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut device_interface_data = unsafe { mem::uninitialized::<SP_DEVICE_INTERFACE_DATA>() };
@@ -157,15 +171,125 @@ impl Iterator for DiskDeviceEnumerator {
             )
         };
 
-        Some(DiskDeviceInfo {
-            id: interface_details.path(),
-            details: StorageDetails::default(),
-        })
+        Some(
+            DiskFileDevice::from_device_path(interface_details.path())
+                .unwrap()
+                .get_partitions()
+                .unwrap(),
+        )
     }
 }
 
 #[derive(Debug)]
-pub struct DiskDeviceInfo {
+pub struct DiskPartitionInfo {
     pub(crate) id: String,
     pub(crate) details: StorageDetails,
+}
+
+struct DiskFileDevice {
+    handle: HANDLE,
+}
+
+#[repr(C)]
+#[allow(dead_code)]
+struct StorageDeviceNumber {
+    device_type: u32,
+    device_number: DWORD,
+    partition_number: DWORD,
+}
+
+impl DiskFileDevice {
+    fn from_device_path(path: String) -> Result<Self> {
+        unsafe {
+            let handle = winapi::um::fileapi::CreateFileW(
+                widestring::WideCString::from_str(path.clone())
+                    .unwrap()
+                    .as_ptr(),
+                GENERIC_READ,
+                FILE_SHARE_READ,
+                null_mut(),
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                null_mut(),
+            );
+
+            if handle == INVALID_HANDLE_VALUE {
+                return Err(anyhow!(
+                    "Cannot open device {}. Error: {}",
+                    path,
+                    get_last_error_str()
+                ));
+            }
+
+            Ok(DiskFileDevice { handle })
+        }
+    }
+
+    fn get_partitions(&self) -> Result<Vec<DiskPartitionInfo>> {
+        let mut dev_number = StorageDeviceNumber {
+            device_type: 0,
+            device_number: 0,
+            partition_number: 0,
+        };
+
+        let mut bytes: DWORD = 0;
+
+        unsafe {
+            if ioapiset::DeviceIoControl(
+                self.handle,
+                winapi::um::winioctl::IOCTL_STORAGE_GET_DEVICE_NUMBER,
+                null_mut(),
+                0,
+                &mut dev_number as *mut _ as LPVOID,
+                std::mem::size_of::<StorageDeviceNumber>() as DWORD,
+                &mut bytes,
+                null_mut(),
+            ) == 0
+            {
+                return Err(anyhow!(
+                    "Unable to get device number. Error: {}",
+                    get_last_error_str()
+                ));
+            }
+        }
+        Ok(vec![DiskPartitionInfo {
+            id: format!("\\\\?\\PhysicalDrive{}", dev_number.device_number),
+            details: Default::default(),
+        }])
+    }
+}
+
+impl Drop for DiskFileDevice {
+    fn drop(&mut self) {
+        if self.handle != null_mut() {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+fn get_last_error_str() -> String {
+    use winapi::um::winbase::{
+        FormatMessageW, FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM,
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+    };
+
+    let mut buffer: LPWSTR = ptr::null_mut();
+    unsafe {
+        let strlen = FormatMessageW(
+            FORMAT_MESSAGE_FROM_SYSTEM
+                | FORMAT_MESSAGE_ALLOCATE_BUFFER
+                | FORMAT_MESSAGE_IGNORE_INSERTS,
+            std::ptr::null(),
+            GetLastError(),
+            0,
+            (&mut buffer as *mut LPWSTR) as LPWSTR,
+            0,
+            std::ptr::null_mut(),
+        );
+        let widestr = widestring::WideString::from_ptr(buffer, strlen as usize);
+        LocalFree(buffer as HLOCAL);
+        widestr.to_string_lossy()
+    }
 }

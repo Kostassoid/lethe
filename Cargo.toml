@@ -31,8 +31,26 @@ ctrlc = { version = "3.0", features = ["termination"] }
 
 [target.'cfg(windows)'.dependencies.winapi]
 version = "0.3"
-features = ["cguid", "commapi", "errhandlingapi", "fileapi", "guiddef", "handleapi", "minwinbase",
-            "minwindef", "ntdef", "setupapi", "winbase", "winerror", "winnt", "winioctl"]
+features = [
+    "cguid",
+    "commapi",
+    "errhandlingapi",
+    "fileapi",
+    "guiddef",
+    "handleapi",
+    "ioapiset",
+    "minwinbase",
+    "minwindef",
+    "ntdef",
+    "setupapi",
+    "winbase",
+    "winerror",
+    "winnt",
+    "winioctl"
+]
+
+[target.'cfg(windows)'.dependencies]
+widestring = "0.4.0"
 
 [target.'cfg(macos)'.dependencies]
 mach = "0.1.1"

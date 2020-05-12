@@ -19,8 +19,8 @@ use anyhow::Result;
 
 impl System {
     pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
-        let enumerator = DiskDeviceEnumerator::new();
-        Ok(enumerator.collect())
+        let enumerator = DiskDeviceEnumerator::new()?;
+        Ok(enumerator.flatten().collect())
     }
 }
 
@@ -54,7 +54,7 @@ impl StorageAccess for DeviceAccess {
     }
 }
 
-impl StorageRef for DiskDeviceInfo {
+impl StorageRef for DiskPartitionInfo {
     type Access = DeviceAccess;
 
     fn id(&self) -> &str {
