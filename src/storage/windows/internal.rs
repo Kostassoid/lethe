@@ -18,7 +18,7 @@ use winapi::um::setupapi::*;
 use winapi::um::winbase::{FormatMessageW, LocalFree};
 use winapi::um::winioctl::GUID_DEVINTERFACE_DISK;
 use winapi::um::winnt::{
-    FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GENERIC_READ, HANDLE, LPWSTR, WCHAR,
+    FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GENERIC_READ, HANDLE, LPWSTR, PVOID, WCHAR,
 };
 use winapi::um::{fileapi, ioapiset, winioctl};
 
@@ -119,7 +119,7 @@ impl Drop for DiskDeviceEnumerator {
 }
 
 impl Iterator for DiskDeviceEnumerator {
-    type Item = Vec<DiskPartitionInfo>;
+    type Item = DiskInfo;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut device_interface_data = unsafe { mem::uninitialized::<SP_DEVICE_INTERFACE_DATA>() };
@@ -174,19 +174,29 @@ impl Iterator for DiskDeviceEnumerator {
         Some(
             DiskFileDevice::from_device_path(interface_details.path())
                 .unwrap()
-                .get_partitions()
+                .to_canonical()
+                .unwrap()
+                .get_info()
                 .unwrap(),
         )
     }
 }
 
 #[derive(Debug)]
-pub struct DiskPartitionInfo {
-    pub(crate) id: String,
-    pub(crate) details: StorageDetails,
+pub struct DiskInfo {
+    pub id: String,
+    pub details: StorageDetails,
+    pub partitions: Vec<PartitionInfo>,
+}
+
+#[derive(Debug)]
+pub struct PartitionInfo {
+    pub id: String,
+    pub details: StorageDetails,
 }
 
 struct DiskFileDevice {
+    path: String,
     handle: HANDLE,
 }
 
@@ -196,6 +206,12 @@ struct StorageDeviceNumber {
     device_type: u32,
     device_number: DWORD,
     partition_number: DWORD,
+}
+
+#[repr(C)]
+struct Layout {
+    info: winioctl::DRIVE_LAYOUT_INFORMATION_EX,
+    partitions: [winioctl::PARTITION_INFORMATION_EX; 1],
 }
 
 impl DiskFileDevice {
@@ -221,11 +237,11 @@ impl DiskFileDevice {
                 ));
             }
 
-            Ok(DiskFileDevice { handle })
+            Ok(DiskFileDevice { path, handle })
         }
     }
 
-    fn get_partitions(&self) -> Result<Vec<DiskPartitionInfo>> {
+    fn to_canonical(&self) -> Result<DiskFileDevice> {
         let mut dev_number = StorageDeviceNumber {
             device_type: 0,
             device_number: 0,
@@ -252,10 +268,58 @@ impl DiskFileDevice {
                 ));
             }
         }
-        Ok(vec![DiskPartitionInfo {
-            id: format!("\\\\?\\PhysicalDrive{}", dev_number.device_number),
+        let disk_path = format!("\\\\.\\PhysicalDrive{}", dev_number.device_number);
+        DiskFileDevice::from_device_path(disk_path)
+    }
+
+    fn get_info(&self) -> Result<DiskInfo> {
+        const LAYOUT_BUFFER_SIZE: usize = std::mem::size_of::<Layout>() * 100
+            + std::mem::size_of::<winioctl::PARTITION_INFORMATION_EX>();
+        let mut layout_buffer: [BYTE; LAYOUT_BUFFER_SIZE] = [0; LAYOUT_BUFFER_SIZE];
+        let mut bytes: DWORD = 0;
+        unsafe {
+            let layout: &mut Layout = std::mem::transmute(layout_buffer.as_mut_ptr());
+
+            if ioapiset::DeviceIoControl(
+                self.handle,
+                winioctl::IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
+                std::ptr::null_mut(),
+                0,
+                layout_buffer.as_mut_ptr() as PVOID,
+                (std::mem::size_of::<Layout>() * 100) as DWORD,
+                &mut bytes,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                return Err(anyhow!(
+                    "Unable to get device layout. Error: {}",
+                    get_last_error_str()
+                ));
+            }
+
+            println!(
+                "!!! layout.info.PartitionCount = {}",
+                layout.info.PartitionCount
+            );
+            println!(
+                "!!! layout.info.PartitionStyle = {}",
+                layout.info.PartitionStyle
+            );
+            for (i, x) in layout.partitions.iter().enumerate() {
+                let l = unsafe { *x.PartitionLength.QuadPart() };
+                println!("!!! layout.info.{}.PartitionLength = {}", i, l)
+            }
+        }
+
+        Ok(DiskInfo {
+            id: self.path.to_string(),
             details: Default::default(),
-        }])
+            partitions: vec![],
+        })
+    }
+
+    fn get_partitions(&self, path: &str) -> Result<Vec<PartitionInfo>> {
+        Ok(Vec::new())
     }
 }
 
