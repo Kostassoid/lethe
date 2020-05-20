@@ -9,6 +9,7 @@ use crate::storage::*;
 use anyhow::Result;
 
 extern crate winapi;
+use crate::storage::windows::DeviceAccess;
 use winapi::_core::ptr::{null, null_mut};
 use winapi::shared::minwindef::*;
 use winapi::um::errhandlingapi::GetLastError;
@@ -119,7 +120,7 @@ impl Drop for DiskDeviceEnumerator {
 }
 
 impl Iterator for DiskDeviceEnumerator {
-    type Item = DiskInfo;
+    type Item = Vec<DiskDeviceInfo>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut device_interface_data = unsafe { mem::uninitialized::<SP_DEVICE_INTERFACE_DATA>() };
@@ -171,19 +172,17 @@ impl Iterator for DiskDeviceEnumerator {
             )
         };
 
-        Some(
-            DiskFileDevice::from_device_path(interface_details.path())
-                .unwrap()
-                .to_canonical()
-                .unwrap()
-                .get_info()
-                .unwrap(),
-        )
+        let device_number = get_device_number(interface_details.path().as_str()).unwrap();
+
+        Some(vec![DiskFileDevice::from_device_number(device_number)
+            .unwrap()
+            .get_info()
+            .unwrap()])
     }
 }
 
 #[derive(Debug)]
-pub struct DiskInfo {
+pub struct DiskDeviceInfo {
     pub id: String,
     pub details: StorageDetails,
     pub partitions: Vec<PartitionInfo>,
@@ -196,8 +195,9 @@ pub struct PartitionInfo {
 }
 
 struct DiskFileDevice {
+    device_number: DWORD,
     path: String,
-    handle: HANDLE,
+    device: DeviceFile,
 }
 
 #[repr(C)]
@@ -211,11 +211,147 @@ struct StorageDeviceNumber {
 #[repr(C)]
 struct Layout {
     info: winioctl::DRIVE_LAYOUT_INFORMATION_EX,
-    partitions: [winioctl::PARTITION_INFORMATION_EX; 1],
+    partitions: [winioctl::PARTITION_INFORMATION_EX; 100],
 }
 
 impl DiskFileDevice {
-    fn from_device_path(path: String) -> Result<Self> {
+    fn from_device_number(device_number: u32) -> Result<Self> {
+        let disk_path = format!("\\\\.\\PhysicalDrive{}", device_number);
+        let device = DeviceFile::open(disk_path.as_str())?;
+        Ok(DiskFileDevice {
+            device_number,
+            path: disk_path,
+            device,
+        })
+    }
+
+    fn get_info(&self) -> Result<DiskDeviceInfo> {
+        let geometry = self.get_drive_geometry()?;
+        let drive_details = StorageDetails {
+            size: unsafe { *geometry.DiskSize.QuadPart() as u64 },
+            block_size: geometry.Geometry.BytesPerSector as usize, //todo: this
+            storage_type: StorageType::Drive,
+            media_type: MediaType::Unknown,
+            is_trim_supported: false,
+            serial: None,
+            mount_point: None,
+        };
+
+        let layout = self.get_drive_layout()?;
+
+        let mut partitions: Vec<PartitionInfo> = Vec::new();
+
+        println!("!!! path = {}", self.path);
+
+        match layout.info.PartitionStyle {
+            winioctl::PARTITION_STYLE_MBR => println!("!!! layout.info.style = MBR"),
+            winioctl::PARTITION_STYLE_GPT => println!("!!! layout.info.style = GPT"),
+            _ => println!("!!! layout.info.style = ???"),
+        }
+
+        println!(
+            "!!! layout.info.PartitionCount = {}",
+            layout.info.PartitionCount
+        );
+
+        for i in 0..layout.info.PartitionCount {
+            let x = layout.partitions[i as usize];
+            let l = unsafe { *x.PartitionLength.QuadPart() };
+            let so = unsafe { *x.StartingOffset.QuadPart() };
+            println!(
+                "!!! layout.info.{}.PartitionStyle = {}",
+                i, x.PartitionStyle
+            );
+            println!("!!! layout.info.{}.StartingOffset = {}", i, so);
+            println!("!!! layout.info.{}.PartitionLength = {}", i, l);
+            println!(
+                "!!! layout.info.{}.PartitionNumber = {}",
+                i, x.PartitionNumber
+            );
+
+            let partition_path = format!(
+                "\\Device\\Harddisk{}\\Partition{}",
+                self.device_number, x.PartitionNumber
+            );
+            partitions.push(PartitionInfo {
+                id: partition_path,
+                details: StorageDetails {
+                    size: l as u64,
+                    block_size: geometry.Geometry.BytesPerSector as usize, //todo: figure out
+                    storage_type: StorageType::Partition,
+                    media_type: MediaType::Unknown,
+                    is_trim_supported: false,
+                    serial: None,
+                    mount_point: None,
+                },
+            })
+        }
+
+        Ok(DiskDeviceInfo {
+            id: self.path.to_string(),
+            details: drive_details,
+            partitions,
+        })
+    }
+
+    fn get_drive_layout(&self) -> Result<&mut Layout> {
+        const LAYOUT_BUFFER_SIZE: usize = std::mem::size_of::<Layout>();
+        let mut layout_buffer: [BYTE; LAYOUT_BUFFER_SIZE] = [0; LAYOUT_BUFFER_SIZE];
+        let mut bytes: DWORD = 0;
+        unsafe {
+            let layout: &mut Layout = std::mem::transmute(layout_buffer.as_mut_ptr());
+
+            if ioapiset::DeviceIoControl(
+                self.device.handle,
+                winioctl::IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
+                std::ptr::null_mut(),
+                0,
+                layout_buffer.as_mut_ptr() as PVOID,
+                std::mem::size_of::<Layout>() as DWORD,
+                &mut bytes,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                return Err(anyhow!(
+                    "Unable to get device layout. Error: {}",
+                    get_last_error_str()
+                ));
+            }
+            Ok(layout)
+        }
+    }
+
+    fn get_drive_geometry(&self) -> Result<winioctl::DISK_GEOMETRY_EX> {
+        let mut bytes: DWORD = 0;
+        unsafe {
+            let mut geometry = unsafe { mem::uninitialized::<winioctl::DISK_GEOMETRY_EX>() };
+            if ioapiset::DeviceIoControl(
+                self.device.handle,
+                winioctl::IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+                std::ptr::null_mut(),
+                0,
+                &mut geometry as *mut _ as PVOID,
+                std::mem::size_of::<winioctl::DISK_GEOMETRY_EX>() as DWORD,
+                &mut bytes,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                return Err(anyhow!(
+                    "Unable to get device geometry. Error: {}",
+                    get_last_error_str()
+                ));
+            }
+            Ok(geometry)
+        }
+    }
+}
+
+struct DeviceFile {
+    handle: HANDLE,
+}
+
+impl DeviceFile {
+    fn open(path: &str) -> Result<Self> {
         unsafe {
             let handle = winapi::um::fileapi::CreateFileW(
                 widestring::WideCString::from_str(path.clone())
@@ -237,93 +373,12 @@ impl DiskFileDevice {
                 ));
             }
 
-            Ok(DiskFileDevice { path, handle })
+            Ok(DeviceFile { handle })
         }
-    }
-
-    fn to_canonical(&self) -> Result<DiskFileDevice> {
-        let mut dev_number = StorageDeviceNumber {
-            device_type: 0,
-            device_number: 0,
-            partition_number: 0,
-        };
-
-        let mut bytes: DWORD = 0;
-
-        unsafe {
-            if ioapiset::DeviceIoControl(
-                self.handle,
-                winapi::um::winioctl::IOCTL_STORAGE_GET_DEVICE_NUMBER,
-                null_mut(),
-                0,
-                &mut dev_number as *mut _ as LPVOID,
-                std::mem::size_of::<StorageDeviceNumber>() as DWORD,
-                &mut bytes,
-                null_mut(),
-            ) == 0
-            {
-                return Err(anyhow!(
-                    "Unable to get device number. Error: {}",
-                    get_last_error_str()
-                ));
-            }
-        }
-        let disk_path = format!("\\\\.\\PhysicalDrive{}", dev_number.device_number);
-        DiskFileDevice::from_device_path(disk_path)
-    }
-
-    fn get_info(&self) -> Result<DiskInfo> {
-        const LAYOUT_BUFFER_SIZE: usize = std::mem::size_of::<Layout>() * 100
-            + std::mem::size_of::<winioctl::PARTITION_INFORMATION_EX>();
-        let mut layout_buffer: [BYTE; LAYOUT_BUFFER_SIZE] = [0; LAYOUT_BUFFER_SIZE];
-        let mut bytes: DWORD = 0;
-        unsafe {
-            let layout: &mut Layout = std::mem::transmute(layout_buffer.as_mut_ptr());
-
-            if ioapiset::DeviceIoControl(
-                self.handle,
-                winioctl::IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
-                std::ptr::null_mut(),
-                0,
-                layout_buffer.as_mut_ptr() as PVOID,
-                (std::mem::size_of::<Layout>() * 100) as DWORD,
-                &mut bytes,
-                std::ptr::null_mut(),
-            ) == 0
-            {
-                return Err(anyhow!(
-                    "Unable to get device layout. Error: {}",
-                    get_last_error_str()
-                ));
-            }
-
-            println!(
-                "!!! layout.info.PartitionCount = {}",
-                layout.info.PartitionCount
-            );
-            println!(
-                "!!! layout.info.PartitionStyle = {}",
-                layout.info.PartitionStyle
-            );
-            for (i, x) in layout.partitions.iter().enumerate() {
-                let l = unsafe { *x.PartitionLength.QuadPart() };
-                println!("!!! layout.info.{}.PartitionLength = {}", i, l)
-            }
-        }
-
-        Ok(DiskInfo {
-            id: self.path.to_string(),
-            details: Default::default(),
-            partitions: vec![],
-        })
-    }
-
-    fn get_partitions(&self, path: &str) -> Result<Vec<PartitionInfo>> {
-        Ok(Vec::new())
     }
 }
 
-impl Drop for DiskFileDevice {
+impl Drop for DeviceFile {
     fn drop(&mut self) {
         if self.handle != null_mut() {
             unsafe {
@@ -331,6 +386,39 @@ impl Drop for DiskFileDevice {
             }
         }
     }
+}
+
+fn get_device_number(path: &str) -> Result<DWORD> {
+    let device = DeviceFile::open(path)?;
+
+    let mut dev_number = StorageDeviceNumber {
+        device_type: 0,
+        device_number: 0,
+        partition_number: 0,
+    };
+
+    let mut bytes: DWORD = 0;
+
+    unsafe {
+        if ioapiset::DeviceIoControl(
+            device.handle,
+            winioctl::IOCTL_STORAGE_GET_DEVICE_NUMBER,
+            null_mut(),
+            0,
+            &mut dev_number as *mut _ as LPVOID,
+            std::mem::size_of::<StorageDeviceNumber>() as DWORD,
+            &mut bytes,
+            null_mut(),
+        ) == 0
+        {
+            return Err(anyhow!(
+                "Unable to get device number. Error: {}",
+                get_last_error_str()
+            ));
+        }
+    }
+
+    Ok(dev_number.device_number)
 }
 
 fn get_last_error_str() -> String {

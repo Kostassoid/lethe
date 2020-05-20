@@ -1,3 +1,5 @@
+#![recursion_limit="256"]
+
 use std::rc::Rc;
 
 #[macro_use]
@@ -110,12 +112,14 @@ fn main() -> Result<()> {
         .unwrap_or_else(|err| {
             eprintln!("Unable to enumerate storage devices. {}", err);
 
-            let is_wsl = std::fs::read_to_string("/proc/version")
-                .map(|v| v.contains("Microsoft"))
-                .unwrap_or(false);
+            if cfg!(linux) {
+                let is_wsl = std::fs::read_to_string("/proc/version")
+                    .map(|v| v.contains("Microsoft"))
+                    .unwrap_or(false);
 
-            if is_wsl {
-                eprintln!("WSL is not supported at the moment as it doesn't provide direct storage device access.");
+                if is_wsl {
+                    eprintln!("WSL is not supported at the moment as it doesn't provide direct storage device access.");
+                }
             }
 
             std::process::exit(1);
@@ -126,11 +130,12 @@ fn main() -> Result<()> {
         ("list", _) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
-            t.set_titles(row!["Device ID", "Size", "Block Size"]);
+            t.set_titles(row!["Device ID", "Size", "Type", "Block Size"]);
             for x in storage_devices {
                 t.add_row(row![
                     style(x.id()).bold(),
                     HumanBytes(x.details().size),
+                    x.details().storage_type,
                     HumanBytes(x.details().block_size as u64)
                 ]);
             }
@@ -172,9 +177,9 @@ fn main() -> Result<()> {
             let mut state = WipeState::default();
             let mut session = frontend.wipe_session(device_id, scheme_id, cmd.is_present("yes"));
 
-            match device.access() {
+            match System::access(device) {
                 Ok(mut access) => {
-                    if !task.run(&mut *access, &mut state, &mut session) {
+                    if !task.run(&mut access, &mut state, &mut session) {
                         std::process::exit(1);
                     }
                 }

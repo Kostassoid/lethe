@@ -7,6 +7,7 @@ mod nix;
 mod windows;
 
 use anyhow::Result;
+use winapi::_core::fmt::Formatter;
 
 pub trait StorageAccess {
     fn position(&mut self) -> Result<u64>;
@@ -16,7 +17,7 @@ pub trait StorageAccess {
     fn flush(&self) -> Result<()>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub enum StorageType {
     Unknown,
@@ -25,6 +26,12 @@ pub enum StorageType {
     Drive,
     RAID,
     Other,
+}
+
+impl std::fmt::Display for StorageType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -62,10 +69,8 @@ impl Default for StorageDetails {
 }
 
 pub trait StorageRef {
-    type Access: StorageAccess;
     fn id(&self) -> &str;
     fn details(&self) -> &StorageDetails;
-    fn access(&self) -> Result<Box<Self::Access>>;
 }
 
-pub struct System;
+pub struct System {}

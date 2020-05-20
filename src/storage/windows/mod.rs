@@ -2,15 +2,6 @@
 extern crate winapi;
 
 use crate::storage::*;
-use winapi::um::fileapi::{GetLogicalDriveStringsW, GetVolumeInformationW};
-
-use std::ffi::{CString, OsStr};
-use std::{mem, ptr};
-
-use winapi::shared::minwindef::*;
-use winapi::um::fileapi::*;
-use winapi::um::setupapi::*;
-use winapi::um::winnt::{FILE_ATTRIBUTE_NORMAL, GENERIC_READ, GENERIC_WRITE, HANDLE, KEY_READ};
 
 mod internal;
 use internal::*;
@@ -20,7 +11,11 @@ use anyhow::Result;
 impl System {
     pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
         let enumerator = DiskDeviceEnumerator::new()?;
-        Ok(enumerator.collect())
+        Ok(enumerator.flatten().collect())
+    }
+
+    pub fn access(storageRef: &dyn StorageRef) -> Result<DeviceAccess> {
+        DeviceAccess::new()
     }
 }
 
@@ -54,34 +49,22 @@ impl StorageAccess for DeviceAccess {
     }
 }
 
-impl StorageRef for DiskInfo {
-    type Access = DeviceAccess;
-
+impl StorageRef for DiskDeviceInfo {
     fn id(&self) -> &str {
         &self.id
     }
 
     fn details(&self) -> &StorageDetails {
         &self.details
-    }
-
-    fn access(&self) -> Result<Box<Self::Access>> {
-        DeviceAccess::new().map(Box::new)
     }
 }
 
 impl StorageRef for PartitionInfo {
-    type Access = DeviceAccess;
-
     fn id(&self) -> &str {
         &self.id
     }
 
     fn details(&self) -> &StorageDetails {
         &self.details
-    }
-
-    fn access(&self) -> Result<Box<Self::Access>> {
-        DeviceAccess::new().map(Box::new)
     }
 }
