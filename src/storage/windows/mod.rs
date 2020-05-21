@@ -11,7 +11,9 @@ use anyhow::Result;
 impl System {
     pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
         let enumerator = DiskDeviceEnumerator::new()?;
-        Ok(enumerator.flatten().collect())
+        let mut devices: Vec<DiskDeviceInfo> = enumerator.flatten().collect();
+        devices.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(devices)
     }
 
     pub fn access(storageRef: &dyn StorageRef) -> Result<DeviceAccess> {

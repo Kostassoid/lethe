@@ -10,6 +10,7 @@ use anyhow::Result;
 
 extern crate winapi;
 use crate::storage::windows::DeviceAccess;
+use winapi::_core::cmp::Ordering;
 use winapi::_core::ptr::{null, null_mut};
 use winapi::shared::minwindef::*;
 use winapi::um::errhandlingapi::GetLastError;
@@ -174,10 +175,12 @@ impl Iterator for DiskDeviceEnumerator {
 
         let device_number = get_device_number(interface_details.path().as_str()).unwrap();
 
-        Some(vec![DiskFileDevice::from_device_number(device_number)
-            .unwrap()
-            .get_info()
-            .unwrap()])
+        Some(
+            DiskDeviceProbe::from_device_number(device_number)
+                .unwrap()
+                .get_info()
+                .unwrap(),
+        )
     }
 }
 
@@ -185,7 +188,6 @@ impl Iterator for DiskDeviceEnumerator {
 pub struct DiskDeviceInfo {
     pub id: String,
     pub details: StorageDetails,
-    pub partitions: Vec<PartitionInfo>,
 }
 
 #[derive(Debug)]
@@ -194,7 +196,7 @@ pub struct PartitionInfo {
     pub details: StorageDetails,
 }
 
-struct DiskFileDevice {
+struct DiskDeviceProbe {
     device_number: DWORD,
     path: String,
     device: DeviceFile,
@@ -214,18 +216,18 @@ struct Layout {
     partitions: [winioctl::PARTITION_INFORMATION_EX; 100],
 }
 
-impl DiskFileDevice {
+impl DiskDeviceProbe {
     fn from_device_number(device_number: u32) -> Result<Self> {
         let disk_path = format!("\\\\.\\PhysicalDrive{}", device_number);
         let device = DeviceFile::open(disk_path.as_str())?;
-        Ok(DiskFileDevice {
+        Ok(DiskDeviceProbe {
             device_number,
             path: disk_path,
             device,
         })
     }
 
-    fn get_info(&self) -> Result<DiskDeviceInfo> {
+    fn get_info(&self) -> Result<Vec<DiskDeviceInfo>> {
         let geometry = self.get_drive_geometry()?;
         let drive_details = StorageDetails {
             size: unsafe { *geometry.DiskSize.QuadPart() as u64 },
@@ -239,15 +241,9 @@ impl DiskFileDevice {
 
         let layout = self.get_drive_layout()?;
 
-        let mut partitions: Vec<PartitionInfo> = Vec::new();
+        let mut devices: Vec<DiskDeviceInfo> = Vec::new();
 
         println!("!!! path = {}", self.path);
-
-        match layout.info.PartitionStyle {
-            winioctl::PARTITION_STYLE_MBR => println!("!!! layout.info.style = MBR"),
-            winioctl::PARTITION_STYLE_GPT => println!("!!! layout.info.style = GPT"),
-            _ => println!("!!! layout.info.style = ???"),
-        }
 
         println!(
             "!!! layout.info.PartitionCount = {}",
@@ -269,11 +265,44 @@ impl DiskFileDevice {
                 i, x.PartitionNumber
             );
 
+            match x.PartitionStyle {
+                winioctl::PARTITION_STYLE_MBR => {
+                    println!("!!! layout.info.{}.style = MBR", x.PartitionNumber);
+                    unsafe {
+                        println!(
+                            "!!! layout.info.{}.MBR.Type = {}",
+                            x.PartitionNumber, x.u.Mbr().PartitionType
+                        );
+                        if x.u.Mbr().PartitionType == 0 {
+                            continue;
+                        }
+                    }
+                }
+                winioctl::PARTITION_STYLE_GPT => {
+                    println!("!!! layout.info.{}.style = GPT", x.PartitionNumber);
+                    unsafe {
+                        println!(
+                            "!!! layout.info.{}.GPT.Type = {}",
+                            x.PartitionNumber, x.u.Gpt().PartitionType.Data1
+                        );
+                        let U16Str = widestring::U16String::from_vec(x.u.Gpt().Name.to_vec());
+                        println!(
+                            "!!! layout.info.{}.GPT.Name = {}",
+                            x.PartitionNumber, U16Str.to_string_lossy()
+                        );
+                        if x.u.Gpt().PartitionType.Data1 == 0 {
+                            continue;
+                        }
+                    }
+                }
+                _ => println!("!!! layout.info.style = ???"),
+            }
+
             let partition_path = format!(
                 "\\Device\\Harddisk{}\\Partition{}",
                 self.device_number, x.PartitionNumber
             );
-            partitions.push(PartitionInfo {
+            devices.push(DiskDeviceInfo {
                 id: partition_path,
                 details: StorageDetails {
                     size: l as u64,
@@ -287,11 +316,12 @@ impl DiskFileDevice {
             })
         }
 
-        Ok(DiskDeviceInfo {
+        devices.push(DiskDeviceInfo {
             id: self.path.to_string(),
             details: drive_details,
-            partitions,
-        })
+        });
+
+        Ok(devices)
     }
 
     fn get_drive_layout(&self) -> Result<&mut Layout> {
