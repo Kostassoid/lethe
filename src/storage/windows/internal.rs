@@ -10,6 +10,7 @@ use anyhow::Result;
 
 extern crate winapi;
 use crate::storage::windows::DeviceAccess;
+use widestring::WideCString;
 use winapi::_core::cmp::Ordering;
 use winapi::_core::ptr::{null, null_mut};
 use winapi::shared::minwindef::*;
@@ -176,9 +177,9 @@ impl Iterator for DiskDeviceEnumerator {
         let device_number = get_device_number(interface_details.path().as_str()).unwrap();
 
         Some(
-            DiskDeviceProbe::from_device_number(device_number)
+            PhysicalDrive::from_device_number(device_number)
                 .unwrap()
-                .get_info()
+                .get_storage_list()
                 .unwrap(),
         )
     }
@@ -196,7 +197,7 @@ pub struct PartitionInfo {
     pub details: StorageDetails,
 }
 
-struct DiskDeviceProbe {
+struct PhysicalDrive {
     device_number: DWORD,
     path: String,
     device: DeviceFile,
@@ -216,18 +217,18 @@ struct Layout {
     partitions: [winioctl::PARTITION_INFORMATION_EX; 100],
 }
 
-impl DiskDeviceProbe {
+impl PhysicalDrive {
     fn from_device_number(device_number: u32) -> Result<Self> {
         let disk_path = format!("\\\\.\\PhysicalDrive{}", device_number);
         let device = DeviceFile::open(disk_path.as_str())?;
-        Ok(DiskDeviceProbe {
+        Ok(PhysicalDrive {
             device_number,
             path: disk_path,
             device,
         })
     }
 
-    fn get_info(&self) -> Result<Vec<DiskDeviceInfo>> {
+    fn get_storage_list(&self) -> Result<Vec<DiskDeviceInfo>> {
         let geometry = self.get_drive_geometry()?;
         let drive_details = StorageDetails {
             size: unsafe { *geometry.DiskSize.QuadPart() as u64 },
@@ -243,59 +244,30 @@ impl DiskDeviceProbe {
 
         let mut devices: Vec<DiskDeviceInfo> = Vec::new();
 
-        println!("!!! path = {}", self.path);
-
-        println!(
-            "!!! layout.info.PartitionCount = {}",
-            layout.info.PartitionCount
-        );
+        let partitions = unsafe {
+            slice::from_raw_parts(
+                layout.info.PartitionEntry.as_ptr(),
+                layout.info.PartitionCount as usize,
+            )
+        };
 
         for i in 0..layout.info.PartitionCount {
-            let x = layout.partitions[i as usize];
+            let x = partitions[i as usize];
             let l = unsafe { *x.PartitionLength.QuadPart() };
             let so = unsafe { *x.StartingOffset.QuadPart() };
-            println!(
-                "!!! layout.info.{}.PartitionStyle = {}",
-                i, x.PartitionStyle
-            );
-            println!("!!! layout.info.{}.StartingOffset = {}", i, so);
-            println!("!!! layout.info.{}.PartitionLength = {}", i, l);
-            println!(
-                "!!! layout.info.{}.PartitionNumber = {}",
-                i, x.PartitionNumber
-            );
 
             match x.PartitionStyle {
-                winioctl::PARTITION_STYLE_MBR => {
-                    println!("!!! layout.info.{}.style = MBR", x.PartitionNumber);
-                    unsafe {
-                        println!(
-                            "!!! layout.info.{}.MBR.Type = {}",
-                            x.PartitionNumber, x.u.Mbr().PartitionType
-                        );
-                        if x.u.Mbr().PartitionType == 0 {
-                            continue;
-                        }
+                winioctl::PARTITION_STYLE_MBR => unsafe {
+                    if x.u.Mbr().PartitionType == 0 {
+                        continue;
                     }
-                }
-                winioctl::PARTITION_STYLE_GPT => {
-                    println!("!!! layout.info.{}.style = GPT", x.PartitionNumber);
-                    unsafe {
-                        println!(
-                            "!!! layout.info.{}.GPT.Type = {}",
-                            x.PartitionNumber, x.u.Gpt().PartitionType.Data1
-                        );
-                        let U16Str = widestring::U16String::from_vec(x.u.Gpt().Name.to_vec());
-                        println!(
-                            "!!! layout.info.{}.GPT.Name = {}",
-                            x.PartitionNumber, U16Str.to_string_lossy()
-                        );
-                        if x.u.Gpt().PartitionType.Data1 == 0 {
-                            continue;
-                        }
+                },
+                winioctl::PARTITION_STYLE_GPT => unsafe {
+                    if x.u.Gpt().PartitionType.Data1 == 0 {
+                        continue;
                     }
-                }
-                _ => println!("!!! layout.info.style = ???"),
+                },
+                _ => continue,
             }
 
             let partition_path = format!(
@@ -337,7 +309,7 @@ impl DiskDeviceProbe {
                 std::ptr::null_mut(),
                 0,
                 layout_buffer.as_mut_ptr() as PVOID,
-                std::mem::size_of::<Layout>() as DWORD,
+                LAYOUT_BUFFER_SIZE as DWORD,
                 &mut bytes,
                 std::ptr::null_mut(),
             ) == 0
@@ -372,6 +344,62 @@ impl DiskDeviceProbe {
                 ));
             }
             Ok(geometry)
+        }
+    }
+}
+
+pub(crate) fn enumerate_volumes() -> Result<Vec<DiskDeviceInfo>> {
+    let mut devices: Vec<DiskDeviceInfo> = Vec::new();
+
+    const MAX_PATH: usize = 256;
+    let mut volume_name_buffer: [WCHAR; MAX_PATH] = [0; MAX_PATH];
+    let find_volume_handle =
+        unsafe { fileapi::FindFirstVolumeW(volume_name_buffer.as_mut_ptr(), MAX_PATH as DWORD) };
+
+    if find_volume_handle == std::ptr::null_mut() {
+        return Err(anyhow!(
+            "Unable to get volumes. Error: {}",
+            get_last_error_str()
+        ));
+    }
+
+    loop {
+        let volume_name_wstr =
+            unsafe { widestring::WideCString::from_ptr_str(volume_name_buffer.as_ptr()) };
+        let mut volume_name = volume_name_wstr.to_string_lossy();
+        volume_name.shrink_to_fit();
+
+        if volume_name.chars().last().unwrap() == '\\' {
+            volume_name.pop();
+        }
+
+        println!("Looking for {}", unsafe { &volume_name[4..] });
+
+        let mut device_name_buffer: [WCHAR; MAX_PATH] = [0; MAX_PATH];
+        let result = unsafe {
+            fileapi::QueryDosDeviceW(
+                widestring::WideCString::from_str(&volume_name[4..])
+                    .unwrap()
+                    .as_ptr(),
+                device_name_buffer.as_mut_ptr(),
+                MAX_PATH as DWORD,
+            )
+        };
+
+        devices.push(DiskDeviceInfo {
+            id: unsafe { WideCString::from_ptr_str(device_name_buffer.as_ptr()).to_string_lossy() },
+            details: Default::default(),
+        });
+
+        unsafe {
+            if fileapi::FindNextVolumeW(
+                find_volume_handle,
+                volume_name_buffer.as_mut_ptr(),
+                MAX_PATH as DWORD,
+            ) == 0
+            {
+                break Ok(devices);
+            }
         }
     }
 }
