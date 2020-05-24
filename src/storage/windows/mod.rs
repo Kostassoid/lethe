@@ -3,6 +3,9 @@ extern crate winapi;
 
 use crate::storage::*;
 
+#[macro_use]
+mod helpers;
+
 mod internal;
 use internal::*;
 
@@ -12,7 +15,7 @@ impl System {
     pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
         let enumerator = DiskDeviceEnumerator::new()?;
         let mut devices: Vec<DiskDeviceInfo> = enumerator.flatten().collect();
-        devices.append(&mut enumerate_volumes()?);
+        //  devices.append(&mut enumerate_volumes()?);
         devices.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(devices)
     }
