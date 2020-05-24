@@ -1,4 +1,4 @@
-#![recursion_limit="256"]
+#![recursion_limit = "256"]
 
 use std::rc::Rc;
 
@@ -130,12 +130,21 @@ fn main() -> Result<()> {
         ("list", _) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
-            t.set_titles(row!["Device ID", "Size", "Type", "Block Size"]);
+            t.set_titles(row![
+                "Device ID",
+                "Size",
+                "Type",
+                "Mount Point",
+                "Block Size"
+            ]);
             for x in storage_devices {
                 t.add_row(row![
                     style(x.id()).bold(),
                     HumanBytes(x.details().size),
                     x.details().storage_type,
+                    (x.details().mount_point)
+                        .as_ref()
+                        .unwrap_or(&"".to_string()),
                     HumanBytes(x.details().block_size as u64)
                 ]);
             }

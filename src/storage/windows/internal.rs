@@ -60,6 +60,11 @@ pub struct DeviceInterfaceDetailData {
     path_len: usize,
 }
 
+struct VolumeExtent {
+    device_number: u32,
+    starting_offset: u64,
+}
+
 impl DeviceInterfaceDetailData {
     pub fn new(size: usize) -> Result<Self> {
         let mut cb_size = mem::size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>();
@@ -108,11 +113,12 @@ impl Drop for DeviceInterfaceDetailData {
 pub struct DiskDeviceEnumerator {
     device_info_list: HDEVINFO,
     device_index: DWORD,
+    volumes: Vec<(String, Vec<VolumeExtent>)>,
 }
 
 impl DiskDeviceEnumerator {
     pub fn new() -> Result<Self> {
-        let logical = get_logical_drives()?;
+        let volumes = get_volumes()?;
 
         let device_info_list = unsafe {
             SetupDiGetClassDevsW(
@@ -129,6 +135,7 @@ impl DiskDeviceEnumerator {
         Ok(DiskDeviceEnumerator {
             device_info_list,
             device_index: 0,
+            volumes,
         })
     }
 }
@@ -200,7 +207,7 @@ impl Iterator for DiskDeviceEnumerator {
         Some(
             PhysicalDrive::from_device_number(device_number)
                 .unwrap()
-                .get_storage_list()
+                .get_storage_list(&self.volumes)
                 .unwrap(),
         )
     }
@@ -217,7 +224,10 @@ impl PhysicalDrive {
         })
     }
 
-    fn get_storage_list(&self) -> Result<Vec<DiskDeviceInfo>> {
+    fn get_storage_list(
+        &self,
+        volumes: &Vec<(String, Vec<VolumeExtent>)>,
+    ) -> Result<Vec<DiskDeviceInfo>> {
         let geometry = get_drive_geometry(&self.device)?;
         let drive_details = StorageDetails {
             size: unsafe { *geometry.DiskSize.QuadPart() as u64 },
@@ -262,6 +272,18 @@ impl PhysicalDrive {
                 "\\Device\\Harddisk{}\\Partition{}",
                 self.device_number, x.PartitionNumber
             );
+
+            let mount_point = volumes
+                .iter()
+                .find(|v| {
+                    let e = &v.1[0]; //todo: enumerate
+                    unsafe {
+                        e.device_number == self.device_number
+                            && e.starting_offset == *x.StartingOffset.QuadPart() as u64
+                    }
+                })
+                .map(|v| v.0.clone());
+
             devices.push(DiskDeviceInfo {
                 id: partition_path,
                 details: StorageDetails {
@@ -271,7 +293,7 @@ impl PhysicalDrive {
                     media_type: MediaType::Unknown,
                     is_trim_supported: false,
                     serial: None,
-                    mount_point: None,
+                    mount_point,
                 },
             })
         }
@@ -312,6 +334,51 @@ fn get_drive_layout(device: &DeviceFile) -> Result<&mut Layout> {
     }
 }
 
+fn get_volume_extents(device: &DeviceFile) -> Result<Vec<VolumeExtent>> {
+    const EXTENTS_BUFFER_SIZE: usize =
+        16 + std::mem::size_of::<winioctl::VOLUME_DISK_EXTENTS>() * 32;
+    let mut extents_buffer: [BYTE; EXTENTS_BUFFER_SIZE] = [0; EXTENTS_BUFFER_SIZE];
+    let mut bytes: DWORD = 0;
+    unsafe {
+        let extents: &mut winioctl::VOLUME_DISK_EXTENTS =
+            std::mem::transmute(extents_buffer.as_mut_ptr());
+
+        if ioapiset::DeviceIoControl(
+            device.handle,
+            winioctl::IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            std::ptr::null_mut(),
+            0,
+            extents_buffer.as_mut_ptr() as PVOID,
+            EXTENTS_BUFFER_SIZE as DWORD,
+            &mut bytes,
+            std::ptr::null_mut(),
+        ) == 0
+        {
+            return Err(anyhow!(
+                "Unable to get volume extents. Error: {}",
+                get_last_error_str()
+            ));
+        }
+
+        let mut r: Vec<VolumeExtent> = Vec::new();
+        let ex = unsafe {
+            slice::from_raw_parts(
+                extents.Extents.as_ptr(),
+                extents.NumberOfDiskExtents as usize,
+            )
+        };
+
+        for i in 0..extents.NumberOfDiskExtents as usize {
+            r.push(VolumeExtent {
+                device_number: ex[i].DiskNumber,
+                starting_offset: unsafe { *ex[i].StartingOffset.QuadPart() as u64 },
+            });
+        }
+
+        Ok(r)
+    }
+}
+
 fn get_drive_geometry(device: &DeviceFile) -> Result<winioctl::DISK_GEOMETRY_EX> {
     let mut bytes: DWORD = 0;
     unsafe {
@@ -336,20 +403,26 @@ fn get_drive_geometry(device: &DeviceFile) -> Result<winioctl::DISK_GEOMETRY_EX>
     }
 }
 
-fn get_logical_drives() -> Result<Vec<(char, winioctl::PARTITION_INFORMATION_EX)>> {
+fn get_volumes() -> Result<Vec<(String, Vec<VolumeExtent>)>> {
     let drives = unsafe { fileapi::GetLogicalDrives() };
+    let mut volumes: Vec<(String, Vec<VolumeExtent>)> = Vec::new();
+
     for c in b'A'..b'Z' + 1 {
         if drives & (1 << (c - b'A') as u32) != 0 {
             let device_path = format!("{}:\\", c as char);
-            println!("{}: yes", device_path);
-            let volume_path = get_volume_path_from_mount_point(device_path.as_str())?;
+            let volume_path = match get_volume_path_from_mount_point(device_path.as_str()) {
+                Ok(x) => x,
+                _ => continue,
+            };
             let device = DeviceFile::open(volume_path.as_str())?;
-            let p = get_partition_info(&device)?;
-            println!("{}", unsafe { p.PartitionLength.QuadPart() });
+            match get_volume_extents(&device) {
+                Ok(e) => volumes.push((device_path, e)),
+                _ => {}
+            }
         }
     }
 
-    Ok(Vec::new())
+    Ok(volumes)
 }
 
 pub(crate) fn enumerate_volumes() -> Result<Vec<DiskDeviceInfo>> {
@@ -470,7 +543,8 @@ fn get_volume_path_from_mount_point(path: &str) -> Result<String> {
         ) == 0
         {
             return Err(anyhow!(
-                "Unable to get volume path. Error: {}",
+                "Unable to get volume path from {}. Error: {}",
+                path,
                 get_last_error_str()
             ));
         }
