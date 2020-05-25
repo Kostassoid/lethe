@@ -16,18 +16,13 @@ use winapi::um::winioctl::GUID_DEVINTERFACE_DISK;
 use winapi::um::winnt::{PVOID, WCHAR};
 use winapi::um::{fileapi, ioapiset, winioctl};
 
+use windows::access::*;
 use windows::helpers::*;
 
 use crate::storage::*;
 
 #[derive(Debug)]
 pub struct DiskDeviceInfo {
-    pub id: String,
-    pub details: StorageDetails,
-}
-
-#[derive(Debug)]
-pub struct PartitionInfo {
     pub id: String,
     pub details: StorageDetails,
 }
@@ -198,7 +193,7 @@ impl Iterator for DiskDeviceEnumerator {
             )
         };
 
-        let device = DeviceFile::open(interface_details.path().as_str()).unwrap();
+        let device = DeviceFile::open(interface_details.path().as_str(), false).unwrap();
         let device_number = get_device_number(&device).unwrap();
 
         Some(
@@ -213,7 +208,7 @@ impl Iterator for DiskDeviceEnumerator {
 impl PhysicalDrive {
     fn from_device_number(device_number: u32) -> Result<Self> {
         let disk_path = format!("\\\\.\\PhysicalDrive{}", device_number);
-        let device = DeviceFile::open(disk_path.as_str())?;
+        let device = DeviceFile::open(disk_path.as_str(), false)?;
         Ok(PhysicalDrive {
             device_number,
             path: disk_path,
@@ -410,7 +405,7 @@ fn get_volumes() -> Result<Vec<(String, Vec<VolumeExtent>)>> {
                 Ok(x) => x,
                 _ => continue,
             };
-            let device = DeviceFile::open(volume_path.as_str())?;
+            let device = DeviceFile::open(volume_path.as_str(), false)?;
             match get_volume_extents(&device) {
                 Ok(e) => volumes.push((device_path, e)),
                 _ => {}

@@ -6,8 +6,11 @@ use crate::storage::*;
 #[macro_use]
 mod helpers;
 
-mod internal;
-use internal::*;
+mod meta;
+use super::windows::meta::*;
+
+mod access;
+use access::*;
 
 use anyhow::Result;
 
@@ -19,52 +22,12 @@ impl System {
         Ok(devices)
     }
 
-    pub fn access(storage_ref: &dyn StorageRef) -> Result<DeviceAccess> {
-        DeviceAccess::new()
-    }
-}
-
-pub struct DeviceAccess {}
-
-impl DeviceAccess {
-    pub fn new() -> Result<DeviceAccess> {
-        Ok(DeviceAccess {})
-    }
-}
-
-impl StorageAccess for DeviceAccess {
-    fn position(&mut self) -> Result<u64> {
-        unimplemented!();
-    }
-
-    fn seek(&mut self, position: u64) -> Result<u64> {
-        unimplemented!();
-    }
-
-    fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        unimplemented!();
-    }
-
-    fn write(&mut self, data: &[u8]) -> Result<()> {
-        unimplemented!();
-    }
-
-    fn flush(&self) -> Result<()> {
-        unimplemented!();
+    pub fn access(storage_ref: &dyn StorageRef) -> Result<impl StorageAccess> {
+        DeviceFile::open(storage_ref.id(), true)
     }
 }
 
 impl StorageRef for DiskDeviceInfo {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn details(&self) -> &StorageDetails {
-        &self.details
-    }
-}
-
-impl StorageRef for PartitionInfo {
     fn id(&self) -> &str {
         &self.id
     }

@@ -1,3 +1,4 @@
+use super::winapi::um::winnt::GENERIC_WRITE;
 use anyhow::Result;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -24,48 +25,6 @@ pub(crate) fn from_wide_ptr(ptr: *const u16, len: usize) -> String {
     assert!(!ptr.is_null() && len % 2 == 0);
     let slice = unsafe { slice::from_raw_parts(ptr, len / 2) };
     OsString::from_wide(slice).to_string_lossy().into_owned()
-}
-
-pub(crate) struct DeviceFile {
-    pub(crate) handle: HANDLE,
-}
-
-impl DeviceFile {
-    pub(crate) fn open(path: &str) -> Result<Self> {
-        unsafe {
-            let handle = winapi::um::fileapi::CreateFileW(
-                widestring::WideCString::from_str(path.clone())
-                    .unwrap()
-                    .as_ptr(),
-                GENERIC_READ,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                null_mut(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                null_mut(),
-            );
-
-            if handle == INVALID_HANDLE_VALUE {
-                return Err(anyhow!(
-                    "Cannot open device {}. Error: {}",
-                    path,
-                    get_last_error_str()
-                ));
-            }
-
-            Ok(DeviceFile { handle })
-        }
-    }
-}
-
-impl Drop for DeviceFile {
-    fn drop(&mut self) {
-        if self.handle != null_mut() {
-            unsafe {
-                CloseHandle(self.handle);
-            }
-        }
-    }
 }
 
 pub fn get_last_error_str() -> String {
