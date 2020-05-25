@@ -1,27 +1,24 @@
-use libc;
+extern crate winapi;
 
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::slice;
 use std::{mem, ptr};
 
-use crate::storage::*;
 use anyhow::Result;
-
-extern crate winapi;
+use libc;
 use widestring::WideCString;
 use winapi::_core::ptr::null_mut;
 use winapi::shared::minwindef::*;
-
 use winapi::um::handleapi::INVALID_HANDLE_VALUE;
 use winapi::um::setupapi::*;
-
 use winapi::um::winioctl::GUID_DEVINTERFACE_DISK;
 use winapi::um::winnt::{PVOID, WCHAR};
 use winapi::um::{fileapi, ioapiset, winioctl};
 
-#[macro_use]
 use windows::helpers::*;
+
+use crate::storage::*;
 
 #[derive(Debug)]
 pub struct DiskDeviceInfo {
@@ -152,7 +149,7 @@ impl Iterator for DiskDeviceEnumerator {
     type Item = Vec<DiskDeviceInfo>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut device_interface_data = unsafe { mem::uninitialized::<SP_DEVICE_INTERFACE_DATA>() };
+        let mut device_interface_data: SP_DEVICE_INTERFACE_DATA = unsafe { mem::zeroed() };
         device_interface_data.cbSize = mem::size_of::<SP_DEVICE_INTERFACE_DATA>() as UINT;
 
         let result = unsafe {
@@ -188,7 +185,7 @@ impl Iterator for DiskDeviceEnumerator {
             return None;
         }
 
-        let mut interface_details = DeviceInterfaceDetailData::new(required_size as usize).unwrap(); //todo: handle errors
+        let interface_details = DeviceInterfaceDetailData::new(required_size as usize).unwrap(); //todo: handle errors
 
         unsafe {
             SetupDiGetDeviceInterfaceDetailW(
@@ -208,7 +205,7 @@ impl Iterator for DiskDeviceEnumerator {
             PhysicalDrive::from_device_number(device_number)
                 .unwrap()
                 .get_storage_list(&self.volumes)
-                .unwrap(),
+                .unwrap(), //todo: improve error handling
         )
     }
 }
@@ -229,13 +226,18 @@ impl PhysicalDrive {
         volumes: &Vec<(String, Vec<VolumeExtent>)>,
     ) -> Result<Vec<DiskDeviceInfo>> {
         let geometry = get_drive_geometry(&self.device)?;
+        let alignment = get_alignment_descriptor(&self.device)?;
+
+        let storage_type = match geometry.Geometry.MediaType {
+            winioctl::RemovableMedia => StorageType::Removable,
+            winioctl::FixedMedia => StorageType::Fixed,
+            _ => StorageType::Other,
+        };
+
         let drive_details = StorageDetails {
             size: unsafe { *geometry.DiskSize.QuadPart() as u64 },
-            block_size: geometry.Geometry.BytesPerSector as usize, //todo: this
-            storage_type: StorageType::Drive,
-            media_type: MediaType::Unknown,
-            is_trim_supported: false,
-            serial: None,
+            block_size: alignment.BytesPerPhysicalSector as usize,
+            storage_type,
             mount_point: None,
         };
 
@@ -276,11 +278,10 @@ impl PhysicalDrive {
             let mount_point = volumes
                 .iter()
                 .find(|v| {
-                    let e = &v.1[0]; //todo: enumerate
-                    unsafe {
+                    v.1.iter().any(|e| unsafe {
                         e.device_number == self.device_number
                             && e.starting_offset == *x.StartingOffset.QuadPart() as u64
-                    }
+                    })
                 })
                 .map(|v| v.0.clone());
 
@@ -288,11 +289,8 @@ impl PhysicalDrive {
                 id: partition_path,
                 details: StorageDetails {
                     size: l as u64,
-                    block_size: geometry.Geometry.BytesPerSector as usize, //todo: figure out
+                    block_size: drive_details.block_size,
                     storage_type: StorageType::Partition,
-                    media_type: MediaType::Unknown,
-                    is_trim_supported: false,
-                    serial: None,
                     mount_point,
                 },
             })
@@ -361,17 +359,15 @@ fn get_volume_extents(device: &DeviceFile) -> Result<Vec<VolumeExtent>> {
         }
 
         let mut r: Vec<VolumeExtent> = Vec::new();
-        let ex = unsafe {
-            slice::from_raw_parts(
-                extents.Extents.as_ptr(),
-                extents.NumberOfDiskExtents as usize,
-            )
-        };
+        let ex = slice::from_raw_parts(
+            extents.Extents.as_ptr(),
+            extents.NumberOfDiskExtents as usize,
+        );
 
         for i in 0..extents.NumberOfDiskExtents as usize {
             r.push(VolumeExtent {
                 device_number: ex[i].DiskNumber,
-                starting_offset: unsafe { *ex[i].StartingOffset.QuadPart() as u64 },
+                starting_offset: *ex[i].StartingOffset.QuadPart() as u64,
             });
         }
 
@@ -382,7 +378,7 @@ fn get_volume_extents(device: &DeviceFile) -> Result<Vec<VolumeExtent>> {
 fn get_drive_geometry(device: &DeviceFile) -> Result<winioctl::DISK_GEOMETRY_EX> {
     let mut bytes: DWORD = 0;
     unsafe {
-        let mut geometry = unsafe { mem::uninitialized::<winioctl::DISK_GEOMETRY_EX>() };
+        let mut geometry: winioctl::DISK_GEOMETRY_EX = mem::zeroed();
         if ioapiset::DeviceIoControl(
             device.handle,
             winioctl::IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
@@ -423,62 +419,6 @@ fn get_volumes() -> Result<Vec<(String, Vec<VolumeExtent>)>> {
     }
 
     Ok(volumes)
-}
-
-pub(crate) fn enumerate_volumes() -> Result<Vec<DiskDeviceInfo>> {
-    let mut devices: Vec<DiskDeviceInfo> = Vec::new();
-
-    const MAX_PATH: usize = 256;
-    let mut volume_name_buffer: [WCHAR; MAX_PATH] = [0; MAX_PATH];
-    let find_volume_handle =
-        unsafe { fileapi::FindFirstVolumeW(volume_name_buffer.as_mut_ptr(), MAX_PATH as DWORD) };
-
-    if find_volume_handle == std::ptr::null_mut() {
-        return Err(anyhow!(
-            "Unable to get volumes. Error: {}",
-            get_last_error_str()
-        ));
-    }
-
-    loop {
-        let volume_name_wstr =
-            unsafe { widestring::WideCString::from_ptr_str(volume_name_buffer.as_ptr()) };
-        let mut volume_name = volume_name_wstr.to_string_lossy();
-        volume_name.shrink_to_fit();
-
-        if volume_name.chars().last().unwrap() == '\\' {
-            volume_name.pop();
-        }
-
-        println!("Looking for {}", unsafe { &volume_name[4..] });
-
-        let mut device_name_buffer: [WCHAR; MAX_PATH] = [0; MAX_PATH];
-        let result = unsafe {
-            fileapi::QueryDosDeviceW(
-                widestring::WideCString::from_str(&volume_name[4..])
-                    .unwrap()
-                    .as_ptr(),
-                device_name_buffer.as_mut_ptr(),
-                MAX_PATH as DWORD,
-            )
-        };
-
-        devices.push(DiskDeviceInfo {
-            id: unsafe { WideCString::from_ptr_str(device_name_buffer.as_ptr()).to_string_lossy() },
-            details: Default::default(),
-        });
-
-        unsafe {
-            if fileapi::FindNextVolumeW(
-                find_volume_handle,
-                volume_name_buffer.as_mut_ptr(),
-                MAX_PATH as DWORD,
-            ) == 0
-            {
-                break Ok(devices);
-            }
-        }
-    }
 }
 
 fn get_device_number(device: &DeviceFile) -> Result<DWORD> {
@@ -557,29 +497,47 @@ fn get_volume_path_from_mount_point(path: &str) -> Result<String> {
     Ok(normalize_volume_path(full_volume_path.as_str()))
 }
 
-fn get_partition_info(device: &DeviceFile) -> Result<winioctl::PARTITION_INFORMATION_EX> {
-    let mut info = unsafe { mem::uninitialized::<winioctl::PARTITION_INFORMATION_EX>() };
+winapi::STRUCT! {
+    #[allow(non_snake_case)]
+    #[derive(Debug)]
+    struct STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR {
+        Version: ULONG,
+        Size: ULONG,
+        BytesPerCacheLine: ULONG,
+        BytesOffsetForCacheAlignment: ULONG,
+        BytesPerLogicalSector: ULONG,
+        BytesPerPhysicalSector: ULONG,
+        BytesOffsetForSectorAlignment: ULONG,
+    }
+}
 
+fn get_alignment_descriptor(device: &DeviceFile) -> Result<STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR> {
+    let mut query = winioctl::STORAGE_PROPERTY_QUERY {
+        PropertyId: winioctl::StorageAccessAlignmentProperty,
+        QueryType: winioctl::PropertyStandardQuery,
+        AdditionalParameters: [0],
+    };
+
+    let mut alignment: STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR = unsafe { mem::zeroed() };
     let mut bytes: DWORD = 0;
-
     unsafe {
         if ioapiset::DeviceIoControl(
             device.handle,
-            winioctl::IOCTL_DISK_GET_PARTITION_INFO_EX,
-            null_mut(),
-            0,
-            &mut info as *mut _ as LPVOID,
-            std::mem::size_of::<winioctl::PARTITION_INFORMATION_EX>() as DWORD,
+            winioctl::IOCTL_STORAGE_QUERY_PROPERTY,
+            &mut query as *mut _ as PVOID,
+            mem::size_of_val(&query) as DWORD,
+            &mut alignment as *mut _ as PVOID,
+            mem::size_of_val(&alignment) as DWORD,
             &mut bytes,
-            null_mut(),
+            ptr::null_mut(),
         ) == 0
         {
             return Err(anyhow!(
-                "Unable to get partiton info. Error: {}",
+                "Unable to get alignment info. Error: {}",
                 get_last_error_str()
             ));
         }
     }
 
-    Ok(info)
+    Ok(alignment)
 }

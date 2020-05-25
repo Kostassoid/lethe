@@ -1,5 +1,3 @@
-#![macro_escape]
-
 use anyhow::Result;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;

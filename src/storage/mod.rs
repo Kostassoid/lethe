@@ -23,7 +23,10 @@ pub enum StorageType {
     Unknown,
     File,
     Partition,
-    Drive,
+    Fixed,
+    Removable,
+    CD,
+    Network,
     RAID,
     Other,
 }
@@ -35,22 +38,10 @@ impl std::fmt::Display for StorageType {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub enum MediaType {
-    Unknown,
-    Rotational,
-    SolidState,
-    Other,
-}
-
-#[derive(Debug, Clone)]
 pub struct StorageDetails {
     pub size: u64,
     pub block_size: usize,
     pub storage_type: StorageType,
-    pub media_type: MediaType,
-    pub is_trim_supported: bool,
-    pub serial: Option<String>,
     pub mount_point: Option<String>,
 }
 
@@ -60,9 +51,6 @@ impl Default for StorageDetails {
             size: 0,
             block_size: 0,
             storage_type: StorageType::Unknown,
-            media_type: MediaType::Unknown,
-            is_trim_supported: false,
-            serial: None,
             mount_point: None,
         }
     }
