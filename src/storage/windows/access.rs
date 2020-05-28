@@ -1,34 +1,46 @@
 use super::helpers::*;
+use super::winapi::um::ioapiset::DeviceIoControl;
 use crate::storage::StorageAccess;
 use anyhow::Result;
+use std::ffi::OsString;
+use std::os::windows::prelude::*;
 use std::{mem, ptr};
 use winapi::_core::ptr::null_mut;
 use winapi::shared::minwindef::{DWORD, LPVOID};
 use winapi::um::fileapi::*;
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::winbase::{FILE_BEGIN, FILE_CURRENT};
+use winapi::um::winioctl;
 use winapi::um::winnt::{
     FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE, HANDLE,
     LARGE_INTEGER,
 };
 
-pub(crate) struct DeviceFile {
-    pub(crate) handle: HANDLE,
+pub struct DeviceFile {
+    is_locked: bool,
+    pub handle: HANDLE,
 }
 
 impl DeviceFile {
     pub fn open(path: &str, write_access: bool) -> Result<Self> {
-        unsafe {
-            let access = if write_access {
-                GENERIC_READ | GENERIC_WRITE
-            } else {
-                GENERIC_READ
-            };
+        let mut file_path = path.to_string();
+        if !path.starts_with("\\\\") {
+            // assuming NT device name like /Harddisk1/Partition1
+            file_path.insert_str(0, "\\\\.\\GLOBALROOT"); //todo: check minimal Windows version
+        }
 
+        let access = if write_access {
+            GENERIC_READ | GENERIC_WRITE
+        } else {
+            GENERIC_READ
+        };
+
+        unsafe {
             let handle = CreateFileW(
-                widestring::WideCString::from_str(path.clone())
+                widestring::WideCString::from_str(file_path.clone())
                     .unwrap()
                     .as_ptr(),
+                //file_path.clone().to_wide_null().as_ptr(),
                 access,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 null_mut(),
@@ -45,7 +57,30 @@ impl DeviceFile {
                 ));
             }
 
-            Ok(DeviceFile { handle })
+            let mut is_locked = false;
+            if write_access {
+                let mut returned: DWORD = 0;
+                if DeviceIoControl(
+                    handle,
+                    winioctl::FSCTL_LOCK_VOLUME,
+                    null_mut(),
+                    0,
+                    null_mut(),
+                    0,
+                    &mut returned,
+                    null_mut(),
+                ) == 0
+                {
+                    return Err(anyhow!(
+                        "Cannot lock device {}. Error: {}",
+                        path,
+                        get_last_error_str()
+                    ));
+                }
+                is_locked = true;
+            }
+
+            Ok(DeviceFile { handle, is_locked })
         }
     }
 }
@@ -53,6 +88,24 @@ impl DeviceFile {
 impl Drop for DeviceFile {
     fn drop(&mut self) {
         if self.handle != null_mut() {
+            if self.is_locked {
+                unsafe {
+                    let mut returned: DWORD = 0;
+                    if DeviceIoControl(
+                        self.handle,
+                        winioctl::FSCTL_UNLOCK_VOLUME,
+                        null_mut(),
+                        0,
+                        null_mut(),
+                        0,
+                        &mut returned,
+                        null_mut(),
+                    ) == 0
+                    {
+                        //todo?
+                    }
+                }
+            }
             unsafe {
                 let _ = CloseHandle(self.handle);
             }
@@ -63,7 +116,7 @@ impl Drop for DeviceFile {
 impl StorageAccess for DeviceFile {
     fn position(&mut self) -> Result<u64> {
         unsafe {
-            let mut distance = mem::zeroed();
+            let distance = mem::zeroed();
             let mut current: LARGE_INTEGER = mem::zeroed();
             if SetFilePointerEx(self.handle, distance, &mut current, FILE_CURRENT) == 0 {
                 return Err(anyhow!(
