@@ -7,7 +7,6 @@ mod nix;
 mod windows;
 
 use anyhow::Result;
-use winapi::_core::fmt::Formatter;
 
 pub trait StorageAccess {
     fn position(&mut self) -> Result<u64>;
@@ -32,7 +31,7 @@ pub enum StorageType {
 }
 
 impl std::fmt::Display for StorageType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }

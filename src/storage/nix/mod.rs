@@ -105,17 +105,12 @@ impl FileRef {
 
                 let size = resolve_storage_size(&file_type, &stat, fd);
                 let storage_type = StorageType::Unknown; //TODO: this
-                let media_type = MediaType::Unknown; //TODO: this
-                let serial = None; //TODO: this
                 let mount_point = None; //TODO: this
 
                 Ok(StorageDetails {
                     size,
                     block_size: stat.st_blksize as usize,
                     storage_type,
-                    media_type,
-                    is_trim_supported: os::is_trim_supported(fd),
-                    serial,
                     mount_point,
                 })
             } else {
@@ -126,8 +121,6 @@ impl FileRef {
 }
 
 impl StorageRef for FileRef {
-    type Access = FileAccess;
-
     fn id(&self) -> &str {
         self.path.to_str().unwrap()
     }
@@ -135,14 +128,14 @@ impl StorageRef for FileRef {
     fn details(&self) -> &StorageDetails {
         &self.details
     }
-
-    fn access(&self) -> Result<Box<Self::Access>> {
-        FileAccess::new(&self.path).map(Box::new)
-    }
 }
 
 impl System {
     pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
         os::get_storage_devices()
+    }
+
+    pub fn access(storage_ref: &dyn StorageRef) -> Result<impl StorageAccess> {
+        FileAccess::new(&storage_ref.id())
     }
 }
