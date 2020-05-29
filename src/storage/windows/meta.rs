@@ -1,7 +1,5 @@
 extern crate winapi;
 
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
 use std::slice;
 use std::{mem, ptr};
 
@@ -92,7 +90,11 @@ impl DeviceInterfaceDetailData {
     }
 
     pub fn path(&self) -> String {
-        unsafe { from_wide_ptr((*self.data).DevicePath.as_ptr(), self.path_len - 2) }
+        unsafe {
+            WideCString::from_ptr((*self.data).DevicePath.as_ptr(), (self.path_len / 2) - 1)
+                .unwrap()
+                .to_string_lossy()
+        }
     }
 }
 
@@ -456,12 +458,6 @@ fn normalize_volume_path(path: &str) -> String {
         p.pop();
     }
 
-    // if p.starts_with("\\\\") {
-    //     p[4..].to_string()
-    // } else {
-    //     p
-    // }
-
     p
 }
 
@@ -470,9 +466,7 @@ fn get_volume_path_from_mount_point(path: &str) -> Result<String> {
     let mut volume_name_buffer: [WCHAR; MAX_PATH] = [0; MAX_PATH];
     unsafe {
         if fileapi::GetVolumeNameForVolumeMountPointW(
-            widestring::WideCString::from_str(path.clone())
-                .unwrap()
-                .as_ptr(),
+            WideCString::from_str(path.clone()).unwrap().as_ptr(),
             volume_name_buffer.as_mut_ptr(),
             MAX_PATH as DWORD,
         ) == 0
@@ -486,8 +480,7 @@ fn get_volume_path_from_mount_point(path: &str) -> Result<String> {
     }
 
     let full_volume_path =
-        unsafe { widestring::WideCString::from_ptr_str(volume_name_buffer.as_ptr()) }
-            .to_string_lossy();
+        unsafe { WideCString::from_ptr_str(volume_name_buffer.as_ptr()) }.to_string_lossy();
 
     Ok(normalize_volume_path(full_volume_path.as_str()))
 }

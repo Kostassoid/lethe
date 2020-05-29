@@ -2,9 +2,8 @@ use super::helpers::*;
 use super::winapi::um::ioapiset::DeviceIoControl;
 use crate::storage::StorageAccess;
 use anyhow::Result;
-use std::ffi::OsString;
-use std::os::windows::prelude::*;
 use std::{mem, ptr};
+use widestring::WideCString;
 use winapi::_core::ptr::null_mut;
 use winapi::shared::minwindef::{DWORD, LPVOID};
 use winapi::um::fileapi::*;
@@ -25,7 +24,7 @@ impl DeviceFile {
     pub fn open(path: &str, write_access: bool) -> Result<Self> {
         let mut file_path = path.to_string();
         if !path.starts_with("\\\\") {
-            // assuming NT device name like /Harddisk1/Partition1
+            // assuming NT device name like \Harddisk1\Partition1
             file_path.insert_str(0, "\\\\.\\GLOBALROOT"); //todo: check minimal Windows version
         }
 
@@ -37,9 +36,7 @@ impl DeviceFile {
 
         unsafe {
             let handle = CreateFileW(
-                widestring::WideCString::from_str(file_path.clone())
-                    .unwrap()
-                    .as_ptr(),
+                WideCString::from_str(file_path.clone()).unwrap().as_ptr(),
                 //file_path.clone().to_wide_null().as_ptr(),
                 access,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
