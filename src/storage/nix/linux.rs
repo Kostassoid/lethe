@@ -39,6 +39,34 @@ pub fn is_trim_supported(_fd: RawFd) -> bool {
     false
 }
 
+pub fn resolve_storage_type<P: AsRef<Path>>(path: P) -> Result<StorageType> {
+    use sysfs_class::{Block, SysClass};
+
+    let name = path.as_ref().file_name().unwrap();
+
+    for block in Block::all()? {
+        if block.has_device() {
+            if block.path().file_name().unwrap() == name {
+                return if block.removable()? == 1 {
+                    Ok(StorageType::Removable)
+                } else {
+                    Ok(StorageType::Fixed)
+                };
+            }
+
+            if block
+                .children()?
+                .iter()
+                .find(|c| c.path().file_name().unwrap() == name)
+                .is_some()
+            {
+                return Ok(StorageType::Partition);
+            }
+        }
+    }
+    Ok(StorageType::Unknown)
+}
+
 pub fn get_storage_devices() -> Result<Vec<FileRef>> {
     let partitions_file = File::open("/proc/partitions")?;
     let buf = BufReader::new(partitions_file);

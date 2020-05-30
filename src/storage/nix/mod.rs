@@ -100,11 +100,11 @@ impl FileRef {
             if libc::stat(cpath.as_ptr(), &mut stat) >= 0 {
                 let file_type = resolve_file_type(stat.st_mode);
 
-                let f = os::open_file_direct(path, false)?;
+                let f = os::open_file_direct(&path, false)?;
                 let fd = f.as_raw_fd();
 
                 let size = resolve_storage_size(&file_type, &stat, fd);
-                let storage_type = StorageType::Unknown; //TODO: this
+                let storage_type = os::resolve_storage_type(&path).unwrap_or(StorageType::Unknown);
                 let mount_point = None; //TODO: this
 
                 Ok(StorageDetails {
