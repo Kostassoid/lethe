@@ -105,7 +105,7 @@ impl FileRef {
 
                 let size = resolve_storage_size(&file_type, &stat, fd);
                 let storage_type = os::resolve_storage_type(&path).unwrap_or(StorageType::Unknown);
-                let mount_point = None; //TODO: this
+                let mount_point = os::resolve_mount_point(&path).unwrap_or(None);
 
                 Ok(StorageDetails {
                     size,

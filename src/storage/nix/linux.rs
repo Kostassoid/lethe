@@ -44,6 +44,7 @@ pub fn resolve_storage_type<P: AsRef<Path>>(path: P) -> Result<StorageType> {
 
     let name = path.as_ref().file_name().unwrap();
 
+    //todo: don't re-iterate for each device
     for block in Block::all()? {
         if block.has_device() {
             if block.path().file_name().unwrap() == name {
@@ -65,6 +66,21 @@ pub fn resolve_storage_type<P: AsRef<Path>>(path: P) -> Result<StorageType> {
         }
     }
     Ok(StorageType::Unknown)
+}
+
+pub fn resolve_mount_point<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
+    let s = path.as_ref().to_str().unwrap();
+    let f = File::open("/etc/mtab")?;
+    let reader = BufReader::new(f);
+
+    for line in reader.lines() {
+        let l = line?;
+        let parts: Vec<&str> = l.split_whitespace().collect();
+        if parts[0] == s {
+            return Ok(Some(parts[1].to_string()));
+        }
+    }
+    Ok(None)
 }
 
 pub fn get_storage_devices() -> Result<Vec<FileRef>> {
