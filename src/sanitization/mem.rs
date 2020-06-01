@@ -35,7 +35,6 @@ impl Drop for AlignedBuffer {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::thread::sleep;
 
     #[test]
     fn test_aligned_allocation() {

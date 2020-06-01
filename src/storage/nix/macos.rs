@@ -5,6 +5,7 @@ use std::fs::read_dir;
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::*;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::storage::*;
 
@@ -75,21 +76,6 @@ fn discover_file_based_devices<P: AsRef<Path>>(
     Ok(refs)
 }
 
-/*
-fn get_mounts() -> IoResult<()> {
-    unsafe {
-        let mut stat: [libc::statfs; 16] = std::mem::zeroed();
-        let total = libc::statvfs(stat, 16, 1 /* libc::MNT_WAIT */);
-
-        for i in 0..total {
-            println!("!!! statfs {} = {:?}", i, stat.get(i).unwrap());
-        }
-    }
-
-    Ok(())
-}
-*/
-
 // #[cfg(target_os = "macos")]
 // pub struct IOKitEnumerator {}
 
@@ -110,3 +96,50 @@ fn get_mounts() -> IoResult<()> {
 //         Ok(Vec::new())
 //     }
 // }
+
+pub fn get_bsd_device_name<P: AsRef<Path>>(path: P) -> Result<String> {
+    let n = path.as_ref()
+        .file_name()
+        .ok_or(anyhow!("Invalid path"))?
+        .to_string_lossy();
+    if n.starts_with("rdisk") {
+        Ok(n[1..].into())
+    } else {
+        Ok(n.into())
+    }
+}
+
+pub fn resolve_storage_type<P: AsRef<Path>>(path: P) -> Result<StorageType> {
+
+    let bsd_name = get_bsd_device_name(path)?;
+    let output = Command::new("/usr/sbin/diskutil")
+                     .arg(fmt!("info {}", bsd_name))
+                     .output()?;
+
+    assert!(output.status.success());
+
+    println!("status: {}", output.status);
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    Ok(StorageType::Unknown)
+}
+
+pub fn resolve_mount_point<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
+    Ok(None)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_bsd_name_resolver() {
+        assert_eq!(get_bsd_device_name("/dev/rdisk0").unwrap(), "disk0".to_owned());
+        assert_eq!(get_bsd_device_name("/dev/rdisk0s1").unwrap(), "disk0s1".to_owned());
+        assert_eq!(get_bsd_device_name("/dev/disk2").unwrap(), "disk2".to_owned());
+        assert_eq!(get_bsd_device_name("/rdisk3").unwrap(), "disk3".to_owned());
+        
+        assert!(get_bsd_device_name("").is_err());
+    }
+}
