@@ -6,6 +6,8 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::io::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::collections::HashMap;
+use regex::Regex;
 
 use crate::storage::*;
 
@@ -111,16 +113,35 @@ pub fn get_bsd_device_name<P: AsRef<Path>>(path: P) -> Result<String> {
 
 pub fn resolve_storage_type<P: AsRef<Path>>(path: P) -> Result<StorageType> {
 
-    let bsd_name = get_bsd_device_name(path)?;
-    let output = Command::new("/usr/sbin/diskutil")
-                     .arg(fmt!("info {}", bsd_name))
-                     .output()?;
+    //let bsd_name = get_bsd_device_name(path)?;
 
-    assert!(output.status.success());
+    let mut command = Command::new("/usr/sbin/diskutil");
+    command.arg("info").arg(path.as_ref().to_str().unwrap()); 
 
-    println!("status: {}", output.status);
-    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    //println!("command: {:?}", command);
+
+    let output = command.output()?;
+
+    if !output.status.success() {
+        println!("Cannot run diskutil");
+        return Ok(StorageType::Unknown)
+    }
+
+    let pattern = Regex::new(r"^\s*([^:]+):\s*(.*)$")?;
+
+    let props: HashMap<_, _> = String::from_utf8(output.stdout)?
+        .lines()
+        .map(|l| { println!("l: {}", l); l })
+        .filter_map(|line| pattern.captures(line))
+        .map(|c| (c[1].to_owned(), c[2].to_owned()))
+        .into_iter()
+        .collect();
+    
+    dbg!(props);
+
+    //println!("Props for: {}", path.as_ref().to_str().unwrap());
+    //println!("Whole: {}", props.get("Whole").unwrap());
+    //println!("Volume Name: {}", props.get("Volume Name").unwrap());
 
     Ok(StorageType::Unknown)
 }
