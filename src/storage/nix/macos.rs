@@ -111,43 +111,47 @@ pub fn get_bsd_device_name<P: AsRef<Path>>(path: P) -> Result<String> {
     }
 }
 
-pub fn resolve_storage_type<P: AsRef<Path>>(path: P) -> Result<StorageType> {
-
-    //let bsd_name = get_bsd_device_name(path)?;
+pub fn get_diskutils_info<P: AsRef<Path>>(path: P) -> Result<HashMap<String, String>> {
 
     let mut command = Command::new("/usr/sbin/diskutil");
     command.arg("info").arg(path.as_ref().to_str().unwrap()); 
 
-    //println!("command: {:?}", command);
-
     let output = command.output()?;
-
     if !output.status.success() {
-        println!("Cannot run diskutil");
-        return Ok(StorageType::Unknown)
-    }
+        return Err(anyhow!("Can't run diskutil"))
+    };
 
     let pattern = Regex::new(r"^\s*([^:]+):\s*(.*)$")?;
 
     let props: HashMap<_, _> = String::from_utf8(output.stdout)?
         .lines()
-        .map(|l| { println!("l: {}", l); l })
         .filter_map(|line| pattern.captures(line))
         .map(|c| (c[1].to_owned(), c[2].to_owned()))
         .into_iter()
         .collect();
     
-    dbg!(props);
+    //dbg!(props);
 
-    //println!("Props for: {}", path.as_ref().to_str().unwrap());
-    //println!("Whole: {}", props.get("Whole").unwrap());
-    //println!("Volume Name: {}", props.get("Volume Name").unwrap());
-
-    Ok(StorageType::Unknown)
+    Ok(props)
 }
 
-pub fn resolve_mount_point<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
-    Ok(None)
+
+pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDetails) -> Result<()> {
+    let du = get_diskutils_info(path)?;
+
+    details.mount_point = du.get("Mount Point").map(|s| s.to_owned());
+
+    if du.get("Whole").unwrap_or(&String::from("Yes")) == "No" {
+        details.storage_type = StorageType::Partition;
+    } else {
+        details.storage_type = match du.get("Removable Media").unwrap_or(&String::new()) {
+            x if x == "Removable" => StorageType::Removable,
+            x if x == "Fixed" => StorageType::Fixed,
+            _ => StorageType::Unknown
+        };
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

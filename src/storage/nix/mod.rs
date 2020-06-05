@@ -104,15 +104,17 @@ impl FileRef {
                 let fd = f.as_raw_fd();
 
                 let size = resolve_storage_size(&file_type, &stat, fd);
-                let storage_type = os::resolve_storage_type(&path).unwrap_or(StorageType::Unknown);
-                let mount_point = os::resolve_mount_point(&path).unwrap_or(None);
 
-                Ok(StorageDetails {
+                let mut details = StorageDetails {
                     size,
                     block_size: stat.st_blksize as usize,
-                    storage_type,
-                    mount_point,
-                })
+                    storage_type: StorageType::Unknown,
+                    mount_point: None,
+                };
+
+                os::enrich_storage_details(path, &mut details)?;
+
+                Ok(details)
             } else {
                 Err(anyhow!("Unable to get stat info"))
             }
