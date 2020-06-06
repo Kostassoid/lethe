@@ -436,7 +436,7 @@ mod test {
             self.file.write_all(data).context("unexpected")
         }
 
-        fn flush(&self) -> Result<()> {
+        fn flush(&mut self) -> Result<()> {
             Ok(())
         }
     }
