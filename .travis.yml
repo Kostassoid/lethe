@@ -1,10 +1,10 @@
-dist: trusty
+rust: stable
 language: rust
-services: docker
-sudo: required
-env:
-  global:
-    - CRATE_NAME=lethe
+
+script:
+  - cargo build
+  - cargo test
+
 matrix:
   include:
     # Linux
@@ -17,35 +17,44 @@ matrix:
     - os: windows
       env: TARGET=x86_64-pc-windows-gnu
 
-before_install:
-  - set -e
-  - rustup self update
 install:
-  - sh ci/install.sh
-  - source ~/.cargo/env || true
-script:
-  - bash ci/script.sh
-after_script: set +e
+  - rustup target add $TARGET
+
+cache: cargo
+before_cache:
+  - chmod -R a+r $HOME/.cargo
+
 before_deploy:
-  - sh ci/before_deploy.sh
+  - |
+    (
+    cargo build --release --target $TARGET
+    if [ "$TRAVIS_OS_NAME" = 'windows' ]; then
+      cp target/${TARGET}/release/lethe.exe lethe-${TRAVIS_TAG}-${TARGET}.exe
+    else
+      cp target/${TARGET}/release/lethe lethe-${TRAVIS_TAG}-${TARGET}
+    fi
+    )
+
 deploy:
   provider: releases
   skip_cleanup: true
   file_glob: true
   api_key:
     secure: "FpssqeCvG1gGeZ+YblYfBHGAQoK5IaNuPVIv5TcMUrLKutYpbytHii6J5xvYZ0xeVCaksnEuAt0Is6/Qwce68LmJEU8lYntPNlaVJ/tg5+9iqMID3QPHIhCio1hHj9npsnpVBI4MwmxqAH5Y5V6PifmiaKmEj7PJkZMwimMAdUnBbuCA+F9Sfa+oiFp41n1FwGXELWV7HA6qN1Qk16BpN06CKChUPQjjtVEoon+rXUjM4SiXG+94I64YLSZw6rLPs8ksiV6yEAwvbtO1J4BgneChoxZiyCbbXB1EkHdU+eC5nSGq2Cjgg4bnVL307GfxlzbuxBwgEAO6qA62TYfONPZdAilBMGgQcSigUFRpz7VNrXKBL36Zem084hXrT4sh99THs14rPt06QtVfKLdqMDLbtfdv2WnG5F5BBOilflwFed0oms9jl3r74GG8H3R0ThYlL8F75AN1tEFdoiapFm0wXcf5EIvZR5jpW/tVQ0o4BMNjFF0VFddPfVvfM9sQiTj4FZ1EhiyJDB1yivyyEl/f4dwPv9gTwuxUcsYGI9axSMJyfW9+Vt05xi0hqGtC5b+mnOXVc2DACMCKphQHMqRmtCoGE4o5F7KN3erVmphZfv26L8oaAjBmWpsh12V7YL/AbL20G7db3Hf5UkY7iPPSJrk08dAsxmI4kL0o+Rc="
-  file: $CRATE_NAME-$TRAVIS_TAG-$TARGET.*
+  file: lethe-$TRAVIS_TAG-$TARGET*
   on:
     repo: Kostassoid/lethe
     tags: true
     branch: master
-cache: cargo
-before_cache:
-  - chmod -R a+r $HOME/.cargo
+
 branches:
   only:
-    - /^v\d+\.\d+\.\d+.*$/
+    # Pushes and PR to the master branch
     - master
+    # Ruby regex to match tags.
+    # Required, or travis won't trigger deploys when a new tag is pushed.
+    - /^v\d+\.\d+(\.\d+)?(-\S*)?$/
+
 notifications:
   email:
     on_success: never
