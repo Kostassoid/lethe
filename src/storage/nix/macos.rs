@@ -5,6 +5,9 @@ use std::fs::read_dir;
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::*;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::collections::HashMap;
+use regex::Regex;
 
 use crate::storage::*;
 
@@ -75,38 +78,70 @@ fn discover_file_based_devices<P: AsRef<Path>>(
     Ok(refs)
 }
 
-/*
-fn get_mounts() -> IoResult<()> {
-    unsafe {
-        let mut stat: [libc::statfs; 16] = std::mem::zeroed();
-        let total = libc::statvfs(stat, 16, 1 /* libc::MNT_WAIT */);
+pub fn get_bsd_device_name<P: AsRef<Path>>(path: P) -> Result<String> {
+    let n = path.as_ref()
+        .file_name()
+        .ok_or(anyhow!("Invalid path"))?
+        .to_string_lossy();
+    if n.starts_with("rdisk") {
+        Ok(n[1..].into())
+    } else {
+        Ok(n.into())
+    }
+}
 
-        for i in 0..total {
-            println!("!!! statfs {} = {:?}", i, stat.get(i).unwrap());
-        }
+pub fn get_diskutils_info<P: AsRef<Path>>(path: P) -> Result<HashMap<String, String>> {
+
+    let mut command = Command::new("/usr/sbin/diskutil");
+    command.arg("info").arg(path.as_ref().to_str().unwrap()); 
+
+    let output = command.output()?;
+    if !output.status.success() {
+        return Err(anyhow!("Can't run diskutil"))
+    };
+
+    let pattern = Regex::new(r"^\s*([^:]+):\s*(.*)$")?;
+
+    let props: HashMap<_, _> = String::from_utf8(output.stdout)?
+        .lines()
+        .filter_map(|line| pattern.captures(line))
+        .map(|c| (c[1].to_owned(), c[2].to_owned()))
+        .into_iter()
+        .collect();
+    
+    Ok(props)
+}
+
+
+pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDetails) -> Result<()> {
+    let du = get_diskutils_info(path)?;
+
+    details.mount_point = du.get("Mount Point").map(|s| s.to_owned());
+
+    if du.get("Whole").unwrap_or(&String::from("Yes")) == "No" {
+        details.storage_type = StorageType::Partition;
+    } else {
+        details.storage_type = match du.get("Removable Media").unwrap_or(&String::new()) {
+            x if x == "Removable" => StorageType::Removable,
+            x if x == "Fixed" => StorageType::Fixed,
+            _ => StorageType::Unknown
+        };
     }
 
     Ok(())
 }
-*/
 
-// #[cfg(target_os = "macos")]
-// pub struct IOKitEnumerator {}
+#[cfg(test)]
+mod test {
+    use super::*;
 
-// #[cfg(target_os = "macos")]
-// impl StorageEnumerator for IOKitEnumerator {
-//     type Ref = FileRef;
-
-//     fn list(&self) -> IoResult<Vec<Self::Ref>> {
-//         use mach::port::{mach_port_t,MACH_PORT_NULL};
-//         use mach::kern_return::KERN_SUCCESS;
-//         use iokit::*;
-//         unsafe {
-//             let mut master_port: mach_port_t = MACH_PORT_NULL;
-
-//             let classes_to_match = IOServiceMatching(kIOSerialBSDServiceValue());
-//         }
-
-//         Ok(Vec::new())
-//     }
-// }
+    #[test]
+    fn test_bsd_name_resolver() {
+        assert_eq!(get_bsd_device_name("/dev/rdisk0").unwrap(), "disk0".to_owned());
+        assert_eq!(get_bsd_device_name("/dev/rdisk0s1").unwrap(), "disk0s1".to_owned());
+        assert_eq!(get_bsd_device_name("/dev/disk2").unwrap(), "disk2".to_owned());
+        assert_eq!(get_bsd_device_name("/rdisk3").unwrap(), "disk3".to_owned());
+        
+        assert!(get_bsd_device_name("").is_err());
+    }
+}

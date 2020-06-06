@@ -57,7 +57,7 @@ impl Stage {
         total_size: u64,
         block_size: usize,
         start_from: u64,
-    ) -> anyhow::Result<SanitizationStream> {
+    ) -> SanitizationStream {
         let mut buf = AlignedBuffer::new(block_size, block_size);
 
         let kind = match self {
@@ -81,7 +81,7 @@ impl Stage {
             eof: false,
             current_block_size: 0,
         };
-        Ok(SanitizationStream { kind, state })
+        SanitizationStream { kind, state }
     }
 }
 
@@ -184,7 +184,7 @@ mod test {
     }
 
     fn fill(v: &mut Vec<u8>, stage: &mut Stage) -> () {
-        let mut stream = stage.stream(TEST_SIZE, TEST_BLOCK, 0).unwrap();
+        let mut stream = stage.stream(TEST_SIZE, TEST_BLOCK, 0);
 
         let mut position = 0;
         while let Some(chunk) = stream.next() {

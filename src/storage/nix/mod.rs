@@ -73,9 +73,9 @@ impl StorageAccess for FileAccess {
             .context("Writing to storage failed")
     }
 
-    fn flush(&self) -> Result<()> {
+    fn flush(&mut self) -> Result<()> {
         self.file
-            .sync_all()
+            .flush()
             .context("Unable to flush data to the storage")
     }
 }
@@ -94,40 +94,35 @@ impl FileRef {
     }
 
     fn build_details<P: AsRef<Path>>(path: P) -> Result<StorageDetails> {
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        let cpath = CString::new(path.as_ref().to_str().unwrap())?;
         unsafe {
-            let mut stat: libc::stat = std::mem::zeroed();
-            let cpath = CString::new(path.as_ref().to_str().unwrap())?;
-            if libc::stat(cpath.as_ptr(), &mut stat) >= 0 {
-                let file_type = resolve_file_type(stat.st_mode);
-
-                let f = os::open_file_direct(path, false)?;
-                let fd = f.as_raw_fd();
-
-                let size = resolve_storage_size(&file_type, &stat, fd);
-                let storage_type = StorageType::Unknown; //TODO: this
-                let media_type = MediaType::Unknown; //TODO: this
-                let serial = None; //TODO: this
-                let mount_point = None; //TODO: this
-
-                Ok(StorageDetails {
-                    size,
-                    block_size: stat.st_blksize as usize,
-                    storage_type,
-                    media_type,
-                    is_trim_supported: os::is_trim_supported(fd),
-                    serial,
-                    mount_point,
-                })
-            } else {
-                Err(anyhow!("Unable to get stat info"))
+            if libc::stat(cpath.as_ptr(), &mut stat) < 0 {
+                Err(anyhow!("Unable to get stat info"))?;
             }
         }
+
+        let file_type = resolve_file_type(stat.st_mode);
+
+        let f = os::open_file_direct(&path, false)?;
+        let fd = f.as_raw_fd();
+
+        let size = resolve_storage_size(&file_type, &stat, fd);
+
+        let mut details = StorageDetails {
+            size,
+            block_size: stat.st_blksize as usize,
+            storage_type: StorageType::Unknown,
+            mount_point: None,
+        };
+
+        os::enrich_storage_details(path, &mut details)?;
+
+        Ok(details)
     }
 }
 
 impl StorageRef for FileRef {
-    type Access = FileAccess;
-
     fn id(&self) -> &str {
         self.path.to_str().unwrap()
     }
@@ -135,14 +130,14 @@ impl StorageRef for FileRef {
     fn details(&self) -> &StorageDetails {
         &self.details
     }
-
-    fn access(&self) -> Result<Box<Self::Access>> {
-        FileAccess::new(&self.path).map(Box::new)
-    }
 }
 
 impl System {
     pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
         os::get_storage_devices()
+    }
+
+    pub fn access(storage_ref: &dyn StorageRef) -> Result<impl StorageAccess> {
+        FileAccess::new(&storage_ref.id())
     }
 }

@@ -13,27 +13,27 @@ pub trait StorageAccess {
     fn seek(&mut self, position: u64) -> Result<u64>;
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize>;
     fn write(&mut self, data: &[u8]) -> Result<()>;
-    fn flush(&self) -> Result<()>;
+    fn flush(&mut self) -> Result<()>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub enum StorageType {
     Unknown,
     File,
     Partition,
-    Drive,
+    Fixed,
+    Removable,
+    CD,
+    Network,
     RAID,
     Other,
 }
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub enum MediaType {
-    Unknown,
-    Rotational,
-    SolidState,
-    Other,
+impl std::fmt::Display for StorageType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -41,17 +41,23 @@ pub struct StorageDetails {
     pub size: u64,
     pub block_size: usize,
     pub storage_type: StorageType,
-    pub media_type: MediaType,
-    pub is_trim_supported: bool,
-    pub serial: Option<String>,
     pub mount_point: Option<String>,
 }
 
-pub trait StorageRef {
-    type Access: StorageAccess;
-    fn id(&self) -> &str;
-    fn details(&self) -> &StorageDetails;
-    fn access(&self) -> Result<Box<Self::Access>>;
+impl Default for StorageDetails {
+    fn default() -> Self {
+        StorageDetails {
+            size: 0,
+            block_size: 0,
+            storage_type: StorageType::Unknown,
+            mount_point: None,
+        }
+    }
 }
 
-pub struct System;
+pub trait StorageRef {
+    fn id(&self) -> &str;
+    fn details(&self) -> &StorageDetails;
+}
+
+pub struct System {}

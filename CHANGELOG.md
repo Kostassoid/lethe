@@ -1,5 +1,16 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+### Added
+
+* Windows support.
+* List of devices now includes more information (storage type, mount points).
+
+### Changed
+
+* Default IO block size is now 64 KB regardless of reported device block size.
+
 ## [v0.2.1] - 2019-09-23
 
 ### Fixed
@@ -20,4 +31,4 @@ This release is mostly laying the groundwork for a more serious improvements.
 
 ### Changed
 
-* Usuccessful validation now retries at the last successful position.
+* Unsuccessful validation now retries at the last successful position.

@@ -39,6 +39,50 @@ pub fn is_trim_supported(_fd: RawFd) -> bool {
     false
 }
 
+pub fn resolve_storage_type<P: AsRef<Path>>(path: P) -> Result<StorageType> {
+    use sysfs_class::{Block, SysClass};
+
+    let name = path.as_ref().file_name().unwrap();
+
+    //todo: don't re-iterate for each device
+    for block in Block::all()? {
+        if block.has_device() {
+            if block.path().file_name().unwrap() == name {
+                return if block.removable()? == 1 {
+                    Ok(StorageType::Removable)
+                } else {
+                    Ok(StorageType::Fixed)
+                };
+            }
+
+            if block
+                .children()?
+                .iter()
+                .find(|c| c.path().file_name().unwrap() == name)
+                .is_some()
+            {
+                return Ok(StorageType::Partition);
+            }
+        }
+    }
+    Ok(StorageType::Unknown)
+}
+
+pub fn resolve_mount_point<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
+    let s = path.as_ref().to_str().unwrap();
+    let f = File::open("/etc/mtab")?;
+    let reader = BufReader::new(f);
+
+    for line in reader.lines() {
+        let l = line?;
+        let parts: Vec<&str> = l.split_whitespace().collect();
+        if parts[0] == s {
+            return Ok(Some(parts[1].to_string()));
+        }
+    }
+    Ok(None)
+}
+
 pub fn get_storage_devices() -> Result<Vec<FileRef>> {
     let partitions_file = File::open("/proc/partitions")?;
     let buf = BufReader::new(partitions_file);
@@ -56,4 +100,10 @@ pub fn get_storage_devices() -> Result<Vec<FileRef>> {
         .collect::<Vec<_>>();
 
     Ok(refs)
+}
+
+pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDetails) -> Result<()> {
+    details.mount_point = resolve_mount_point(&path).unwrap_or(None);
+    details.storage_type = resolve_storage_type(&path).unwrap_or(StorageType::Unknown);
+    Ok(())
 }

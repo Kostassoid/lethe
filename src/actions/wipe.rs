@@ -130,9 +130,7 @@ fn fill(
     stage: &Stage,
     frontend: &mut dyn WipeEventReceiver,
 ) -> Option<Rc<anyhow::Error>> {
-    let mut stream = stage
-        .stream(task.total_size, task.block_size, state.position)
-        .expect("fix me"); //todo: this
+    let mut stream = stage.stream(task.total_size, task.block_size, state.position);
 
     frontend.handle(task, state, WipeEvent::StageStarted);
 
@@ -195,9 +193,7 @@ fn verify(
         return Some(Rc::clone(&err_rc));
     }
 
-    let mut stream = stage
-        .stream(task.total_size, task.block_size, state.position)
-        .expect("fix me"); //todo: this
+    let mut stream = stage.stream(task.total_size, task.block_size, state.position);
 
     let buf = AlignedBuffer::new(task.block_size, task.block_size);
 
@@ -440,7 +436,7 @@ mod test {
             self.file.write_all(data).context("unexpected")
         }
 
-        fn flush(&self) -> Result<()> {
+        fn flush(&mut self) -> Result<()> {
             Ok(())
         }
     }
