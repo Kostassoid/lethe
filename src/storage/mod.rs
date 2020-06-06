@@ -13,7 +13,7 @@ pub trait StorageAccess {
     fn seek(&mut self, position: u64) -> Result<u64>;
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize>;
     fn write(&mut self, data: &[u8]) -> Result<()>;
-    fn flush(&self) -> Result<()>;
+    fn flush(&mut self) -> Result<()>;
 }
 
 #[derive(Clone, Debug)]

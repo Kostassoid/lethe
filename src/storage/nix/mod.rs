@@ -73,9 +73,9 @@ impl StorageAccess for FileAccess {
             .context("Writing to storage failed")
     }
 
-    fn flush(&self) -> Result<()> {
+    fn flush(&mut self) -> Result<()> {
         self.file
-            .sync_all()
+            .flush()
             .context("Unable to flush data to the storage")
     }
 }

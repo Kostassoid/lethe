@@ -100,7 +100,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
             WipeEvent::Completed(result) => match result {
                 None => println!("Done."),
                 Some(e) => {
-                    eprintln!("Unexpected error: {}", e);
+                    eprintln!("Unexpected error: {:#}", e);
 
                     if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                         if ioe.kind() == ErrorKind::Other && ioe.raw_os_error() == Some(16) {
@@ -110,7 +110,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 }
             },
             WipeEvent::Fatal(err) => {
-                eprintln!("Fatal: {}", err);
+                eprintln!("Fatal: {:#}", err);
             }
         }
     }
