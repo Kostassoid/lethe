@@ -181,7 +181,7 @@ impl StorageAccess for DeviceFile {
         }
     }
 
-    fn flush(&self) -> Result<()> {
+    fn flush(&mut self) -> Result<()> {
         unsafe {
             if FlushFileBuffers(self.handle) == 0 {
                 return Err(anyhow!(

@@ -97,7 +97,8 @@ fn main() -> Result<()> {
                         .long("blocksize")
                         .short("bs")
                         .takes_value(true)
-                        .help("Block size override (bytes)"),
+                        .default_value("64k")
+                        .help("Block size"),
                 )
                 .arg(
                     Arg::with_name("yes")
@@ -159,13 +160,8 @@ fn main() -> Result<()> {
                 "all" => Verify::All,
                 _ => Verify::Last,
             };
-            let block_size_override = cmd
-                .value_of("blocksize")
-                .map(|bs| {
-                    ui::args::parse_block_size(bs)
-                        .context(format!("Invalid blocksize value: {}", bs))
-                })
-                .map_or(Ok(None), |v| v.map(Some))?; //todo: extract
+            let block_size = ui::args::parse_block_size(cmd.value_of("blocksize").unwrap())
+                .context("Invalid blocksize value")?;
 
             let device = storage_devices
                 .iter()
@@ -174,8 +170,6 @@ fn main() -> Result<()> {
             let scheme = schemes
                 .find(scheme_id)
                 .ok_or(anyhow!("Unknown scheme {}", scheme_id))?;
-
-            let block_size = block_size_override.unwrap_or(device.details().block_size);
 
             let task = WipeTask::new(
                 scheme.clone(),

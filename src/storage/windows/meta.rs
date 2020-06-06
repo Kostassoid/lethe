@@ -198,12 +198,9 @@ impl Iterator for DiskDeviceEnumerator {
         let device = DeviceFile::open(interface_details.path().as_str(), false).unwrap();
         let device_number = get_device_number(&device).unwrap();
 
-        Some(
-            PhysicalDrive::from_device_number(device_number)
-                .unwrap()
-                .get_storage_list(&self.volumes)
-                .unwrap(), //todo: improve error handling
-        )
+        PhysicalDrive::from_device_number(device_number)
+            .and_then(|x| x.get_storage_list(&self.volumes))
+            .ok() //todo: log error?
     }
 }
 

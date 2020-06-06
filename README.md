@@ -25,7 +25,7 @@ In case of SSDs, however, it is practically impossible to prove the data was suc
 Current release: **v0.2.2**
 
 Download and unzip binaries for your OS:
-- [Windows x64](https://github.com/Kostassoid/lethe/releases/download/v0.2.2/lethe-v0.2.2-x86_64-pc-windows-gnu.exe)
+- [Windows x64](https://github.com/Kostassoid/lethe/releases/download/v0.2.2/lethe-v0.2.2-x86_64-pc-windows-gnu.zip)
 - [macOS x64](https://github.com/Kostassoid/lethe/releases/download/v0.2.2/lethe-v0.2.2-x86_64-apple-darwin.tar.gz)
 - [Linux x64](https://github.com/Kostassoid/lethe/releases/download/v0.2.2/lethe-v0.2.2-x86_64-unknown-linux-musl.tar.gz)
 
