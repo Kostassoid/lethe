@@ -15,7 +15,7 @@ In case of SSDs, however, it is practically impossible to prove the data was suc
 
 ## Features
 
-- Supports Mac OS and Linux (but not WSL). Windows support is planned.
+- Supports Windows (but not WSL), Mac OS and Linux.
 - Validates the data (reads back) to make sure all write commands were successful
 - Uses fast cryptographic random generator
 - Allows to override OS recommended block size for possibly faster operations
@@ -25,6 +25,7 @@ In case of SSDs, however, it is practically impossible to prove the data was suc
 Current release: **v0.2.2**
 
 Download and unzip binaries for your OS:
+- [Windows x64](https://github.com/Kostassoid/lethe/releases/download/v0.2.2/lethe-v0.2.2-x86_64-pc-windows-gnu.exe)
 - [macOS x64](https://github.com/Kostassoid/lethe/releases/download/v0.2.2/lethe-v0.2.2-x86_64-apple-darwin.tar.gz)
 - [Linux x64](https://github.com/Kostassoid/lethe/releases/download/v0.2.2/lethe-v0.2.2-x86_64-unknown-linux-musl.tar.gz)
 

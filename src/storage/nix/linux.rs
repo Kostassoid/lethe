@@ -101,3 +101,9 @@ pub fn get_storage_devices() -> Result<Vec<FileRef>> {
 
     Ok(refs)
 }
+
+pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDetails) -> Result<()> {
+    details.mount_point = resolve_mount_point(&path).unwrap_or(None);
+    details.storage_type = resolve_storage_type(&path).unwrap_or(StorageType::Unknown);
+    Ok(())
+}

@@ -78,27 +78,6 @@ fn discover_file_based_devices<P: AsRef<Path>>(
     Ok(refs)
 }
 
-// #[cfg(target_os = "macos")]
-// pub struct IOKitEnumerator {}
-
-// #[cfg(target_os = "macos")]
-// impl StorageEnumerator for IOKitEnumerator {
-//     type Ref = FileRef;
-
-//     fn list(&self) -> IoResult<Vec<Self::Ref>> {
-//         use mach::port::{mach_port_t,MACH_PORT_NULL};
-//         use mach::kern_return::KERN_SUCCESS;
-//         use iokit::*;
-//         unsafe {
-//             let mut master_port: mach_port_t = MACH_PORT_NULL;
-
-//             let classes_to_match = IOServiceMatching(kIOSerialBSDServiceValue());
-//         }
-
-//         Ok(Vec::new())
-//     }
-// }
-
 pub fn get_bsd_device_name<P: AsRef<Path>>(path: P) -> Result<String> {
     let n = path.as_ref()
         .file_name()
@@ -130,8 +109,6 @@ pub fn get_diskutils_info<P: AsRef<Path>>(path: P) -> Result<HashMap<String, Str
         .into_iter()
         .collect();
     
-    //dbg!(props);
-
     Ok(props)
 }
 

@@ -94,31 +94,31 @@ impl FileRef {
     }
 
     fn build_details<P: AsRef<Path>>(path: P) -> Result<StorageDetails> {
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        let cpath = CString::new(path.as_ref().to_str().unwrap())?;
         unsafe {
-            let mut stat: libc::stat = std::mem::zeroed();
-            let cpath = CString::new(path.as_ref().to_str().unwrap())?;
-            if libc::stat(cpath.as_ptr(), &mut stat) >= 0 {
-                let file_type = resolve_file_type(stat.st_mode);
-
-                let f = os::open_file_direct(&path, false)?;
-                let fd = f.as_raw_fd();
-
-                let size = resolve_storage_size(&file_type, &stat, fd);
-
-                let mut details = StorageDetails {
-                    size,
-                    block_size: stat.st_blksize as usize,
-                    storage_type: StorageType::Unknown,
-                    mount_point: None,
-                };
-
-                os::enrich_storage_details(path, &mut details)?;
-
-                Ok(details)
-            } else {
-                Err(anyhow!("Unable to get stat info"))
+            if libc::stat(cpath.as_ptr(), &mut stat) < 0 {
+                Err(anyhow!("Unable to get stat info"))?;
             }
         }
+
+        let file_type = resolve_file_type(stat.st_mode);
+
+        let f = os::open_file_direct(&path, false)?;
+        let fd = f.as_raw_fd();
+
+        let size = resolve_storage_size(&file_type, &stat, fd);
+
+        let mut details = StorageDetails {
+            size,
+            block_size: stat.st_blksize as usize,
+            storage_type: StorageType::Unknown,
+            mount_point: None,
+        };
+
+        os::enrich_storage_details(path, &mut details)?;
+
+        Ok(details)
     }
 }
 
