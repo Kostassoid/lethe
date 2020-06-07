@@ -25,9 +25,9 @@ In case of SSDs, however, it is practically impossible to prove the data was suc
 Current release: **v0.3.0**
 
 Download and unzip binaries for your OS:
-- [Windows x64](https://github.com/Kostassoid/lethe/releases/download/v0.3.0/lethe-v0.3.0-x86_64-pc-windows-gnu.exe)
-- [macOS x64](https://github.com/Kostassoid/lethe/releases/download/v0.3.0/lethe-v0.3.0-x86_64-apple-darwin)
-- [Linux x64](https://github.com/Kostassoid/lethe/releases/download/v0.3.0/lethe-v0.3.0-x86_64-unknown-linux-musl)
+- [Windows x64](https://github.com/Kostassoid/lethe/releases/download/v0.3.0/lethe-v0.3.0-x86_64-pc-windows-gnu.zip)
+- [macOS x64](https://github.com/Kostassoid/lethe/releases/download/v0.3.0/lethe-v0.3.0-x86_64-apple-darwin.tar.gz)
+- [Linux x64](https://github.com/Kostassoid/lethe/releases/download/v0.3.0/lethe-v0.3.0-x86_64-unknown-linux-musl.tar.gz)
 
 Or install `lethe` from sources using latest [Rust toolchain](https://www.rust-lang.org/tools/install):
 
