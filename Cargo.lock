@@ -307,7 +307,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "lethe"
-version = "0.3.2-dev"
+version = "0.3.2"
 dependencies = [
  "IOKit-sys 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "anyhow 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
