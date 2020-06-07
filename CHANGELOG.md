@@ -1,5 +1,11 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+### Changed
+
+* Release binaries as archives to preserve permissions.
+
 ## [v0.3.0] - 2020-06-06
 
 ### Added
