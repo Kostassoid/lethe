@@ -29,7 +29,7 @@ before_deploy:
     (
     cargo build --release --target $TARGET
     if [ "$TRAVIS_OS_NAME" = 'windows' ]; then
-      7z a "lethe-${TRAVIS_TAG}-${TARGET}.exe" ./target/${TARGET}/release/lethe.exe
+      7z a -tzip "lethe-${TRAVIS_TAG}-${TARGET}.zip" ./target/${TARGET}/release/lethe.exe
     else
       tar -C target/${TARGET}/release -czf lethe-${TRAVIS_TAG}-${TARGET}.tar.gz lethe
     fi
