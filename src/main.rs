@@ -95,7 +95,7 @@ fn main() -> Result<()> {
                 .arg(
                     Arg::with_name("blocksize")
                         .long("blocksize")
-                        .short("bs")
+                        .short("b")
                         .takes_value(true)
                         .default_value("64k")
                         .help("Block size"),
@@ -160,8 +160,9 @@ fn main() -> Result<()> {
                 "all" => Verify::All,
                 _ => Verify::Last,
             };
-            let block_size = ui::args::parse_block_size(cmd.value_of("blocksize").unwrap())
-                .context("Invalid blocksize value")?;
+            let block_size_arg = cmd.value_of("blocksize").unwrap();
+            let block_size = ui::args::parse_block_size(block_size_arg)
+                .context(format!("Invalid blocksize value: {}", block_size_arg))?;
 
             let device = storage_devices
                 .iter()

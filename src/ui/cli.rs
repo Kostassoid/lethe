@@ -59,21 +59,26 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     Stage::Random { seed: _seed } => String::from("Random Fill"),
                 };
 
-                if !state.at_verification {
-                    println!("\n{}: Performing {}", stage_num, stage_description);
-                } else {
-                    println!("\n{}: Verifying {}", stage_num, stage_description);
+                if self.pb.is_none() {
+                    let pb = create_progress_bar(task.total_size);
+                    self.pb = Some(pb);
                 }
 
-                let pb = create_progress_bar(task.total_size);
+                if let Some(pb) = &self.pb {
+                    pb.set_position(0);
 
-                if !state.at_verification {
-                    pb.set_message("Writing");
-                } else {
-                    pb.set_message("Checking");
+                    if !state.at_verification {
+                        pb.println(format!("\n{}: Performing {}", stage_num, stage_description));
+                    } else {
+                        pb.println(format!("\n{}: Verifying {}", stage_num, stage_description));
+                    }
+
+                    if !state.at_verification {
+                        pb.set_message("Writing");
+                    } else {
+                        pb.set_message("Checking");
+                    }
                 }
-
-                self.pb = Some(pb);
             }
             WipeEvent::Progress(position) => {
                 if let Some(pb) = &self.pb {
@@ -83,10 +88,9 @@ impl WipeEventReceiver for ConsoleWipeSession {
             WipeEvent::StageCompleted(result) => {
                 if let Some(pb) = &self.pb {
                     match result {
-                        None => pb.finish_with_message("Done"),
+                        None => pb.println("Done"),
                         Some(err) => {
-                            pb.finish_with_message("FAILED!");
-                            eprintln!("Error: {}", err);
+                            pb.println(format!("FAILED! {}", err));
                         }
                     }
                 }
