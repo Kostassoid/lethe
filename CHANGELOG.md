@@ -1,5 +1,15 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+### Added
+
+* Configurable retries.
+
+### Changed
+
+* Improved UI.
+
 ## [v0.3.3] - 2020-06-07
 
 ### Changed
