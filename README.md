@@ -8,7 +8,7 @@ Should work with any HDD, SSD (read below) and flash drives.
 
 The usual method for wiping a drive is filling it with randomly generated data or zeroes (or any other constant value). The best results are achieved by performing a combination of these steps. This is basically what this tool does.
 
-In case of SSDs, however, it is practically impossible to prove the data was sucessfully wiped (or overwritten) because of various optimizations performed by modern SSD controllers, namely wear leveling and compression. The situation improves with a better implementations of native wiping features like Secure Erase but for now the best way of action is: 
+In case of SSDs, however, it is practically impossible to prove the data was successfully wiped (or overwritten) because of various optimizations performed by modern SSD controllers, namely wear leveling and compression. The situation improves with a better implementations of native wiping features like Secure Erase but for now the best way of action is: 
 - never store any sensitive data on SSD unencrypted,
 - wipe using multiple random fill passes
 - additionally perform Secure Erase if possible (not supported by `lethe` yet)
@@ -22,7 +22,7 @@ In case of SSDs, however, it is practically impossible to prove the data was suc
 
 ## Download
 
-Current release: **v0.4.0**
+Current release: **v0.4.0** [Changelog](CHANGELOG.md)
 
 Download and unzip binaries for your OS:
 - [Windows x64](https://github.com/Kostassoid/lethe/releases/download/v0.4.0/lethe-v0.4.0-x86_64-pc-windows-gnu.zip)
@@ -49,7 +49,7 @@ You can also use `help` command to get more information about any particular com
 lethe help wipe
 ```
 
-Note that `lethe` operates on a low level and will require a root access (e.g. `sudo`) to work with any real drives (and not loopback devices, for example).
+Note that `lethe` operates on a low level and will require a root/administrator access (e.g. `sudo`) to work with any real drives.
 
 ## Benchmarks
 
@@ -62,16 +62,16 @@ Tested on Macbook Pro 2015 with macOS 10.14.4 (Mojave) using a Sandisk 64G Flash
  Command | Block size | Time taken (seconds)
 ---------|------------|----------
  `dd if=/dev/zero of=/dev/rdisk3 bs=131072` | 128k | 2667.21
- `lethe wipe --scheme=zero --verify=no /dev/rdisk3` | 128k | 2725.77
+ `lethe wipe --scheme=zero --blocksize=128k --verify=no /dev/rdisk3` | 128k | 2725.77
  `dd if=/dev/zero of=/dev/rdisk3 bs=1m` | 1m | 2134.99
- `lethe wipe --scheme=zero --blocksize=1048576 --verify=no /dev/rdisk3` | 1m | 2129.61
+ `lethe wipe --scheme=zero --blocksize=1m --verify=no /dev/rdisk3` | 1m | 2129.61
 
 **Random fill**
 
  Command | Block size | Time taken (seconds)
 ---------|------------|----------
  `dd if=/dev/urandom of=/dev/rdisk3 bs=131072` | 128k | 4546.48
- `lethe wipe --scheme=random --verify=no /dev/rdisk3` | 128k | 2758.11
+ `lethe wipe --scheme=random --blocksize=128k --verify=no /dev/rdisk3` | 128k | 2758.11
 
 ## License
 

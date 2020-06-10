@@ -62,7 +62,6 @@ impl Stage {
 
         let kind = match self {
             Stage::Fill { value } => {
-                //fill_byte_slice(&mut buf, *value);
                 buf.fill(*value);
                 StreamKind::Fill
             }
