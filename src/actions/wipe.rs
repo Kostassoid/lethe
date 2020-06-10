@@ -23,6 +23,7 @@ pub struct WipeState {
     pub stage: usize,
     pub at_verification: bool,
     pub position: u64,
+    pub retries_left: u32,
 }
 
 impl Default for WipeState {
@@ -31,6 +32,7 @@ impl Default for WipeState {
             stage: 0,
             at_verification: false,
             position: 0,
+            retries_left: 0,
         }
     }
 }
@@ -91,8 +93,14 @@ impl WipeTask {
             let stage_error = loop {
                 let watermark = state.position;
 
-                if let Some(err) = fill(access, &self, state, stage, frontend) {
-                    break Some(err);
+                match fill(access, &self, state, stage, frontend) {
+                    Some(_) if state.retries_left > 0 => {
+                        state.retries_left -= 1;
+                        frontend.handle(&self, state, WipeEvent::Retrying);
+                        continue;
+                    }
+                    Some(err) => break Some(err),
+                    None => {}
                 };
 
                 if !have_to_verify {
@@ -102,11 +110,14 @@ impl WipeTask {
                 state.position = watermark;
                 state.at_verification = true;
 
-                if verify(access, &self, state, stage, frontend).is_some() {
-                    state.at_verification = false;
-                    frontend.handle(&self, state, WipeEvent::Retrying)
-                } else {
-                    break None;
+                match verify(access, &self, state, stage, frontend) {
+                    Some(_) if state.retries_left > 0 => {
+                        state.retries_left -= 1;
+                        state.at_verification = false;
+                        frontend.handle(&self, state, WipeEvent::Retrying);
+                    }
+                    Some(err) => break Some(err),
+                    None => break None,
                 }
             };
 
@@ -313,7 +324,7 @@ mod test {
     }
 
     #[test]
-    fn test_wiping_validation_failure() {
+    fn test_wiping_validation_failure_with_retries() {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("random").unwrap();
         let mut storage = InMemoryStorage::new(100000);
@@ -329,6 +340,7 @@ mod test {
             block_size,
         );
         let mut state = WipeState::default();
+        state.retries_left = 8;
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert_eq!(result, true);
@@ -356,6 +368,42 @@ mod test {
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
         assert_matches!(e.next(), Some((_, Completed(None))));
+    }
+
+    #[test]
+    fn test_wiping_validation_failure_without_retries() {
+        let schemes = SchemeRepo::default();
+        let scheme = schemes.find("random").unwrap();
+        let mut storage = InMemoryStorage::new(100000);
+        let block_size = 32768;
+        let mut receiver = StubReceiver::new();
+
+        storage.fail_after_any(150000);
+
+        let task = WipeTask::new(
+            scheme.clone(),
+            Verify::Last,
+            storage.size as u64,
+            block_size,
+        );
+        let mut state = WipeState::default();
+        state.retries_left = 0;
+        let result = task.run(&mut storage, &mut state, &mut receiver);
+
+        assert_eq!(result, false);
+
+        let mut e = receiver.collected.iter();
+        assert_matches!(e.next(), Some((_, Started)));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, StageCompleted(Some(_)))));
+        assert_matches!(e.next(), Some((_, Completed(Some(_)))));
     }
 
     struct StubReceiver {

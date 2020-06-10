@@ -95,10 +95,18 @@ fn main() -> Result<()> {
                 .arg(
                     Arg::with_name("blocksize")
                         .long("blocksize")
-                        .short("bs")
+                        .short("b")
                         .takes_value(true)
                         .default_value("64k")
                         .help("Block size"),
+                )
+                .arg(
+                    Arg::with_name("retries")
+                        .long("retries")
+                        .short("r")
+                        .takes_value(true)
+                        .default_value("32")
+                        .help("Maximum number of retries"),
                 )
                 .arg(
                     Arg::with_name("yes")
@@ -160,8 +168,9 @@ fn main() -> Result<()> {
                 "all" => Verify::All,
                 _ => Verify::Last,
             };
-            let block_size = ui::args::parse_block_size(cmd.value_of("blocksize").unwrap())
-                .context("Invalid blocksize value")?;
+            let block_size_arg = cmd.value_of("blocksize").unwrap();
+            let block_size = ui::args::parse_block_size(block_size_arg)
+                .context(format!("Invalid blocksize value: {}", block_size_arg))?;
 
             let device = storage_devices
                 .iter()
@@ -171,13 +180,22 @@ fn main() -> Result<()> {
                 .find(scheme_id)
                 .ok_or(anyhow!("Unknown scheme {}", scheme_id))?;
 
+            let retries = cmd
+                .value_of("retries")
+                .unwrap()
+                .parse()
+                .context("Invalid retries number value")?;
+
             let task = WipeTask::new(
                 scheme.clone(),
                 verification,
                 device.details().size,
                 block_size,
             );
+
             let mut state = WipeState::default();
+            state.retries_left = retries;
+
             let mut session = frontend.wipe_session(device_id, scheme_id, cmd.is_present("yes"));
 
             match System::access(device) {
