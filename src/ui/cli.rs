@@ -1,10 +1,14 @@
 use std::io::ErrorKind;
+use std::time::Instant;
 
 use ::console::style;
-use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
+use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 
 use crate::actions::{WipeEvent, WipeEventReceiver, WipeState, WipeTask};
 use crate::stage::Stage;
+use std::thread::sleep;
+
+const RETRY_BACKOFF_SECONDS: u32 = 3;
 
 pub struct ConsoleFrontend {}
 
@@ -24,6 +28,8 @@ impl ConsoleFrontend {
             scheme_id: String::from(scheme_id),
             auto_confirm,
             pb: None,
+            session_started: None,
+            stage_started: None,
         }
     }
 }
@@ -33,6 +39,8 @@ pub struct ConsoleWipeSession {
     scheme_id: String,
     auto_confirm: bool,
     pb: Option<ProgressBar>,
+    session_started: Option<Instant>,
+    stage_started: Option<Instant>,
 }
 
 impl WipeEventReceiver for ConsoleWipeSession {
@@ -49,6 +57,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     println!("Aborted.");
                     std::process::exit(0);
                 }
+                self.session_started = Some(Instant::now());
             }
             WipeEvent::StageStarted => {
                 let stage_num = format!("Stage {}/{}", state.stage + 1, task.scheme.stages.len());
@@ -59,26 +68,22 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     Stage::Random { seed: _seed } => String::from("Random Fill"),
                 };
 
-                if self.pb.is_none() {
-                    let pb = create_progress_bar(task.total_size);
-                    self.pb = Some(pb);
+                let pb = create_progress_bar(task.total_size);
+
+                if !state.at_verification {
+                    pb.println(format!("\n{}: Performing {}", stage_num, stage_description));
+                } else {
+                    pb.println(format!("\n{}: Verifying {}", stage_num, stage_description));
                 }
 
-                if let Some(pb) = &self.pb {
-                    pb.set_position(0);
-
-                    if !state.at_verification {
-                        pb.println(format!("\n{}: Performing {}", stage_num, stage_description));
-                    } else {
-                        pb.println(format!("\n{}: Verifying {}", stage_num, stage_description));
-                    }
-
-                    if !state.at_verification {
-                        pb.set_message("Writing");
-                    } else {
-                        pb.set_message("Checking");
-                    }
+                if !state.at_verification {
+                    pb.set_message("Writing");
+                } else {
+                    pb.set_message("Checking");
                 }
+
+                self.pb = Some(pb);
+                self.stage_started = Some(Instant::now());
             }
             WipeEvent::Progress(position) => {
                 if let Some(pb) = &self.pb {
@@ -88,23 +93,40 @@ impl WipeEventReceiver for ConsoleWipeSession {
             WipeEvent::StageCompleted(result) => {
                 if let Some(pb) = &self.pb {
                     match result {
-                        None => pb.println("Done"),
+                        None => {
+                            if let Some(s) = self.stage_started {
+                                let elapsed = HumanDuration(s.elapsed());
+                                pb.println(format!("✔ Completed in {}", elapsed));
+                            } else {
+                                pb.println("✔ Completed");
+                            }
+                        }
                         Some(err) => {
-                            pb.println(format!("FAILED! {}", err));
+                            pb.println(format!("❌ FAILED! {}", err));
                         }
                     }
+                    pb.finish_and_clear();
                 }
             }
             WipeEvent::Retrying => {
-                eprintln!("Retrying previous stage at {}.", state.position);
+                eprintln!(
+                    "Retrying previous stage at {} in {} seconds.",
+                    state.position, RETRY_BACKOFF_SECONDS
+                );
+                sleep(std::time::Duration::from_secs(RETRY_BACKOFF_SECONDS as u64));
             }
             WipeEvent::Aborted => {
-                eprintln!("Aborted.");
+                eprintln!("❌ Aborted.");
             }
             WipeEvent::Completed(result) => match result {
-                None => println!("Done."),
+                None => {
+                    if let Some(s) = self.session_started {
+                        let elapsed = HumanDuration(s.elapsed());
+                        println!("✔ Total time: {}", elapsed);
+                    }
+                }
                 Some(e) => {
-                    eprintln!("Unexpected error: {:#}", e);
+                    eprintln!("❌ Unexpected error: {:#}", e);
 
                     if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                         if ioe.kind() == ErrorKind::Other && ioe.raw_os_error() == Some(16) {
@@ -114,7 +136,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 }
             },
             WipeEvent::Fatal(err) => {
-                eprintln!("Fatal: {:#}", err);
+                eprintln!("❌ Fatal: {:#}", err);
             }
         }
     }

@@ -101,6 +101,14 @@ fn main() -> Result<()> {
                         .help("Block size"),
                 )
                 .arg(
+                    Arg::with_name("retries")
+                        .long("retries")
+                        .short("r")
+                        .takes_value(true)
+                        .default_value("32")
+                        .help("Maximum number of retries"),
+                )
+                .arg(
                     Arg::with_name("yes")
                         .long("yes")
                         .short("y")
@@ -172,13 +180,22 @@ fn main() -> Result<()> {
                 .find(scheme_id)
                 .ok_or(anyhow!("Unknown scheme {}", scheme_id))?;
 
+            let retries = cmd
+                .value_of("retries")
+                .unwrap()
+                .parse()
+                .context("Invalid retries number value")?;
+
             let task = WipeTask::new(
                 scheme.clone(),
                 verification,
                 device.details().size,
                 block_size,
             );
+
             let mut state = WipeState::default();
+            state.retries_left = retries;
+
             let mut session = frontend.wipe_session(device_id, scheme_id, cmd.is_present("yes"));
 
             match System::access(device) {
