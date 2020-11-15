@@ -371,6 +371,53 @@ mod test {
     }
 
     #[test]
+    fn test_wiping_write_failures_skips_bad_blocks() {
+        let schemes = SchemeRepo::default();
+        let scheme = schemes.find("random").unwrap();
+        let mut storage = InMemoryStorage::new(100000);
+        let block_size = 32768;
+        let mut receiver = StubReceiver::new();
+
+        storage.fail_at(50000);
+
+        let task = WipeTask::new(
+            scheme.clone(),
+            Verify::Last,
+            storage.size as u64,
+            block_size,
+        );
+        let mut state = WipeState::default();
+        state.retries_left = 8;
+        let result = task.run(&mut storage, &mut state, &mut receiver);
+
+        assert_eq!(result, true);
+
+        let mut e = receiver.collected.iter();
+        assert_matches!(e.next(), Some((_, Started)));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, StageCompleted(Some(_)))));
+        assert_matches!(e.next(), Some((_, Retrying)));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 32768);
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 32768);
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((_, Completed(None))));
+    }
+
+    #[test]
     fn test_wiping_validation_failure_without_retries() {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("random").unwrap();
@@ -430,6 +477,7 @@ mod test {
         total_written: usize,
         total_read: usize,
         failures: Vec<usize>,
+        bad_blocks: Vec<u64>,
     }
 
     impl InMemoryStorage {
@@ -440,6 +488,7 @@ mod test {
                 total_written: 0,
                 total_read: 0,
                 failures: Vec::new(),
+                bad_blocks: Vec::new(),
             }
         }
 
@@ -448,14 +497,31 @@ mod test {
             self.failures.sort();
         }
 
-        fn check_and_fail(&mut self, amount_read: usize, amount_written: usize) -> Result<()> {
+        fn fail_at(&mut self, pos: u64) -> () {
+            self.bad_blocks.push(pos);
+            self.bad_blocks.sort();
+        }
+
+        fn check_for_traps(&mut self, read_bytes: usize, write_bytes: usize) -> Result<()> {
+            let block_start = self.file.position();
+            let block_end = block_start + write_bytes as u64;
+            let is_bad_block = self
+                .bad_blocks
+                .iter()
+                .find(|b| block_start <= **b && block_end > **b)
+                .is_some();
+
+            if is_bad_block {
+                return Err(anyhow!("Mocked IO failure: bad block"));
+            }
+
             let old_total = self.total_read + self.total_written;
 
-            self.total_read += amount_read;
-            self.total_written += amount_written;
+            self.total_read += read_bytes;
+            self.total_written += write_bytes;
 
             match self.failures.iter().find(|x| **x >= old_total) {
-                Some(v) if old_total + amount_read + amount_written > *v => {
+                Some(v) if old_total + read_bytes + write_bytes > *v => {
                     Err(anyhow!("Mocked IO failure"))
                 }
                 _ => Ok(()),
@@ -475,12 +541,12 @@ mod test {
         }
 
         fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-            self.check_and_fail(buffer.len(), 0)?;
+            self.check_for_traps(buffer.len(), 0)?;
             self.file.read(buffer).context("unexpected")
         }
 
         fn write(&mut self, data: &[u8]) -> Result<()> {
-            self.check_and_fail(0, data.len())?;
+            self.check_for_traps(0, data.len())?;
             self.file.write_all(data).context("unexpected")
         }
 
