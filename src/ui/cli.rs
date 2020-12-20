@@ -90,6 +90,11 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     pb.set_position(position);
                 }
             }
+            WipeEvent::MarkBlockAsBad(block) => {
+                if let Some(pb) = &self.pb {
+                    pb.println(format!("Unable to write block at {}. Skipping.", block));
+                }
+            }
             WipeEvent::StageCompleted(result) => {
                 if let Some(pb) = &self.pb {
                     match result {

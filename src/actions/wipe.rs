@@ -1,6 +1,9 @@
+use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
 use crate::sanitization::mem::*;
 use crate::sanitization::*;
 use crate::storage::StorageAccess;
+use std::borrow::Borrow;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[derive(Debug)]
@@ -24,6 +27,7 @@ pub struct WipeState {
     pub at_verification: bool,
     pub position: u64,
     pub retries_left: u32,
+    pub bad_blocks: Rc<RefCell<dyn BlockMarker>>,
 }
 
 impl Default for WipeState {
@@ -33,6 +37,7 @@ impl Default for WipeState {
             at_verification: false,
             position: 0,
             retries_left: 0,
+            bad_blocks: Rc::new(RefCell::new(RoaringBlockMarker::new())),
         }
     }
 }
@@ -54,6 +59,7 @@ pub enum WipeEvent {
     Started,
     StageStarted,
     Progress(u64),
+    MarkBlockAsBad(u64),
     StageCompleted(Option<Rc<anyhow::Error>>),
     Retrying,
     Aborted,
@@ -144,26 +150,61 @@ fn fill(
     let mut stream = stage.stream(task.total_size, task.block_size, state.position);
 
     frontend.handle(task, state, WipeEvent::StageStarted);
+    frontend.handle(task, state, WipeEvent::Progress(state.position));
 
-    if let Err(err) = access.seek(state.position) {
-        let err_rc = Rc::from(err);
-        frontend.handle(
-            task,
-            state,
-            WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
-        );
-        return Some(Rc::clone(&err_rc));
+    loop {
+        if let Err(err) = access.seek(state.position) {
+            match underlying_io_error_kind(&err) {
+                Some(_) => {
+                    //todo: figure out possible error kinds for bad blocks
+                    state
+                        .bad_blocks
+                        .borrow_mut()
+                        .mark((state.position / task.block_size as u64) as u32); //todo: make safe
+                    frontend.handle(task, state, WipeEvent::MarkBlockAsBad(state.position));
+                    state.position += task.block_size as u64;
+                    frontend.handle(task, state, WipeEvent::Progress(state.position));
+                    continue;
+                }
+                _ => {
+                    let err_rc = Rc::from(err);
+                    frontend.handle(
+                        task,
+                        state,
+                        WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
+                    );
+                    return Some(Rc::clone(&err_rc));
+                }
+            }
+        }
+        break;
     }
 
     while let Some(chunk) = stream.next() {
         if let Err(err) = access.write(chunk) {
-            let err_rc = Rc::from(err);
-            frontend.handle(
-                task,
-                state,
-                WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
-            );
-            return Some(Rc::clone(&err_rc));
+            match underlying_io_error_kind(&err) {
+                Some(_) => {
+                    //todo: figure out possible error kinds for bad blocks
+                    state
+                        .bad_blocks
+                        .borrow_mut()
+                        .mark((state.position / task.block_size as u64) as u32); //todo: make safe
+                    frontend.handle(task, state, WipeEvent::MarkBlockAsBad(state.position));
+                    state.position += task.block_size as u64;
+                    access.seek(state.position); //todo: handle errors
+                    frontend.handle(task, state, WipeEvent::Progress(state.position));
+                    continue;
+                }
+                _ => {
+                    let err_rc = Rc::from(err);
+                    frontend.handle(
+                        task,
+                        state,
+                        WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
+                    );
+                    return Some(Rc::clone(&err_rc));
+                }
+            }
         }
 
         state.position += chunk.len() as u64;
@@ -193,6 +234,7 @@ fn verify(
     frontend: &mut dyn WipeEventReceiver,
 ) -> Option<Rc<anyhow::Error>> {
     frontend.handle(task, state, WipeEvent::StageStarted);
+    frontend.handle(task, state, WipeEvent::Progress(state.position));
 
     if let Err(err) = access.seek(state.position) {
         let err_rc = Rc::from(err);
@@ -209,6 +251,17 @@ fn verify(
     let buf = AlignedBuffer::new(task.block_size, task.block_size);
 
     while let Some(chunk) = stream.next() {
+        if state
+            .bad_blocks
+            .borrow_mut() //todo: workaround to use immutable ref
+            .is_marked((state.position / task.block_size as u64) as u32)
+        {
+            state.position += task.block_size as u64;
+            access.seek(state.position); //todo: handle errors
+            frontend.handle(task, state, WipeEvent::Progress(state.position));
+            continue;
+        }
+
         let b = &mut buf.as_mut_slice()[..chunk.len()];
 
         if let Err(err) = access.read(b) {
@@ -240,12 +293,22 @@ fn verify(
     None
 }
 
+// taken directly from https://docs.rs/anyhow/1.0.9/anyhow/struct.Error.html#example
+pub fn underlying_io_error_kind(error: &anyhow::Error) -> Option<std::io::ErrorKind> {
+    for cause in error.chain() {
+        if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
+            return Some(io_error.kind());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use anyhow::{Context, Result};
     use assert_matches::*;
-    use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+    use std::io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write};
     use WipeEvent::*;
 
     #[test]
@@ -269,13 +332,15 @@ mod test {
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
@@ -312,7 +377,8 @@ mod test {
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, StageCompleted(Some(_)))));
         assert_matches!(e.next(), Some((_, Completed(Some(_)))));
@@ -347,22 +413,26 @@ mod test {
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, StageCompleted(Some(_)))));
         assert_matches!(e.next(), Some((_, Retrying)));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 32768);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 32768);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
@@ -394,22 +464,17 @@ mod test {
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, MarkBlockAsBad(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
-        assert_matches!(e.next(), Some((_, StageCompleted(Some(_)))));
-        assert_matches!(e.next(), Some((_, Retrying)));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 32768);
-        assert_matches!(e.next(), Some((_, Progress(65536))));
-        assert_matches!(e.next(), Some((_, Progress(98304))));
-        assert_matches!(e.next(), Some((_, Progress(100000))));
-        assert_matches!(e.next(), Some((_, StageCompleted(None))));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 32768);
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
@@ -441,13 +506,15 @@ mod test {
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
-        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification && s.position == 0);
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, StageCompleted(Some(_)))));
         assert_matches!(e.next(), Some((_, Completed(Some(_)))));
@@ -467,6 +534,7 @@ mod test {
 
     impl WipeEventReceiver for StubReceiver {
         fn handle(&mut self, _task: &WipeTask, state: &WipeState, event: WipeEvent) -> () {
+            println!("{:?}", event);
             self.collected.push((state.clone(), event));
         }
     }
@@ -512,7 +580,9 @@ mod test {
                 .is_some();
 
             if is_bad_block {
-                return Err(anyhow!("Mocked IO failure: bad block"));
+                return Err(
+                    std::io::Error::new(ErrorKind::Other, "Mocked IO failure: bad block").into(),
+                );
             }
 
             let old_total = self.total_read + self.total_written;
