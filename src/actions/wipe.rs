@@ -4,7 +4,7 @@ use crate::sanitization::*;
 use crate::storage::StorageAccess;
 use anyhow::Result;
 use std::cell::RefCell;
-use std::io::Seek;
+//use std::io::Seek;
 use std::rc::Rc;
 
 #[derive(Debug)]
@@ -276,7 +276,10 @@ impl WipeRun<'_> {
 
         while let Some(chunk) = stream.next() {
             if skip_next || !self.try_write(chunk)? {
+                self.state.position += chunk.len() as u64;
+                self.publish(WipeEvent::Progress(self.state.position));
                 skip_next = !self.try_seek()?;
+                continue;
             }
 
             self.state.position += chunk.len() as u64;
@@ -303,9 +306,9 @@ impl WipeRun<'_> {
 
         while let Some(chunk) = stream.next() {
             if self.is_at_bad_block() {
-                self.state.position += self.task.block_size as u64;
-                self.access.seek(self.state.position); //todo: handle errors
+                self.state.position += chunk.len() as u64;
                 self.publish(WipeEvent::Progress(self.state.position));
+                self.try_seek()?;
                 continue;
             }
 
