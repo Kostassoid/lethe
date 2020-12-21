@@ -115,6 +115,24 @@ impl StreamingIterator for SanitizationStream {
     }
 }
 
+// impl Seek for SanitizationStream {
+//     fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+//         let position = match pos {
+//             SeekFrom::Start(p) => p,
+//             SeekFrom::End(p) => self.state.total_size - p,
+//             SeekFrom::Current(p) => self.state.position + p as u64,
+//         };
+//         self.state.position = position;
+//         match self.kind {
+//             StreamKind::Fill => Ok(position),
+//             StreamKind::Random { ref mut gen } => {
+//                 gen.set_word_pos((position >> 2) as u128);
+//                 Ok(position)
+//             }
+//         }
+//     }
+// }
+
 #[cfg(test)]
 mod test {
     use super::*;

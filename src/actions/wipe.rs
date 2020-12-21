@@ -2,8 +2,9 @@ use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
 use crate::sanitization::mem::*;
 use crate::sanitization::*;
 use crate::storage::StorageAccess;
-use std::borrow::Borrow;
-use std::cell::{Cell, RefCell};
+use anyhow::Result;
+use std::cell::RefCell;
+use std::io::Seek;
 use std::rc::Rc;
 
 #[derive(Debug)]
@@ -28,6 +29,13 @@ pub struct WipeState {
     pub position: u64,
     pub retries_left: u32,
     pub bad_blocks: Rc<RefCell<dyn BlockMarker>>,
+}
+
+pub struct WipeRun<'a> {
+    pub access: &'a mut dyn StorageAccess,
+    pub task: &'a WipeTask,
+    pub state: &'a mut WipeState,
+    pub frontend: &'a mut dyn WipeEventReceiver,
 }
 
 impl Default for WipeState {
@@ -78,53 +86,168 @@ impl WipeTask {
         state: &mut WipeState,
         frontend: &mut dyn WipeEventReceiver,
     ) -> bool {
-        frontend.handle(&self, state, WipeEvent::Started);
+        WipeRun {
+            access,
+            task: &self,
+            state,
+            frontend,
+        }
+        .run()
+    }
+}
 
-        let stages = &self.scheme.stages;
+impl WipeRun<'_> {
+    fn publish(&mut self, event: WipeEvent) {
+        self.frontend.handle(self.task, self.state, event)
+    }
+
+    fn build_stream(&self, stage: &Stage) -> SanitizationStream {
+        stage.stream(
+            self.task.total_size,
+            self.task.block_size,
+            self.state.position,
+        )
+    }
+
+    fn at_the_end(&self) -> bool {
+        self.state.position >= self.task.total_size
+    }
+
+    fn is_at_bad_block(&self) -> bool {
+        self.state
+            .bad_blocks
+            .borrow_mut() //todo: workaround to use immutable ref
+            .is_marked((self.state.position / self.task.block_size as u64) as u32)
+    }
+
+    fn try_seek(&mut self) -> Result<bool> {
+        if self.is_at_bad_block() {
+            return Ok(false);
+        }
+
+        if let Err(err) = self.access.seek(self.state.position) {
+            return match underlying_io_error_kind(&err) {
+                Some(_) => {
+                    //todo: figure out possible error kinds for bad blocks
+                    self.state
+                        .bad_blocks
+                        .borrow_mut()
+                        .mark((self.state.position / self.task.block_size as u64) as u32); //todo: make safe
+                    self.publish(WipeEvent::MarkBlockAsBad(self.state.position));
+
+                    Ok(false)
+                }
+                _ => Err(err),
+            };
+        }
+
+        Ok(true)
+    }
+
+    fn try_write(&mut self, chunk: &[u8]) -> Result<bool> {
+        if self.is_at_bad_block() {
+            return Ok(false);
+        }
+
+        if let Err(err) = self.access.write(chunk) {
+            return match underlying_io_error_kind(&err) {
+                Some(_) => {
+                    //todo: figure out possible error kinds for bad blocks
+                    self.state
+                        .bad_blocks
+                        .borrow_mut()
+                        .mark((self.state.position / self.task.block_size as u64) as u32); //todo: make safe
+                    self.publish(WipeEvent::MarkBlockAsBad(self.state.position));
+                    Ok(false)
+                }
+                _ => Err(err),
+            };
+        }
+        Ok(true)
+    }
+
+    fn seek_to_the_next_safe_position(&mut self) -> Result<()> {
+        loop {
+            if self.at_the_end() {
+                return Ok(());
+            }
+
+            if self.is_at_bad_block() {
+                self.state.position += self.task.block_size as u64;
+                self.publish(WipeEvent::Progress(self.state.position));
+                continue;
+            }
+
+            if !self.try_seek()? {
+                self.state.position += self.task.block_size as u64;
+                self.publish(WipeEvent::Progress(self.state.position));
+                continue;
+            }
+
+            break;
+        }
+        Ok(())
+    }
+
+    fn run(&mut self) -> bool {
+        self.publish(WipeEvent::Started);
+
+        let stages = &self.task.scheme.stages;
 
         let mut wipe_error = None;
 
         for (i, stage) in stages.iter().enumerate() {
-            let have_to_verify = match self.verify {
+            let have_to_verify = match self.task.verify {
                 Verify::No => false,
                 Verify::Last if i + 1 == stages.len() => true,
                 Verify::All => true,
                 _ => false,
             };
 
-            state.stage = i;
-            state.position = 0;
-            state.at_verification = false;
+            self.state.stage = i;
+            self.state.position = 0;
+            self.state.at_verification = false;
 
             let stage_error = loop {
-                let watermark = state.position;
+                let watermark = self.state.position;
 
-                match fill(access, &self, state, stage, frontend) {
-                    Some(_) if state.retries_left > 0 => {
-                        state.retries_left -= 1;
-                        frontend.handle(&self, state, WipeEvent::Retrying);
+                self.publish(WipeEvent::StageStarted);
+                if let Err(err) = self.fill(stage) {
+                    let err_rc = Rc::from(err);
+                    self.publish(WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))));
+
+                    if self.state.retries_left > 0 {
+                        self.state.retries_left -= 1;
+                        self.publish(WipeEvent::Retrying);
                         continue;
                     }
-                    Some(err) => break Some(err),
-                    None => {}
-                };
+
+                    break Some(err_rc);
+                }
+                self.publish(WipeEvent::StageCompleted(None));
 
                 if !have_to_verify {
                     break None;
                 }
 
-                state.position = watermark;
-                state.at_verification = true;
+                self.state.position = watermark;
+                self.state.at_verification = true;
 
-                match verify(access, &self, state, stage, frontend) {
-                    Some(_) if state.retries_left > 0 => {
-                        state.retries_left -= 1;
-                        state.at_verification = false;
-                        frontend.handle(&self, state, WipeEvent::Retrying);
+                self.publish(WipeEvent::StageStarted);
+                if let Err(err) = self.verify(stage) {
+                    let err_rc = Rc::from(err);
+                    self.publish(WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))));
+
+                    if self.state.retries_left > 0 {
+                        self.state.retries_left -= 1;
+                        self.state.at_verification = false;
+                        self.publish(WipeEvent::Retrying);
+                        continue;
                     }
-                    Some(err) => break Some(err),
-                    None => break None,
+                    break Some(err_rc);
                 }
+                self.publish(WipeEvent::StageCompleted(None));
+                break None;
             };
 
             if stage_error.is_some() {
@@ -134,163 +257,72 @@ impl WipeTask {
         }
 
         let result = wipe_error.is_none();
-        frontend.handle(&self, state, WipeEvent::Completed(wipe_error));
+        self.publish(WipeEvent::Completed(wipe_error));
 
         result
     }
-}
 
-fn fill(
-    access: &mut dyn StorageAccess,
-    task: &WipeTask,
-    state: &mut WipeState,
-    stage: &Stage,
-    frontend: &mut dyn WipeEventReceiver,
-) -> Option<Rc<anyhow::Error>> {
-    let mut stream = stage.stream(task.total_size, task.block_size, state.position);
+    fn fill(&mut self, stage: &Stage) -> Result<()> {
+        self.publish(WipeEvent::Progress(self.state.position));
 
-    frontend.handle(task, state, WipeEvent::StageStarted);
-    frontend.handle(task, state, WipeEvent::Progress(state.position));
+        self.seek_to_the_next_safe_position()?;
 
-    loop {
-        if let Err(err) = access.seek(state.position) {
-            match underlying_io_error_kind(&err) {
-                Some(_) => {
-                    //todo: figure out possible error kinds for bad blocks
-                    state
-                        .bad_blocks
-                        .borrow_mut()
-                        .mark((state.position / task.block_size as u64) as u32); //todo: make safe
-                    frontend.handle(task, state, WipeEvent::MarkBlockAsBad(state.position));
-                    state.position += task.block_size as u64;
-                    frontend.handle(task, state, WipeEvent::Progress(state.position));
-                    continue;
-                }
-                _ => {
-                    let err_rc = Rc::from(err);
-                    frontend.handle(
-                        task,
-                        state,
-                        WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
-                    );
-                    return Some(Rc::clone(&err_rc));
-                }
+        if self.at_the_end() {
+            return Ok(());
+        }
+
+        let mut stream = self.build_stream(stage);
+        let mut skip_next = false;
+
+        while let Some(chunk) = stream.next() {
+            if skip_next || !self.try_write(chunk)? {
+                skip_next = !self.try_seek()?;
             }
+
+            self.state.position += chunk.len() as u64;
+            self.publish(WipeEvent::Progress(self.state.position));
         }
-        break;
+
+        self.access.flush()?;
+
+        Ok(())
     }
 
-    while let Some(chunk) = stream.next() {
-        if let Err(err) = access.write(chunk) {
-            match underlying_io_error_kind(&err) {
-                Some(_) => {
-                    //todo: figure out possible error kinds for bad blocks
-                    state
-                        .bad_blocks
-                        .borrow_mut()
-                        .mark((state.position / task.block_size as u64) as u32); //todo: make safe
-                    frontend.handle(task, state, WipeEvent::MarkBlockAsBad(state.position));
-                    state.position += task.block_size as u64;
-                    access.seek(state.position); //todo: handle errors
-                    frontend.handle(task, state, WipeEvent::Progress(state.position));
-                    continue;
-                }
-                _ => {
-                    let err_rc = Rc::from(err);
-                    frontend.handle(
-                        task,
-                        state,
-                        WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
-                    );
-                    return Some(Rc::clone(&err_rc));
-                }
+    fn verify(&mut self, stage: &Stage) -> Result<()> {
+        self.publish(WipeEvent::Progress(self.state.position));
+
+        self.seek_to_the_next_safe_position()?;
+
+        if self.at_the_end() {
+            return Ok(());
+        }
+
+        let mut stream = self.build_stream(stage);
+
+        let buf = AlignedBuffer::new(self.task.block_size, self.task.block_size);
+
+        while let Some(chunk) = stream.next() {
+            if self.is_at_bad_block() {
+                self.state.position += self.task.block_size as u64;
+                self.access.seek(self.state.position); //todo: handle errors
+                self.publish(WipeEvent::Progress(self.state.position));
+                continue;
             }
+
+            let b = &mut buf.as_mut_slice()[..chunk.len()];
+
+            self.access.read(b)?;
+
+            if b != chunk {
+                Err(anyhow!("Verification failed!"))?;
+            }
+
+            self.state.position += chunk.len() as u64;
+            self.publish(WipeEvent::Progress(self.state.position));
         }
 
-        state.position += chunk.len() as u64;
-        frontend.handle(task, state, WipeEvent::Progress(state.position));
+        Ok(())
     }
-
-    if let Err(err) = access.flush() {
-        let err_rc = Rc::from(err);
-        frontend.handle(
-            task,
-            state,
-            WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
-        );
-        return Some(Rc::clone(&err_rc));
-    }
-
-    frontend.handle(task, state, WipeEvent::StageCompleted(None));
-
-    None
-}
-
-fn verify(
-    access: &mut dyn StorageAccess,
-    task: &WipeTask,
-    state: &mut WipeState,
-    stage: &Stage,
-    frontend: &mut dyn WipeEventReceiver,
-) -> Option<Rc<anyhow::Error>> {
-    frontend.handle(task, state, WipeEvent::StageStarted);
-    frontend.handle(task, state, WipeEvent::Progress(state.position));
-
-    if let Err(err) = access.seek(state.position) {
-        let err_rc = Rc::from(err);
-        frontend.handle(
-            task,
-            state,
-            WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
-        );
-        return Some(Rc::clone(&err_rc));
-    }
-
-    let mut stream = stage.stream(task.total_size, task.block_size, state.position);
-
-    let buf = AlignedBuffer::new(task.block_size, task.block_size);
-
-    while let Some(chunk) = stream.next() {
-        if state
-            .bad_blocks
-            .borrow_mut() //todo: workaround to use immutable ref
-            .is_marked((state.position / task.block_size as u64) as u32)
-        {
-            state.position += task.block_size as u64;
-            access.seek(state.position); //todo: handle errors
-            frontend.handle(task, state, WipeEvent::Progress(state.position));
-            continue;
-        }
-
-        let b = &mut buf.as_mut_slice()[..chunk.len()];
-
-        if let Err(err) = access.read(b) {
-            let err_rc = Rc::from(err);
-            frontend.handle(
-                task,
-                state,
-                WipeEvent::StageCompleted(Some(Rc::clone(&err_rc))),
-            );
-            return Some(Rc::clone(&err_rc));
-        }
-
-        if b != chunk {
-            let error = Rc::from(anyhow!("Verification failed!"));
-            frontend.handle(
-                task,
-                state,
-                WipeEvent::StageCompleted(Some(Rc::clone(&error))),
-            );
-            return Some(Rc::clone(&error));
-        }
-
-        state.position += chunk.len() as u64;
-        frontend.handle(task, state, WipeEvent::Progress(state.position));
-    }
-
-    frontend.handle(task, state, WipeEvent::StageCompleted(None));
-
-    None
 }
 
 // taken directly from https://docs.rs/anyhow/1.0.9/anyhow/struct.Error.html#example
