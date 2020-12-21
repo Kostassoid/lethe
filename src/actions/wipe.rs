@@ -109,6 +109,14 @@ impl WipeRun<'_> {
         )
     }
 
+    fn advance(&mut self, bytes: usize) {
+        self.state.position += bytes as u64;
+        if self.state.position > self.task.total_size {
+            self.state.position = self.task.total_size
+        }
+        self.publish(WipeEvent::Progress(self.state.position));
+    }
+
     fn at_the_end(&self) -> bool {
         self.state.position >= self.task.total_size
     }
@@ -173,14 +181,12 @@ impl WipeRun<'_> {
             }
 
             if self.is_at_bad_block() {
-                self.state.position += self.task.block_size as u64;
-                self.publish(WipeEvent::Progress(self.state.position));
+                self.advance(self.task.block_size);
                 continue;
             }
 
             if !self.try_seek()? {
-                self.state.position += self.task.block_size as u64;
-                self.publish(WipeEvent::Progress(self.state.position));
+                self.advance(self.task.block_size);
                 continue;
             }
 
@@ -276,14 +282,12 @@ impl WipeRun<'_> {
 
         while let Some(chunk) = stream.next() {
             if skip_next || !self.try_write(chunk)? {
-                self.state.position += chunk.len() as u64;
-                self.publish(WipeEvent::Progress(self.state.position));
+                self.advance(chunk.len());
                 skip_next = !self.try_seek()?;
                 continue;
             }
 
-            self.state.position += chunk.len() as u64;
-            self.publish(WipeEvent::Progress(self.state.position));
+            self.advance(chunk.len());
         }
 
         self.access.flush()?;
@@ -306,8 +310,7 @@ impl WipeRun<'_> {
 
         while let Some(chunk) = stream.next() {
             if self.is_at_bad_block() {
-                self.state.position += chunk.len() as u64;
-                self.publish(WipeEvent::Progress(self.state.position));
+                self.advance(chunk.len());
                 self.try_seek()?;
                 continue;
             }
@@ -320,8 +323,7 @@ impl WipeRun<'_> {
                 Err(anyhow!("Verification failed!"))?;
             }
 
-            self.state.position += chunk.len() as u64;
-            self.publish(WipeEvent::Progress(self.state.position));
+            self.advance(chunk.len());
         }
 
         Ok(())
@@ -505,6 +507,98 @@ mod test {
         assert_matches!(e.next(), Some((_, MarkBlockAsBad(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((_, Completed(None))));
+    }
+
+    #[test]
+    fn test_wiping_skip_bad_blocks_at_beginning() {
+        let schemes = SchemeRepo::default();
+        let scheme = schemes.find("random").unwrap();
+        let mut storage = InMemoryStorage::new(100000);
+        let block_size = 32768;
+        let mut receiver = StubReceiver::new();
+
+        storage.fail_at(0);
+        storage.fail_at(32768);
+
+        let task = WipeTask::new(
+            scheme.clone(),
+            Verify::Last,
+            storage.size as u64,
+            block_size,
+        );
+        let mut state = WipeState::default();
+        state.retries_left = 8;
+        let result = task.run(&mut storage, &mut state, &mut receiver);
+
+        assert_eq!(result, true);
+
+        let mut e = receiver.collected.iter();
+        assert_matches!(e.next(), Some((_, Started)));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
+        assert_matches!(e.next(), Some((_, MarkBlockAsBad(0))));
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, MarkBlockAsBad(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((_, Completed(None))));
+    }
+
+    #[test]
+    fn test_wiping_handle_completely_corrupt_storage() {
+        let schemes = SchemeRepo::default();
+        let scheme = schemes.find("random").unwrap();
+        let mut storage = InMemoryStorage::new(100000);
+        let block_size = 32768;
+        let mut receiver = StubReceiver::new();
+
+        storage.fail_at(0);
+        storage.fail_at(32768);
+        storage.fail_at(65536);
+        storage.fail_at(98304);
+
+        let task = WipeTask::new(
+            scheme.clone(),
+            Verify::Last,
+            storage.size as u64,
+            block_size,
+        );
+        let mut state = WipeState::default();
+        state.retries_left = 8;
+        let result = task.run(&mut storage, &mut state, &mut receiver);
+
+        assert_eq!(result, true);
+
+        let mut e = receiver.collected.iter();
+        assert_matches!(e.next(), Some((_, Started)));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
+        assert_matches!(e.next(), Some((_, MarkBlockAsBad(0))));
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, MarkBlockAsBad(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, MarkBlockAsBad(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, MarkBlockAsBad(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
         assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
