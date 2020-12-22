@@ -191,7 +191,7 @@ fn main() -> Result<()> {
                 verification,
                 device.details().size,
                 block_size,
-            );
+            )?;
 
             let mut state = WipeState::default();
             state.retries_left = retries;

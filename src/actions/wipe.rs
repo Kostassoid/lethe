@@ -4,7 +4,6 @@ use crate::sanitization::*;
 use crate::storage::StorageAccess;
 use anyhow::Result;
 use std::cell::RefCell;
-//use std::io::Seek;
 use std::rc::Rc;
 
 #[derive(Debug)]
@@ -51,13 +50,18 @@ impl Default for WipeState {
 }
 
 impl WipeTask {
-    pub fn new(scheme: Scheme, verify: Verify, total_size: u64, block_size: usize) -> Self {
-        WipeTask {
+    pub fn new(scheme: Scheme, verify: Verify, total_size: u64, block_size: usize) -> Result<Self> {
+        if total_size / block_size as u64 > 1 << 32 {
+            Err(anyhow!(
+                "Number of blocks in this device is more than 2^32. Try using a bigger block size."
+            ))?;
+        }
+        Ok(WipeTask {
             scheme,
             verify,
             total_size,
             block_size,
-        }
+        })
     }
 }
 
@@ -121,11 +125,15 @@ impl WipeRun<'_> {
         self.state.position >= self.task.total_size
     }
 
+    fn current_block_number(&self) -> u32 {
+        (self.state.position / self.task.block_size as u64) as u32
+    }
+
     fn is_at_bad_block(&self) -> bool {
         self.state
             .bad_blocks
             .borrow_mut() //todo: workaround to use immutable ref
-            .is_marked((self.state.position / self.task.block_size as u64) as u32)
+            .is_marked(self.current_block_number())
     }
 
     fn try_seek(&mut self) -> Result<bool> {
@@ -140,7 +148,7 @@ impl WipeRun<'_> {
                     self.state
                         .bad_blocks
                         .borrow_mut()
-                        .mark((self.state.position / self.task.block_size as u64) as u32); //todo: make safe
+                        .mark(self.current_block_number());
                     self.publish(WipeEvent::MarkBlockAsBad(self.state.position));
 
                     Ok(false)
@@ -164,7 +172,7 @@ impl WipeRun<'_> {
                     self.state
                         .bad_blocks
                         .borrow_mut()
-                        .mark((self.state.position / self.task.block_size as u64) as u32); //todo: make safe
+                        .mark(self.current_block_number());
                     self.publish(WipeEvent::MarkBlockAsBad(self.state.position));
                     Ok(false)
                 }
@@ -349,6 +357,17 @@ mod test {
     use WipeEvent::*;
 
     #[test]
+    fn test_wipe_task_validation() {
+        let schemes = SchemeRepo::default();
+        let scheme = schemes.find("zero").unwrap();
+
+        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 32, 1).is_ok());
+        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 35, 8).is_ok());
+        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 33, 1).is_err());
+        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 36, 8).is_err());
+    }
+
+    #[test]
     fn test_wiping_happy_path() {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("zero").unwrap();
@@ -361,7 +380,8 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
-        );
+        )
+        .unwrap();
         let mut state = WipeState::default();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -406,7 +426,8 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
-        );
+        )
+        .unwrap();
         let mut state = WipeState::default();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -441,7 +462,8 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
-        );
+        )
+        .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
         let result = task.run(&mut storage, &mut state, &mut receiver);
@@ -492,7 +514,8 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
-        );
+        )
+        .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
         let result = task.run(&mut storage, &mut state, &mut receiver);
@@ -535,7 +558,8 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
-        );
+        )
+        .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
         let result = task.run(&mut storage, &mut state, &mut receiver);
@@ -581,7 +605,8 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
-        );
+        )
+        .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
         let result = task.run(&mut storage, &mut state, &mut receiver);
@@ -626,7 +651,8 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
-        );
+        )
+        .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 0;
         let result = task.run(&mut storage, &mut state, &mut receiver);
