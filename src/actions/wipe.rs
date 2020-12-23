@@ -136,6 +136,14 @@ impl WipeRun<'_> {
             .is_marked(self.current_block_number())
     }
 
+    fn mark_bad_block(&mut self) -> () {
+        self.state
+            .bad_blocks
+            .borrow_mut()
+            .mark(self.current_block_number());
+        self.publish(WipeEvent::MarkBlockAsBad(self.state.position));
+    }
+
     fn try_seek(&mut self) -> Result<bool> {
         if self.is_at_bad_block() {
             return Ok(false);
@@ -145,12 +153,7 @@ impl WipeRun<'_> {
             return match underlying_io_error_kind(&err) {
                 Some(_) => {
                     //todo: figure out possible error kinds for bad blocks
-                    self.state
-                        .bad_blocks
-                        .borrow_mut()
-                        .mark(self.current_block_number());
-                    self.publish(WipeEvent::MarkBlockAsBad(self.state.position));
-
+                    self.mark_bad_block();
                     Ok(false)
                 }
                 _ => Err(err),
@@ -169,11 +172,7 @@ impl WipeRun<'_> {
             return match underlying_io_error_kind(&err) {
                 Some(_) => {
                     //todo: figure out possible error kinds for bad blocks
-                    self.state
-                        .bad_blocks
-                        .borrow_mut()
-                        .mark(self.current_block_number());
-                    self.publish(WipeEvent::MarkBlockAsBad(self.state.position));
+                    self.mark_bad_block();
                     Ok(false)
                 }
                 _ => Err(err),
@@ -385,7 +384,7 @@ mod test {
         let mut state = WipeState::default();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
-        assert_eq!(result, true);
+        assert!(result);
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
@@ -431,7 +430,7 @@ mod test {
         let mut state = WipeState::default();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
-        assert_eq!(result, false);
+        assert!(!result);
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
@@ -468,7 +467,7 @@ mod test {
         state.retries_left = 8;
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
-        assert_eq!(result, true);
+        assert!(result);
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
@@ -520,7 +519,7 @@ mod test {
         state.retries_left = 8;
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
-        assert_eq!(result, true);
+        assert!(result);
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
@@ -564,7 +563,7 @@ mod test {
         state.retries_left = 8;
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
-        assert_eq!(result, true);
+        assert!(result);
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
@@ -575,6 +574,49 @@ mod test {
         assert_matches!(e.next(), Some((_, MarkBlockAsBad(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((_, Completed(None))));
+    }
+
+    #[test]
+    fn test_wiping_skip_bad_blocks_at_ending() {
+        let schemes = SchemeRepo::default();
+        let scheme = schemes.find("random").unwrap();
+        let mut storage = InMemoryStorage::new(100000);
+        let block_size = 32768;
+        let mut receiver = StubReceiver::new();
+
+        storage.fail_at(99999);
+
+        let task = WipeTask::new(
+            scheme.clone(),
+            Verify::Last,
+            storage.size as u64,
+            block_size,
+        )
+        .unwrap();
+        let mut state = WipeState::default();
+        state.retries_left = 8;
+        let result = task.run(&mut storage, &mut state, &mut receiver);
+
+        assert!(result);
+
+        let mut e = receiver.collected.iter();
+        assert_matches!(e.next(), Some((_, Started)));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(0))));
+        assert_matches!(e.next(), Some((_, Progress(32768))));
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, MarkBlockAsBad(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
         assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
@@ -611,7 +653,7 @@ mod test {
         state.retries_left = 8;
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
-        assert_eq!(result, true);
+        assert!(result);
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
@@ -657,7 +699,7 @@ mod test {
         state.retries_left = 0;
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
-        assert_eq!(result, false);
+        assert!(!result);
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
