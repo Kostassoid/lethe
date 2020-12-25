@@ -14,7 +14,7 @@ The usual method for wiping a drive is filling it with randomly generated data o
 - Validates the data (reads back) to make sure all write commands were successful
 - Uses fast cryptographic random generator
 - Allows to override OS recommended block size for possibly faster operations
-- Tracks & skips bad blocks
+- Tracks & skips bad blocks (Experimental)
 
 ## Limitations
 

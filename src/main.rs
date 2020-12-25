@@ -102,7 +102,7 @@ fn main() -> Result<()> {
                         .long("retries")
                         .short("r")
                         .takes_value(true)
-                        .default_value("32")
+                        .default_value("8")
                         .help("Maximum number of retries"),
                 )
                 .arg(

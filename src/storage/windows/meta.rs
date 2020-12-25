@@ -1,9 +1,9 @@
 extern crate winapi;
 
 use std::slice;
-use std::{mem, ptr};
+use std::{io, mem, ptr};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use libc;
 use widestring::WideCString;
 use winapi::_core::ptr::null_mut;
@@ -15,7 +15,6 @@ use winapi::um::winnt::{PVOID, WCHAR};
 use winapi::um::{fileapi, ioapiset, winioctl};
 
 use windows::access::*;
-use windows::helpers::*;
 
 use crate::storage::*;
 
@@ -317,10 +316,7 @@ fn get_drive_layout(device: &DeviceFile) -> Result<&mut Layout> {
             std::ptr::null_mut(),
         ) == 0
         {
-            return Err(anyhow!(
-                "Unable to get device layout. Error: {}",
-                get_last_error_str()
-            ));
+            return Err(io::Error::last_os_error()).context("Unable to get device layout.");
         }
         Ok(layout)
     }
@@ -346,10 +342,7 @@ fn get_volume_extents(device: &DeviceFile) -> Result<Vec<VolumeExtent>> {
             std::ptr::null_mut(),
         ) == 0
         {
-            return Err(anyhow!(
-                "Unable to get volume extents. Error: {}",
-                get_last_error_str()
-            ));
+            return Err(io::Error::last_os_error()).context("Unable to get volume extents.");
         }
 
         let mut r: Vec<VolumeExtent> = Vec::new();
@@ -384,10 +377,7 @@ fn get_drive_geometry(device: &DeviceFile) -> Result<winioctl::DISK_GEOMETRY_EX>
             std::ptr::null_mut(),
         ) == 0
         {
-            return Err(anyhow!(
-                "Unable to get device geometry. Error: {}",
-                get_last_error_str()
-            ));
+            return Err(io::Error::last_os_error()).context("Unable to get device geometry.");
         }
         Ok(geometry)
     }
@@ -436,10 +426,7 @@ fn get_device_number(device: &DeviceFile) -> Result<DWORD> {
             null_mut(),
         ) == 0
         {
-            return Err(anyhow!(
-                "Unable to get device number. Error: {}",
-                get_last_error_str()
-            ));
+            return Err(io::Error::last_os_error()).context("Unable to get device number.");
         }
     }
 
@@ -468,11 +455,8 @@ fn get_volume_path_from_mount_point(path: &str) -> Result<String> {
             MAX_PATH as DWORD,
         ) == 0
         {
-            return Err(anyhow!(
-                "Unable to get volume path from {}. Error: {}",
-                path,
-                get_last_error_str()
-            ));
+            return Err(io::Error::last_os_error())
+                .context(format!("Unable to get volume path from {}.", path));
         }
     }
 
@@ -517,10 +501,7 @@ fn get_alignment_descriptor(device: &DeviceFile) -> Result<STORAGE_ACCESS_ALIGNM
             ptr::null_mut(),
         ) == 0
         {
-            return Err(anyhow!(
-                "Unable to get alignment info. Error: {}",
-                get_last_error_str()
-            ));
+            return Err(io::Error::last_os_error()).context("Unable to get alignment info.");
         }
     }
 

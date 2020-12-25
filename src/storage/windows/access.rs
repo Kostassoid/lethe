@@ -1,13 +1,12 @@
-use super::helpers::*;
-use super::winapi::um::ioapiset::DeviceIoControl;
 use crate::storage::StorageAccess;
-use anyhow::Result;
-use std::{mem, ptr};
+use anyhow::{Context, Result};
+use std::{io, mem, ptr};
 use widestring::WideCString;
 use winapi::_core::ptr::null_mut;
 use winapi::shared::minwindef::{DWORD, LPVOID};
 use winapi::um::fileapi::*;
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+use winapi::um::ioapiset::DeviceIoControl;
 use winapi::um::winbase::{
     FILE_BEGIN, FILE_CURRENT, FILE_FLAG_NO_BUFFERING, FILE_FLAG_SEQUENTIAL_SCAN,
     FILE_FLAG_WRITE_THROUGH,
@@ -53,11 +52,8 @@ impl DeviceFile {
             );
 
             if handle == INVALID_HANDLE_VALUE {
-                return Err(anyhow!(
-                    "Cannot open device {}. Error: {}",
-                    path,
-                    get_last_error_str()
-                ));
+                return Err(io::Error::last_os_error())
+                    .context(format!("Cannot open device {}.", path));
             }
 
             let mut is_locked = false;
@@ -74,11 +70,8 @@ impl DeviceFile {
                     null_mut(),
                 ) == 0
                 {
-                    return Err(anyhow!(
-                        "Cannot lock device {}. Error: {}",
-                        path,
-                        get_last_error_str()
-                    ));
+                    return Err(io::Error::last_os_error())
+                        .context(format!("Cannot lock device {}.", path));
                 }
                 is_locked = true;
             }
@@ -122,10 +115,7 @@ impl StorageAccess for DeviceFile {
             let distance = mem::zeroed();
             let mut current: LARGE_INTEGER = mem::zeroed();
             if SetFilePointerEx(self.handle, distance, &mut current, FILE_CURRENT) == 0 {
-                return Err(anyhow!(
-                    "Unable to get device position. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(io::Error::last_os_error()).context("Unable to get device position.");
             };
             Ok(*current.QuadPart() as u64)
         }
@@ -138,10 +128,7 @@ impl StorageAccess for DeviceFile {
 
             let mut new_position: LARGE_INTEGER = mem::zeroed();
             if SetFilePointerEx(self.handle, distance, &mut new_position, FILE_BEGIN) == 0 {
-                return Err(anyhow!(
-                    "Unable to set device position. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(io::Error::last_os_error()).context("Unable to set device position.");
             };
             Ok(*new_position.QuadPart() as u64)
         }
@@ -158,10 +145,7 @@ impl StorageAccess for DeviceFile {
                 ptr::null_mut(),
             ) == 0
             {
-                return Err(anyhow!(
-                    "Unable to read from the device. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(io::Error::last_os_error()).context("Unable to read from the device.");
             };
             Ok(read as usize)
         }
@@ -178,10 +162,7 @@ impl StorageAccess for DeviceFile {
                 ptr::null_mut(),
             ) == 0
             {
-                return Err(anyhow!(
-                    "Unable to write to the device. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(io::Error::last_os_error()).context("Unable to write to the device.");
             };
             Ok(())
         }
@@ -190,10 +171,8 @@ impl StorageAccess for DeviceFile {
     fn flush(&mut self) -> Result<()> {
         unsafe {
             if FlushFileBuffers(self.handle) == 0 {
-                return Err(anyhow!(
-                    "Unable to flush device write buffers. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(io::Error::last_os_error())
+                    .context("Unable to flush device write buffers.");
             }
             Ok(())
         }

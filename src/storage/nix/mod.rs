@@ -9,9 +9,11 @@ use std::io::SeekFrom;
 use std::os::unix::io::*;
 use std::path::{Path, PathBuf};
 
-#[cfg_attr(target_os = "linux", path = "linux.rs")]
-#[cfg_attr(target_os = "macos", path = "macos.rs")]
-mod os;
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 enum FileType {
     File,
@@ -133,10 +135,6 @@ impl StorageRef for FileRef {
 }
 
 impl System {
-    pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
-        os::get_storage_devices()
-    }
-
     pub fn access(storage_ref: &dyn StorageRef) -> Result<impl StorageAccess> {
         FileAccess::new(&storage_ref.id())
     }

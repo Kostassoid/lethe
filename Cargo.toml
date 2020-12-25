@@ -61,7 +61,6 @@ IOKit-sys = "0.1"
 [dev-dependencies]
 flate2 = "1.0"
 assert_matches = "1.3"
-#mockers = "0.21.0"
 
 [profile.release]
 opt-level = 3
