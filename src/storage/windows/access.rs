@@ -8,7 +8,10 @@ use winapi::_core::ptr::null_mut;
 use winapi::shared::minwindef::{DWORD, LPVOID};
 use winapi::um::fileapi::*;
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-use winapi::um::winbase::{FILE_BEGIN, FILE_CURRENT};
+use winapi::um::winbase::{
+    FILE_BEGIN, FILE_CURRENT, FILE_FLAG_NO_BUFFERING, FILE_FLAG_SEQUENTIAL_SCAN,
+    FILE_FLAG_WRITE_THROUGH,
+};
 use winapi::um::winioctl;
 use winapi::um::winnt::{
     FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE, HANDLE,
@@ -42,7 +45,10 @@ impl DeviceFile {
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 null_mut(),
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
+                FILE_ATTRIBUTE_NORMAL
+                    | FILE_FLAG_NO_BUFFERING
+                    | FILE_FLAG_WRITE_THROUGH
+                    | FILE_FLAG_SEQUENTIAL_SCAN,
                 null_mut(),
             );
 

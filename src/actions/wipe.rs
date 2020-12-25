@@ -66,7 +66,6 @@ impl WipeTask {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum WipeEvent {
     Started,
     StageStarted,
@@ -74,7 +73,6 @@ pub enum WipeEvent {
     MarkBlockAsBad(u64),
     StageCompleted(Option<Rc<anyhow::Error>>),
     Retrying,
-    Aborted,
     Completed(Option<Rc<anyhow::Error>>),
     Fatal(Rc<anyhow::Error>),
 }
@@ -132,7 +130,7 @@ impl WipeRun<'_> {
     fn is_at_bad_block(&self) -> bool {
         self.state
             .bad_blocks
-            .borrow_mut() //todo: workaround to use immutable ref
+            .borrow()
             .is_marked(self.current_block_number())
     }
 
@@ -184,15 +182,10 @@ impl WipeRun<'_> {
     fn seek_to_the_next_safe_position(&mut self) -> Result<()> {
         loop {
             if self.at_the_end() {
-                return Ok(());
+                break;
             }
 
-            if self.is_at_bad_block() {
-                self.advance(self.task.block_size);
-                continue;
-            }
-
-            if !self.try_seek()? {
+            if self.is_at_bad_block() || !self.try_seek()? {
                 self.advance(self.task.block_size);
                 continue;
             }

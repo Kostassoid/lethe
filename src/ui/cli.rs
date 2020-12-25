@@ -120,15 +120,21 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 );
                 sleep(std::time::Duration::from_secs(RETRY_BACKOFF_SECONDS as u64));
             }
-            WipeEvent::Aborted => {
-                eprintln!("❌ Aborted.");
-            }
             WipeEvent::Completed(result) => match result {
                 None => {
                     if let Some(s) = self.session_started {
                         let elapsed = HumanDuration(s.elapsed());
                         println!("✔ Total time: {}", elapsed);
                     }
+                    let total_blocks = task.total_size / task.block_size as u64;
+                    let bad_blocks = state.bad_blocks.borrow_mut().total_marked();
+                    println!("Total device size:\t{}", HumanBytes(task.total_size));
+                    println!("Total blocks:\t{}", total_blocks);
+                    println!(
+                        "Skipped blocks:\t{} ({}%)",
+                        bad_blocks,
+                        bad_blocks * 100 / total_blocks as u32,
+                    );
                 }
                 Some(e) => {
                     eprintln!("❌ Unexpected error: {:#}", e);

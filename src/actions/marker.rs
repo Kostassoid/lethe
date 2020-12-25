@@ -5,6 +5,7 @@ use winapi::_core::fmt::Formatter;
 pub trait BlockMarker {
     fn mark(&mut self, position: u32);
     fn is_marked(&self, position: u32) -> bool;
+    fn total_marked(&self) -> u32;
 }
 
 impl Debug for dyn BlockMarker {
@@ -32,5 +33,9 @@ impl BlockMarker for RoaringBlockMarker {
 
     fn is_marked(&self, position: u32) -> bool {
         self.store.contains(position)
+    }
+
+    fn total_marked(&self) -> u32 {
+        self.store.len() as u32
     }
 }

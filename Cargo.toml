@@ -26,8 +26,6 @@ console = "0.7.7"
 prettytable-rs = "^0.8"
 streaming-iterator = "0.1.4"
 regex = "1"
-ctrlc = { version = "3.0", features = ["termination"] }
-#mockers_derive = "0.21.0"
 
 [target.'cfg(unix)'.dependencies]
 sysfs-class = "0.1.3"

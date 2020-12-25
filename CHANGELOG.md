@@ -4,7 +4,11 @@
 
 ### Added
 
-* Ignoring bad blocks and other small IO issues.
+* Experimental support for detecting/skipping bad blocks.
+
+### Changed
+
+* Increased default block size to 1 MB.
 
 ## [v0.4.0] - 2020-06-10
 

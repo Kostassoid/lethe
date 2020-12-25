@@ -32,9 +32,6 @@ use ui::*;
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 fn main() -> Result<()> {
-    // ctrlc::set_handler(move || {
-    // }).expect("Error setting Ctrl-C handler");
-
     let schemes = SchemeRepo::default();
     let scheme_keys: Vec<_> = schemes.all().keys().cloned().collect();
 
@@ -97,7 +94,7 @@ fn main() -> Result<()> {
                         .long("blocksize")
                         .short("b")
                         .takes_value(true)
-                        .default_value("64k")
+                        .default_value("1m")
                         .help("Block size"),
                 )
                 .arg(
@@ -138,13 +135,7 @@ fn main() -> Result<()> {
         ("list", _) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
-            t.set_titles(row![
-                "Device ID",
-                "Size",
-                "Type",
-                "Mount Point",
-                "Block Size"
-            ]);
+            t.set_titles(row!["Device ID", "Size", "Type", "Mount Point",]);
             for x in storage_devices {
                 t.add_row(row![
                     style(x.id()).bold(),
@@ -152,8 +143,7 @@ fn main() -> Result<()> {
                     x.details().storage_type,
                     (x.details().mount_point)
                         .as_ref()
-                        .unwrap_or(&"".to_string()),
-                    HumanBytes(x.details().block_size as u64)
+                        .unwrap_or(&"".to_string())
                 ]);
             }
             t.printstd();
