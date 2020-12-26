@@ -42,6 +42,18 @@ fn resolve_storage_size(file_type: &FileType, stat: &libc::stat, fd: RawFd) -> u
     }
 }
 
+impl StorageError {
+    fn from(err: std::io::Error) -> StorageError {
+        match err.raw_os_error() {
+            Some(c) => {
+                //todo: this
+                StorageError::BadBlock
+            }
+            _ => StorageError::Other(err),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct FileAccess {
     file: File,
@@ -58,6 +70,7 @@ impl StorageAccess for FileAccess {
     fn position(&mut self) -> Result<u64> {
         self.file
             .seek(SeekFrom::Current(0))
+            .map_err(|e| StorageError::from(e)) //todo: this
             .context("Seek failed or not supported for the storage")
     }
 
