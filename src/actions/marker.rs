@@ -1,6 +1,5 @@
 use roaring::RoaringBitmap;
-use std::fmt::Debug;
-use winapi::_core::fmt::Formatter;
+use std::fmt::{Debug, Formatter};
 
 pub trait BlockMarker {
     fn mark(&mut self, position: u32);
