@@ -7,6 +7,15 @@ mod nix;
 mod windows;
 
 use anyhow::Result;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum StorageError {
+    #[error("bad block")]
+    BadBlock,
+    #[error("other i/o error")]
+    Other(#[from] std::io::Error),
+}
 
 pub trait StorageAccess {
     fn position(&mut self) -> Result<u64>;

@@ -48,19 +48,31 @@ impl Tree {
     }
 }
 
-struct IdMapper {
+pub struct IdShortcuts {
     inner: HashMap<String, String>,
 }
 
-impl IdMapper {
-    pub fn from(ids: HashSet<&str>) -> IdMapper {
-        IdMapper {
+impl IdShortcuts {
+    pub fn from(ids: HashSet<&str>) -> IdShortcuts {
+        IdShortcuts {
             inner: Self::build_map_from(ids.into_iter().collect()),
         }
     }
 
+    #[allow(dead_code)]
     pub fn keys(&self) -> Vec<&str> {
         self.inner.keys().map(|s| s.as_ref()).collect()
+    }
+
+    pub fn get_short(&self, key: &str) -> Option<&String> {
+        self.inner.iter().find(|kv| kv.1 == key).map(|kv| kv.0)
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.inner
+            .iter()
+            .find(|kv| kv.0 == key || kv.1 == key)
+            .map(|kv| kv.1)
     }
 
     fn build_map_from(ids: Vec<&str>) -> HashMap<String, String> {
@@ -101,7 +113,7 @@ mod test {
 
     #[test]
     fn test_no_intersection() {
-        let ids = IdMapper::from(HashSet::from_iter(
+        let ids = IdShortcuts::from(HashSet::from_iter(
             vec!["abc", "def", "ghi"].iter().cloned(),
         ));
 
@@ -112,7 +124,7 @@ mod test {
 
     #[test]
     fn test_last_part() {
-        let ids = IdMapper::from(HashSet::from_iter(
+        let ids = IdShortcuts::from(HashSet::from_iter(
             vec!["abc1", "abc2", "abc123"].iter().cloned(),
         ));
 
@@ -123,7 +135,7 @@ mod test {
 
     #[test]
     fn test_normal() {
-        let ids = IdMapper::from(HashSet::from_iter(
+        let ids = IdShortcuts::from(HashSet::from_iter(
             vec!["abc", "acd", "abd", "bac", "bad"].iter().cloned(),
         ));
 
@@ -134,7 +146,7 @@ mod test {
 
     #[test]
     fn test_sub_prefixes() {
-        let ids = IdMapper::from(HashSet::from_iter(
+        let ids = IdShortcuts::from(HashSet::from_iter(
             vec!["abc", "abc1", "abc2", "abc23", "abc123"]
                 .iter()
                 .cloned(),
@@ -147,7 +159,7 @@ mod test {
 
     #[test]
     fn test_real_windows() {
-        let ids = IdMapper::from(HashSet::from_iter(
+        let ids = IdShortcuts::from(HashSet::from_iter(
             vec![
                 "\\Device\\Harddisk0\\Partition1",
                 "\\Device\\Harddisk0\\Partition2",
@@ -177,5 +189,30 @@ mod test {
             ),
             sorted
         );
+        assert_eq!("\\\\.\\PhysicalDrive2", ids.get("\\2").unwrap());
+        assert_eq!("\\Device\\Harddisk2\\Partition2", ids.get("D22").unwrap());
+    }
+
+    #[test]
+    fn test_real_nix() {
+        let ids = IdShortcuts::from(HashSet::from_iter(
+            vec![
+                "/dev/rdisk0s1",
+                "/dev/rdisk0s3",
+                "/dev/rdisk0s4",
+                "/dev/rdisk2",
+                "/dev/rdisk2s1",
+            ]
+            .iter()
+            .cloned(),
+        ));
+
+        let mut sorted = ids.keys();
+        sorted.sort();
+        assert_eq!(vec!("01", "03", "04", "2", "2s"), sorted);
+        assert_eq!("/dev/rdisk2", ids.get("2").unwrap());
+        assert_eq!("/dev/rdisk2", ids.get("/dev/rdisk2").unwrap());
+        assert_eq!("/dev/rdisk0s3", ids.get("03").unwrap());
+        assert_eq!("/dev/rdisk0s3", ids.get("/dev/rdisk0s3").unwrap());
     }
 }

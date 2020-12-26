@@ -129,16 +129,20 @@ fn main() -> Result<()> {
 
         std::process::exit(1);
     });
+
+    let ids = idshortcuts::IdShortcuts::from(storage_devices.iter().map(|r| r.id()).collect());
+
     let frontend = cli::ConsoleFrontend::new();
 
     match app.subcommand() {
         ("list", _) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
-            t.set_titles(row!["Device ID", "Size", "Type", "Mount Point",]);
+            t.set_titles(row!["Device ID", "Short ID", "Size", "Type", "Mount Point",]);
             for x in storage_devices {
                 t.add_row(row![
                     style(x.id()).bold(),
+                    style(ids.get_short(x.id()).unwrap_or(&"".to_owned())).bold(),
                     HumanBytes(x.details().size),
                     x.details().storage_type,
                     (x.details().mount_point)
@@ -149,7 +153,11 @@ fn main() -> Result<()> {
             t.printstd();
         }
         ("wipe", Some(cmd)) => {
-            let device_id = cmd.value_of("device").unwrap();
+            let device_id = cmd
+                .value_of("device")
+                .map(|id| ids.get(id))
+                .flatten()
+                .ok_or(anyhow!("Invalid device ID"))?;
             let scheme_id = cmd.value_of("scheme").unwrap();
             let verification = match cmd.value_of("verify").unwrap() {
                 "no" => Verify::No,

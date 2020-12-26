@@ -1,7 +1,7 @@
 use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
 use crate::sanitization::mem::*;
 use crate::sanitization::*;
-use crate::storage::StorageAccess;
+use crate::storage::{StorageAccess, StorageError};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -148,9 +148,8 @@ impl WipeRun<'_> {
         }
 
         if let Err(err) = self.access.seek(self.state.position) {
-            return match underlying_io_error_kind(&err) {
-                Some(_) => {
-                    //todo: figure out possible error kinds for bad blocks
+            return match underlying_storage_error(&err) {
+                Some(StorageError::BadBlock) => {
                     self.mark_bad_block();
                     Ok(false)
                 }
@@ -167,9 +166,8 @@ impl WipeRun<'_> {
         }
 
         if let Err(err) = self.access.write(chunk) {
-            return match underlying_io_error_kind(&err) {
-                Some(_) => {
-                    //todo: figure out possible error kinds for bad blocks
+            return match underlying_storage_error(&err) {
+                Some(StorageError::BadBlock) => {
                     self.mark_bad_block();
                     Ok(false)
                 }
@@ -331,10 +329,11 @@ impl WipeRun<'_> {
 }
 
 // taken directly from https://docs.rs/anyhow/1.0.9/anyhow/struct.Error.html#example
-pub fn underlying_io_error_kind(error: &anyhow::Error) -> Option<std::io::ErrorKind> {
+pub fn underlying_storage_error(error: &anyhow::Error) -> Option<&StorageError> {
     for cause in error.chain() {
-        if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
-            return Some(io_error.kind());
+        if let Some(storage_error) = cause.downcast_ref::<StorageError>() {
+            println!("err: {:?}", storage_error);
+            return Some(storage_error);
         }
     }
     None
@@ -345,7 +344,7 @@ mod test {
     use super::*;
     use anyhow::{Context, Result};
     use assert_matches::*;
-    use std::io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write};
+    use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use WipeEvent::*;
 
     #[test]
@@ -770,9 +769,7 @@ mod test {
                 .is_some();
 
             if is_bad_block {
-                return Err(
-                    std::io::Error::new(ErrorKind::Other, "Mocked IO failure: bad block").into(),
-                );
+                return Err(StorageError::BadBlock.into());
             }
 
             let old_total = self.total_read + self.total_written;

@@ -16,6 +16,7 @@ travis-ci = { repository = "Kostassoid/lethe", branch = "master" }
 
 [dependencies]
 anyhow = "1.0"
+thiserror = "1.0"
 roaring = "0.6.2"
 libc = "^0.2"
 clap = "~2.33"

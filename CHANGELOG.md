@@ -5,6 +5,7 @@
 ### Added
 
 * Experimental support for detecting/skipping bad blocks.
+* Allow to use short derived Device IDs.
 
 ### Changed
 

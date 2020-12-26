@@ -1,4 +1,4 @@
-use crate::storage::StorageAccess;
+use crate::storage::{StorageAccess, StorageError};
 use anyhow::{Context, Result};
 use std::{io, mem, ptr};
 use widestring::WideCString;
@@ -81,6 +81,17 @@ impl DeviceFile {
     }
 }
 
+impl StorageError {
+    fn from(err: std::io::Error) -> StorageError {
+        match err.raw_os_error() {
+            Some(c) if c == 23 || c == 25 || c == 27 || c == 29 || c == 30 => {
+                StorageError::BadBlock
+            }
+            _ => StorageError::Other(err),
+        }
+    }
+}
+
 impl Drop for DeviceFile {
     fn drop(&mut self) {
         if self.handle != null_mut() {
@@ -115,7 +126,8 @@ impl StorageAccess for DeviceFile {
             let distance = mem::zeroed();
             let mut current: LARGE_INTEGER = mem::zeroed();
             if SetFilePointerEx(self.handle, distance, &mut current, FILE_CURRENT) == 0 {
-                return Err(io::Error::last_os_error()).context("Unable to get device position.");
+                return Err(StorageError::from(io::Error::last_os_error()))
+                    .context("Unable to get device position.");
             };
             Ok(*current.QuadPart() as u64)
         }
@@ -128,7 +140,8 @@ impl StorageAccess for DeviceFile {
 
             let mut new_position: LARGE_INTEGER = mem::zeroed();
             if SetFilePointerEx(self.handle, distance, &mut new_position, FILE_BEGIN) == 0 {
-                return Err(io::Error::last_os_error()).context("Unable to set device position.");
+                return Err(StorageError::from(io::Error::last_os_error()))
+                    .context("Unable to set device position.");
             };
             Ok(*new_position.QuadPart() as u64)
         }
@@ -145,7 +158,8 @@ impl StorageAccess for DeviceFile {
                 ptr::null_mut(),
             ) == 0
             {
-                return Err(io::Error::last_os_error()).context("Unable to read from the device.");
+                return Err(StorageError::from(io::Error::last_os_error()))
+                    .context("Unable to read from the device.");
             };
             Ok(read as usize)
         }
@@ -162,7 +176,8 @@ impl StorageAccess for DeviceFile {
                 ptr::null_mut(),
             ) == 0
             {
-                return Err(io::Error::last_os_error()).context("Unable to write to the device.");
+                return Err(StorageError::from(io::Error::last_os_error()))
+                    .context("Unable to write to the device.");
             };
             Ok(())
         }
@@ -171,7 +186,7 @@ impl StorageAccess for DeviceFile {
     fn flush(&mut self) -> Result<()> {
         unsafe {
             if FlushFileBuffers(self.handle) == 0 {
-                return Err(io::Error::last_os_error())
+                return Err(StorageError::from(io::Error::last_os_error()))
                     .context("Unable to flush device write buffers.");
             }
             Ok(())
