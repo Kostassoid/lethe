@@ -5,6 +5,9 @@ use std::{io, mem, ptr};
 use widestring::WideCString;
 use winapi::_core::ptr::null_mut;
 use winapi::shared::minwindef::{DWORD, LPVOID};
+use winapi::shared::winerror::{
+    ERROR_CRC, ERROR_READ_FAULT, ERROR_SECTOR_NOT_FOUND, ERROR_SEEK, ERROR_WRITE_FAULT,
+};
 use winapi::um::fileapi::*;
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::ioapiset::DeviceIoControl;
@@ -85,7 +88,13 @@ impl DeviceFile {
 impl StorageError {
     fn from(err: std::io::Error) -> StorageError {
         match err.raw_os_error() {
-            Some(c) if c == 23 || c == 25 || c == 27 || c == 29 || c == 30 => {
+            Some(c)
+                if c == ERROR_CRC as i32
+                    || c == ERROR_SEEK as i32
+                    || c == ERROR_SECTOR_NOT_FOUND as i32
+                    || c == ERROR_WRITE_FAULT as i32
+                    || c == ERROR_READ_FAULT as i32 =>
+            {
                 StorageError::BadBlock
             }
             _ => StorageError::Other(err),
@@ -110,7 +119,7 @@ impl Drop for DeviceFile {
                         null_mut(),
                     ) == 0
                     {
-                        //todo?
+                        //there doesn't seem to be a good way to recover
                     }
                 }
             }

@@ -3,6 +3,7 @@ use rand::SeedableRng;
 pub use streaming_iterator::StreamingIterator;
 
 use super::mem::*;
+use std::fmt::{Display, Formatter};
 
 const RANDOM_SEED_SIZE: usize = 32;
 type RandomGenerator = rand_chacha::ChaCha8Rng;
@@ -11,6 +12,15 @@ type RandomGenerator = rand_chacha::ChaCha8Rng;
 pub enum Stage {
     Fill { value: u8 },
     Random { seed: [u8; RANDOM_SEED_SIZE] },
+}
+
+impl Display for Stage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Stage::Fill { value } => f.write_str(&format!("fill with {:#04X}", value)),
+            Stage::Random { seed: _seed } => f.write_str("random fill"),
+        }
+    }
 }
 
 struct StreamState {
@@ -34,12 +44,16 @@ pub struct SanitizationStream {
 }
 
 impl Stage {
+    pub fn constant(value: u8) -> Stage {
+        Stage::Fill { value }
+    }
+
     pub fn zero() -> Stage {
-        Stage::Fill { value: 0x00 }
+        Self::constant(0)
     }
 
     pub fn one() -> Stage {
-        Stage::Fill { value: 0xff }
+        Self::constant(0xff)
     }
 
     pub fn random_with_seed(seed: [u8; RANDOM_SEED_SIZE]) -> Stage {

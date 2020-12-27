@@ -4,6 +4,7 @@ use crate::sanitization::*;
 use crate::storage::{StorageAccess, StorageError};
 use anyhow::Result;
 use std::cell::RefCell;
+use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
 #[derive(Debug)]
@@ -11,6 +12,16 @@ pub enum Verify {
     No,
     Last,
     All,
+}
+
+impl Display for Verify {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Verify::No => f.write_str("No"),
+            Verify::Last => f.write_str("Last stage only"),
+            Verify::All => f.write_str("After each stage"),
+        }
+    }
 }
 
 #[derive(Debug)]

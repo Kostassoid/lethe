@@ -1,11 +1,12 @@
 use std::io::ErrorKind;
 use std::time::Instant;
 
-use ::console::style;
 use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 
 use crate::actions::{WipeEvent, WipeEventReceiver, WipeState, WipeTask};
 use crate::stage::Stage;
+use prettytable::format::FormatBuilder;
+use prettytable::Table;
 use std::thread::sleep;
 
 const RETRY_BACKOFF_SECONDS: u32 = 3;
@@ -17,15 +18,9 @@ impl ConsoleFrontend {
         ConsoleFrontend {}
     }
 
-    pub fn wipe_session(
-        self,
-        device_id: &str,
-        scheme_id: &str,
-        auto_confirm: bool,
-    ) -> ConsoleWipeSession {
+    pub fn wipe_session(self, device_id: &str, auto_confirm: bool) -> ConsoleWipeSession {
         ConsoleWipeSession {
             device_id: String::from(device_id),
-            scheme_id: String::from(scheme_id),
             auto_confirm,
             pb: None,
             session_started: None,
@@ -36,7 +31,6 @@ impl ConsoleFrontend {
 
 pub struct ConsoleWipeSession {
     device_id: String,
-    scheme_id: String,
     auto_confirm: bool,
     pb: Option<ProgressBar>,
     session_started: Option<Instant>,
@@ -47,12 +41,16 @@ impl WipeEventReceiver for ConsoleWipeSession {
     fn handle(&mut self, task: &WipeTask, state: &WipeState, event: WipeEvent) -> () {
         match event {
             WipeEvent::Started => {
-                println!(
-                    "Wiping {} using scheme {} and block size {}.",
-                    style(&self.device_id).bold(),
-                    style(&self.scheme_id).bold(),
-                    style(HumanBytes(task.block_size as u64)).bold()
-                );
+                let mut t = Table::new();
+                let indent_table_format = FormatBuilder::new().padding(4, 1).build();
+                t.set_format(indent_table_format);
+                t.add_row(row!["Device", self.device_id]);
+                t.add_row(row!["Size", HumanBytes(task.total_size)]);
+                t.add_row(row!["Scheme", super::describe_scheme(&task.scheme)]);
+                t.add_row(row!["Block size", HumanBytes(task.block_size as u64)]);
+                t.add_row(row!["Verification", task.verify]);
+                print!("Wiping:\n{}", t);
+
                 if !self.auto_confirm && !ask_for_confirmation() {
                     println!("Aborted.");
                     std::process::exit(0);

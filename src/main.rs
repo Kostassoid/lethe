@@ -11,7 +11,6 @@ use clap::{App, AppSettings, Arg, SubCommand};
 
 #[macro_use]
 extern crate prettytable;
-use format::FormatBuilder;
 use prettytable::{format, Table};
 
 use ::console::style;
@@ -35,20 +34,7 @@ fn main() -> Result<()> {
     let schemes = SchemeRepo::default();
     let scheme_keys: Vec<_> = schemes.all().keys().cloned().collect();
 
-    let schemes_explanation = {
-        let mut t = Table::new();
-        let indent_table_format = FormatBuilder::new().padding(4, 1).build();
-        t.set_format(indent_table_format);
-        for (k, v) in schemes.all().iter() {
-            let stages_count = v.stages.len();
-            let passes = if stages_count != 1 { "passes" } else { "pass" };
-            t.add_row(row![
-                k,
-                format!("{}, {} {}", v.description, stages_count, passes)
-            ]);
-        }
-        format!("Data sanitization schemes:\n{}", t)
-    };
+    let schemes_explanation = ui::explain_schemes(&schemes);
 
     let app = App::new("Lethe")
         .version(VERSION)
@@ -77,7 +63,7 @@ fn main() -> Result<()> {
                         .short("s")
                         .takes_value(true)
                         .possible_values(&scheme_keys)
-                        .default_value("random2")
+                        .default_value("random2x")
                         .help("Data sanitization scheme"),
                 )
                 .arg(
@@ -193,7 +179,7 @@ fn main() -> Result<()> {
             let mut state = WipeState::default();
             state.retries_left = retries;
 
-            let mut session = frontend.wipe_session(device_id, scheme_id, cmd.is_present("yes"));
+            let mut session = frontend.wipe_session(device_id, cmd.is_present("yes"));
 
             match System::access(device) {
                 Ok(mut access) => {
