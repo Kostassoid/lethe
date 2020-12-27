@@ -1,3 +1,4 @@
+#![cfg(windows)]
 use crate::storage::{StorageAccess, StorageError};
 use anyhow::{Context, Result};
 use std::{io, mem, ptr};

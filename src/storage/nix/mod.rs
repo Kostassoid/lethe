@@ -45,8 +45,8 @@ fn resolve_storage_size(file_type: &FileType, stat: &libc::stat, fd: RawFd) -> u
 impl StorageError {
     fn from(err: std::io::Error) -> StorageError {
         match err.raw_os_error() {
-            Some(c) => {
-                //todo: this
+            //todo: investigate proper error codes more
+            Some(c) if c == libc::EIO || c == libc::ESPIPE => {
                 StorageError::BadBlock
             }
             _ => StorageError::Other(err),
@@ -70,31 +70,35 @@ impl StorageAccess for FileAccess {
     fn position(&mut self) -> Result<u64> {
         self.file
             .seek(SeekFrom::Current(0))
-            .map_err(|e| StorageError::from(e)) //todo: this
+            .map_err(|e| StorageError::from(e))
             .context("Seek failed or not supported for the storage")
     }
 
     fn seek(&mut self, position: u64) -> Result<u64> {
         self.file
             .seek(SeekFrom::Start(position))
+            .map_err(|e| StorageError::from(e))
             .context("Seek failed or not supported for the storage")
     }
 
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         self.file
             .read(buffer)
+            .map_err(|e| StorageError::from(e))
             .context("Can't read from the storage")
     }
 
     fn write(&mut self, data: &[u8]) -> Result<()> {
         self.file
             .write_all(data)
+            .map_err(|e| StorageError::from(e))
             .context("Writing to storage failed")
     }
 
     fn flush(&mut self) -> Result<()> {
         self.file
             .flush()
+            .map_err(|e| StorageError::from(e))
             .context("Unable to flush data to the storage")
     }
 }
