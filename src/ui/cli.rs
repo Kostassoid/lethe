@@ -126,13 +126,22 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     }
                     let total_blocks = task.total_size / task.block_size as u64;
                     let bad_blocks = state.bad_blocks.borrow_mut().total_marked();
-                    println!("Total device size:\t{}", HumanBytes(task.total_size));
-                    println!("Total blocks:\t{}", total_blocks);
-                    println!(
-                        "Skipped blocks:\t{} ({}%)",
-                        bad_blocks,
-                        bad_blocks * 100 / total_blocks as u32,
-                    );
+
+                    let mut t = Table::new();
+                    let indent_table_format = FormatBuilder::new().padding(4, 1).build();
+                    t.set_format(indent_table_format);
+                    t.add_row(row!["Total device size", HumanBytes(task.total_size)]);
+                    t.add_row(row!["Total blocks", total_blocks]);
+                    t.add_row(row![
+                        "Skipped blocks",
+                        format!(
+                            "{} ({}%)",
+                            bad_blocks,
+                            bad_blocks * 100 / total_blocks as u32
+                        )
+                    ]);
+
+                    print!("{}", t);
                 }
                 Some(e) => {
                     eprintln!("❌ Unexpected error: {:#}", e);
