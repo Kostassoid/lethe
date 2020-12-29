@@ -4,6 +4,7 @@ use std::time::Instant;
 use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 
 use crate::actions::{WipeEvent, WipeEventReceiver, WipeState, WipeTask};
+use crate::sanitization::{Scheme, SchemeRepo};
 use crate::stage::Stage;
 use prettytable::format::FormatBuilder;
 use prettytable::Table;
@@ -27,6 +28,34 @@ impl ConsoleFrontend {
             stage_started: None,
         }
     }
+
+    pub fn explain_schemes(schemes: &SchemeRepo) -> String {
+        let mut t = Table::new();
+        let indent_table_format = FormatBuilder::new().padding(4, 1).build();
+        t.set_format(indent_table_format);
+        for (k, v) in schemes.all().iter() {
+            t.add_row(row![k, Self::describe_scheme(v)]);
+        }
+        format!("Data sanitization schemes:\n{}", t)
+    }
+
+    fn describe_scheme(scheme: &Scheme) -> String {
+        let mut s = String::new();
+
+        let stages_count = scheme.stages.len();
+        let passes = if stages_count != 1 { "passes" } else { "pass" };
+
+        s.push_str(&format!(
+            "{}, {} {}\n",
+            scheme.description, stages_count, passes
+        ));
+
+        for v in &scheme.stages {
+            s.push_str(&format!("- {}\n", v));
+        }
+
+        s
+    }
 }
 
 pub struct ConsoleWipeSession {
@@ -46,7 +75,10 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 t.set_format(indent_table_format);
                 t.add_row(row!["Device", self.device_id]);
                 t.add_row(row!["Size", HumanBytes(task.total_size)]);
-                t.add_row(row!["Scheme", super::describe_scheme(&task.scheme)]);
+                t.add_row(row![
+                    "Scheme",
+                    ConsoleFrontend::describe_scheme(&task.scheme)
+                ]);
                 t.add_row(row!["Block size", HumanBytes(task.block_size as u64)]);
                 t.add_row(row!["Verification", task.verify]);
                 print!("Wiping:\n{}", t);

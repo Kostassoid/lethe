@@ -5,7 +5,9 @@
 ### Added
 
 * Experimental support for detecting/skipping bad blocks.
-* Allow to use short derived Device IDs.
+* Short derived Device IDs.
+* More detailed information before and after wipe.
+* A "badblocks" inspired wiping scheme.
 
 ### Changed
 

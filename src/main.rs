@@ -34,7 +34,7 @@ fn main() -> Result<()> {
     let schemes = SchemeRepo::default();
     let scheme_keys: Vec<_> = schemes.all().keys().cloned().collect();
 
-    let schemes_explanation = ui::explain_schemes(&schemes);
+    let schemes_explanation = cli::ConsoleFrontend::explain_schemes(&schemes);
 
     let app = App::new("Lethe")
         .version(VERSION)

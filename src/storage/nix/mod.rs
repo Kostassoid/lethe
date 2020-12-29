@@ -45,10 +45,7 @@ fn resolve_storage_size(file_type: &FileType, stat: &libc::stat, fd: RawFd) -> u
 impl StorageError {
     fn from(err: std::io::Error) -> StorageError {
         match err.raw_os_error() {
-            //todo: investigate proper error codes more
-            Some(c) if c == libc::EIO || c == libc::ESPIPE => {
-                StorageError::BadBlock
-            }
+            Some(c) if c == libc::EIO || c == libc::ESPIPE => StorageError::BadBlock,
             _ => StorageError::Other(err),
         }
     }

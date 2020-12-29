@@ -343,7 +343,6 @@ impl WipeRun<'_> {
 pub fn underlying_storage_error(error: &anyhow::Error) -> Option<&StorageError> {
     for cause in error.chain() {
         if let Some(storage_error) = cause.downcast_ref::<StorageError>() {
-            //println!("err: {:?}", storage_error); //todo: remove
             return Some(storage_error);
         }
     }
