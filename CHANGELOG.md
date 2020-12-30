@@ -1,6 +1,6 @@
 # Change Log
 
-## [Unreleased] - ReleaseDate
+## [v0.5.0] - 2020-12-30
 
 ### Added
 
