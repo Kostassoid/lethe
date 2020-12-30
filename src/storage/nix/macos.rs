@@ -47,6 +47,7 @@ pub fn get_block_device_size(fd: libc::c_int) -> u64 {
     }
 }
 
+#[allow(dead_code)]
 pub fn is_trim_supported(fd: RawFd) -> bool {
     ioctl_read!(dk_get_features, b'd', 76, u32); // DKIOCGETFEATURES
 

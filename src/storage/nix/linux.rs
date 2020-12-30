@@ -41,6 +41,7 @@ pub fn get_block_device_size(fd: RawFd) -> u64 {
     }
 }
 
+#[allow(dead_code)]
 pub fn is_trim_supported(_fd: RawFd) -> bool {
     false
 }
