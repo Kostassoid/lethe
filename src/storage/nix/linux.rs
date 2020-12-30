@@ -8,6 +8,12 @@ use std::io::BufReader;
 use std::os::unix::io::*;
 use std::path::Path;
 
+impl System {
+    pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
+        get_storage_devices()
+    }
+}
+
 pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     OpenOptions::new()
@@ -35,6 +41,7 @@ pub fn get_block_device_size(fd: RawFd) -> u64 {
     }
 }
 
+#[allow(dead_code)]
 pub fn is_trim_supported(_fd: RawFd) -> bool {
     false
 }

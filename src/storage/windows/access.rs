@@ -1,14 +1,20 @@
-use super::helpers::*;
-use super::winapi::um::ioapiset::DeviceIoControl;
-use crate::storage::StorageAccess;
-use anyhow::Result;
-use std::{mem, ptr};
+#![cfg(windows)]
+use crate::storage::{StorageAccess, StorageError};
+use anyhow::{Context, Result};
+use std::{io, mem, ptr};
 use widestring::WideCString;
 use winapi::_core::ptr::null_mut;
 use winapi::shared::minwindef::{DWORD, LPVOID};
+use winapi::shared::winerror::{
+    ERROR_CRC, ERROR_READ_FAULT, ERROR_SECTOR_NOT_FOUND, ERROR_SEEK, ERROR_WRITE_FAULT,
+};
 use winapi::um::fileapi::*;
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-use winapi::um::winbase::{FILE_BEGIN, FILE_CURRENT};
+use winapi::um::ioapiset::DeviceIoControl;
+use winapi::um::winbase::{
+    FILE_BEGIN, FILE_CURRENT, FILE_FLAG_NO_BUFFERING, FILE_FLAG_SEQUENTIAL_SCAN,
+    FILE_FLAG_WRITE_THROUGH,
+};
 use winapi::um::winioctl;
 use winapi::um::winnt::{
     FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE, HANDLE,
@@ -42,16 +48,16 @@ impl DeviceFile {
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 null_mut(),
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
+                FILE_ATTRIBUTE_NORMAL
+                    | FILE_FLAG_NO_BUFFERING
+                    | FILE_FLAG_WRITE_THROUGH
+                    | FILE_FLAG_SEQUENTIAL_SCAN,
                 null_mut(),
             );
 
             if handle == INVALID_HANDLE_VALUE {
-                return Err(anyhow!(
-                    "Cannot open device {}. Error: {}",
-                    path,
-                    get_last_error_str()
-                ));
+                return Err(io::Error::last_os_error())
+                    .context(format!("Cannot open device {}.", path));
             }
 
             let mut is_locked = false;
@@ -68,16 +74,30 @@ impl DeviceFile {
                     null_mut(),
                 ) == 0
                 {
-                    return Err(anyhow!(
-                        "Cannot lock device {}. Error: {}",
-                        path,
-                        get_last_error_str()
-                    ));
+                    return Err(io::Error::last_os_error())
+                        .context(format!("Cannot lock device {}.", path));
                 }
                 is_locked = true;
             }
 
             Ok(DeviceFile { handle, is_locked })
+        }
+    }
+}
+
+impl StorageError {
+    fn from(err: std::io::Error) -> StorageError {
+        match err.raw_os_error() {
+            Some(c)
+                if c == ERROR_CRC as i32
+                    || c == ERROR_SEEK as i32
+                    || c == ERROR_SECTOR_NOT_FOUND as i32
+                    || c == ERROR_WRITE_FAULT as i32
+                    || c == ERROR_READ_FAULT as i32 =>
+            {
+                StorageError::BadBlock
+            }
+            _ => StorageError::Other(err),
         }
     }
 }
@@ -99,7 +119,7 @@ impl Drop for DeviceFile {
                         null_mut(),
                     ) == 0
                     {
-                        //todo?
+                        //there doesn't seem to be a good way to recover
                     }
                 }
             }
@@ -116,10 +136,8 @@ impl StorageAccess for DeviceFile {
             let distance = mem::zeroed();
             let mut current: LARGE_INTEGER = mem::zeroed();
             if SetFilePointerEx(self.handle, distance, &mut current, FILE_CURRENT) == 0 {
-                return Err(anyhow!(
-                    "Unable to get device position. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(StorageError::from(io::Error::last_os_error()))
+                    .context("Unable to get device position.");
             };
             Ok(*current.QuadPart() as u64)
         }
@@ -132,10 +150,8 @@ impl StorageAccess for DeviceFile {
 
             let mut new_position: LARGE_INTEGER = mem::zeroed();
             if SetFilePointerEx(self.handle, distance, &mut new_position, FILE_BEGIN) == 0 {
-                return Err(anyhow!(
-                    "Unable to set device position. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(StorageError::from(io::Error::last_os_error()))
+                    .context("Unable to set device position.");
             };
             Ok(*new_position.QuadPart() as u64)
         }
@@ -152,10 +168,8 @@ impl StorageAccess for DeviceFile {
                 ptr::null_mut(),
             ) == 0
             {
-                return Err(anyhow!(
-                    "Unable to read from the device. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(StorageError::from(io::Error::last_os_error()))
+                    .context("Unable to read from the device.");
             };
             Ok(read as usize)
         }
@@ -172,10 +186,8 @@ impl StorageAccess for DeviceFile {
                 ptr::null_mut(),
             ) == 0
             {
-                return Err(anyhow!(
-                    "Unable to write to the device. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(StorageError::from(io::Error::last_os_error()))
+                    .context("Unable to write to the device.");
             };
             Ok(())
         }
@@ -184,10 +196,8 @@ impl StorageAccess for DeviceFile {
     fn flush(&mut self) -> Result<()> {
         unsafe {
             if FlushFileBuffers(self.handle) == 0 {
-                return Err(anyhow!(
-                    "Unable to flush device write buffers. Error: {}",
-                    get_last_error_str()
-                ));
+                return Err(StorageError::from(io::Error::last_os_error()))
+                    .context("Unable to flush device write buffers.");
             }
             Ok(())
         }

@@ -1,11 +1,13 @@
 use std::io::ErrorKind;
 use std::time::Instant;
 
-use ::console::style;
 use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 
 use crate::actions::{WipeEvent, WipeEventReceiver, WipeState, WipeTask};
+use crate::sanitization::{Scheme, SchemeRepo};
 use crate::stage::Stage;
+use prettytable::format::FormatBuilder;
+use prettytable::Table;
 use std::thread::sleep;
 
 const RETRY_BACKOFF_SECONDS: u32 = 3;
@@ -17,26 +19,47 @@ impl ConsoleFrontend {
         ConsoleFrontend {}
     }
 
-    pub fn wipe_session(
-        self,
-        device_id: &str,
-        scheme_id: &str,
-        auto_confirm: bool,
-    ) -> ConsoleWipeSession {
+    pub fn wipe_session(self, device_id: &str, auto_confirm: bool) -> ConsoleWipeSession {
         ConsoleWipeSession {
             device_id: String::from(device_id),
-            scheme_id: String::from(scheme_id),
             auto_confirm,
             pb: None,
             session_started: None,
             stage_started: None,
         }
     }
+
+    pub fn explain_schemes(schemes: &SchemeRepo) -> String {
+        let mut t = Table::new();
+        let indent_table_format = FormatBuilder::new().padding(4, 1).build();
+        t.set_format(indent_table_format);
+        for (k, v) in schemes.all().iter() {
+            t.add_row(row![k, Self::describe_scheme(v)]);
+        }
+        format!("Data sanitization schemes:\n{}", t)
+    }
+
+    fn describe_scheme(scheme: &Scheme) -> String {
+        let mut s = String::new();
+
+        let stages_count = scheme.stages.len();
+        let passes = if stages_count != 1 { "passes" } else { "pass" };
+
+        s.push_str(&format!(
+            "{}, {} {}\n",
+            scheme.description, stages_count, passes
+        ));
+
+        for v in &scheme.stages {
+            s.push_str(&format!("- {}\n", v));
+        }
+
+        s
+    }
 }
 
 pub struct ConsoleWipeSession {
     device_id: String,
-    scheme_id: String,
     auto_confirm: bool,
     pb: Option<ProgressBar>,
     session_started: Option<Instant>,
@@ -47,12 +70,19 @@ impl WipeEventReceiver for ConsoleWipeSession {
     fn handle(&mut self, task: &WipeTask, state: &WipeState, event: WipeEvent) -> () {
         match event {
             WipeEvent::Started => {
-                println!(
-                    "Wiping {} using scheme {} and block size {}.",
-                    style(&self.device_id).bold(),
-                    style(&self.scheme_id).bold(),
-                    style(HumanBytes(task.block_size as u64)).bold()
-                );
+                let mut t = Table::new();
+                let indent_table_format = FormatBuilder::new().padding(4, 1).build();
+                t.set_format(indent_table_format);
+                t.add_row(row!["Device", self.device_id]);
+                t.add_row(row!["Size", HumanBytes(task.total_size)]);
+                t.add_row(row![
+                    "Scheme",
+                    ConsoleFrontend::describe_scheme(&task.scheme)
+                ]);
+                t.add_row(row!["Block size", HumanBytes(task.block_size as u64)]);
+                t.add_row(row!["Verification", task.verify]);
+                print!("Wiping:\n{}", t);
+
                 if !self.auto_confirm && !ask_for_confirmation() {
                     println!("Aborted.");
                     std::process::exit(0);
@@ -90,6 +120,11 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     pb.set_position(position);
                 }
             }
+            WipeEvent::MarkBlockAsBad(block) => {
+                if let Some(pb) = &self.pb {
+                    pb.println(format!("Unable to access block at {}. Skipping.", block));
+                }
+            }
             WipeEvent::StageCompleted(result) => {
                 if let Some(pb) = &self.pb {
                     match result {
@@ -115,15 +150,30 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 );
                 sleep(std::time::Duration::from_secs(RETRY_BACKOFF_SECONDS as u64));
             }
-            WipeEvent::Aborted => {
-                eprintln!("❌ Aborted.");
-            }
             WipeEvent::Completed(result) => match result {
                 None => {
                     if let Some(s) = self.session_started {
                         let elapsed = HumanDuration(s.elapsed());
                         println!("✔ Total time: {}", elapsed);
                     }
+                    let total_blocks = task.total_size / task.block_size as u64;
+                    let bad_blocks = state.bad_blocks.borrow_mut().total_marked();
+
+                    let mut t = Table::new();
+                    let indent_table_format = FormatBuilder::new().padding(4, 1).build();
+                    t.set_format(indent_table_format);
+                    t.add_row(row!["Total device size", HumanBytes(task.total_size)]);
+                    t.add_row(row!["Total blocks", total_blocks]);
+                    t.add_row(row![
+                        "Skipped blocks",
+                        format!(
+                            "{} ({}%)",
+                            bad_blocks,
+                            bad_blocks * 100 / total_blocks as u32
+                        )
+                    ]);
+
+                    print!("{}", t);
                 }
                 Some(e) => {
                     eprintln!("❌ Unexpected error: {:#}", e);

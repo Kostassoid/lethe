@@ -1,5 +1,18 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+### Added
+
+* Experimental support for detecting/skipping bad blocks.
+* Short derived Device IDs.
+* More detailed information before and after wipe.
+* A "badblocks" inspired wiping scheme.
+
+### Changed
+
+* Increased default block size to 1 MB.
+
 ## [v0.4.0] - 2020-06-10
 
 ### Added

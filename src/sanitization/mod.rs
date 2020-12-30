@@ -40,10 +40,23 @@ impl SchemeRepo {
         );
 
         schemes.insert(
-            "random2",
+            "random2x",
             Scheme {
                 description: "Double random fill".to_string(),
                 stages: vec![Stage::random(), Stage::random()],
+            },
+        );
+
+        schemes.insert(
+            "badblocks",
+            Scheme {
+                description: "Inspired by a badblocks tool -w action.".to_string(),
+                stages: vec![
+                    Stage::constant(0xaa),
+                    Stage::constant(0x55),
+                    Stage::constant(0xff),
+                    Stage::constant(0x00),
+                ],
             },
         );
 

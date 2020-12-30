@@ -1,15 +1,21 @@
 //extern crate IOKit_sys as iokit;
 use ::nix::*;
 use anyhow::Result;
+use regex::Regex;
+use std::collections::HashMap;
 use std::fs::read_dir;
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::collections::HashMap;
-use regex::Regex;
 
 use crate::storage::*;
+
+impl System {
+    pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
+        get_storage_devices()
+    }
+}
 
 pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> Result<File> {
     let file = OpenOptions::new()
@@ -41,6 +47,7 @@ pub fn get_block_device_size(fd: libc::c_int) -> u64 {
     }
 }
 
+#[allow(dead_code)]
 pub fn is_trim_supported(fd: RawFd) -> bool {
     ioctl_read!(dk_get_features, b'd', 76, u32); // DKIOCGETFEATURES
 
@@ -79,7 +86,8 @@ fn discover_file_based_devices<P: AsRef<Path>>(
 }
 
 pub fn get_bsd_device_name<P: AsRef<Path>>(path: P) -> Result<String> {
-    let n = path.as_ref()
+    let n = path
+        .as_ref()
         .file_name()
         .ok_or(anyhow!("Invalid path"))?
         .to_string_lossy();
@@ -91,13 +99,12 @@ pub fn get_bsd_device_name<P: AsRef<Path>>(path: P) -> Result<String> {
 }
 
 pub fn get_diskutils_info<P: AsRef<Path>>(path: P) -> Result<HashMap<String, String>> {
-
     let mut command = Command::new("/usr/sbin/diskutil");
-    command.arg("info").arg(path.as_ref().to_str().unwrap()); 
+    command.arg("info").arg(path.as_ref().to_str().unwrap());
 
     let output = command.output()?;
     if !output.status.success() {
-        return Err(anyhow!("Can't run diskutil"))
+        return Err(anyhow!("Can't run diskutil"));
     };
 
     let pattern = Regex::new(r"^\s*([^:]+):\s*(.*)$")?;
@@ -108,10 +115,9 @@ pub fn get_diskutils_info<P: AsRef<Path>>(path: P) -> Result<HashMap<String, Str
         .map(|c| (c[1].to_owned(), c[2].to_owned()))
         .into_iter()
         .collect();
-    
+
     Ok(props)
 }
-
 
 pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDetails) -> Result<()> {
     let du = get_diskutils_info(path)?;
@@ -124,7 +130,7 @@ pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDeta
         details.storage_type = match du.get("Removable Media").unwrap_or(&String::new()) {
             x if x == "Removable" => StorageType::Removable,
             x if x == "Fixed" => StorageType::Fixed,
-            _ => StorageType::Unknown
+            _ => StorageType::Unknown,
         };
     }
 
@@ -137,11 +143,20 @@ mod test {
 
     #[test]
     fn test_bsd_name_resolver() {
-        assert_eq!(get_bsd_device_name("/dev/rdisk0").unwrap(), "disk0".to_owned());
-        assert_eq!(get_bsd_device_name("/dev/rdisk0s1").unwrap(), "disk0s1".to_owned());
-        assert_eq!(get_bsd_device_name("/dev/disk2").unwrap(), "disk2".to_owned());
+        assert_eq!(
+            get_bsd_device_name("/dev/rdisk0").unwrap(),
+            "disk0".to_owned()
+        );
+        assert_eq!(
+            get_bsd_device_name("/dev/rdisk0s1").unwrap(),
+            "disk0s1".to_owned()
+        );
+        assert_eq!(
+            get_bsd_device_name("/dev/disk2").unwrap(),
+            "disk2".to_owned()
+        );
         assert_eq!(get_bsd_device_name("/rdisk3").unwrap(), "disk3".to_owned());
-        
+
         assert!(get_bsd_device_name("").is_err());
     }
 }

@@ -4,14 +4,15 @@
 
 A secure, free, cross-platform and open-source drive wiping utility.
 
-Should work with any HDD, SSD (read below) and flash drives.
+Should work with any HDD, SSD (read limitations) and flash drives.
 
-The usual method for wiping a drive is filling it with randomly generated data or zeroes (or any other constant value). The best results are achieved by performing a combination of these steps. This is basically what this tool does.
+The usual methods for wiping (or sanitization) a drive, including those (allegedly) used by government agencies are based
+on destructive writes. In other words, on overwriting existing data with multiple layers of randomly generated data or some
+static pattern.
+This is basically what this tool does.
 
-In case of SSDs, however, it is practically impossible to prove the data was successfully wiped (or overwritten) because of various optimizations performed by modern SSD controllers, namely wear leveling and compression. The situation improves with a better implementations of native wiping features like Secure Erase but for now the best way of action is: 
-- never store any sensitive data on SSD unencrypted,
-- wipe using multiple random fill passes
-- additionally perform Secure Erase if possible (not supported by `lethe` yet)
+There are other similar applications around (including multiple built-in Linux tools). Most of them are proprietary, or slow,
+or non cross-platform, which was a requirement for me. So I wrote this application.
 
 ## Features
 
@@ -19,6 +20,20 @@ In case of SSDs, however, it is practically impossible to prove the data was suc
 - Validates the data (reads back) to make sure all write commands were successful
 - Uses fast cryptographic random generator
 - Allows to override OS recommended block size for possibly faster operations
+- Tracks & skips bad blocks and other localized errors automatically (Experimental)
+
+## Limitations
+
+- For SSD, it's impossible to reliable wipe all the data because of the various optimizations performed by modern SSD controllers, namely wear leveling and compression. The best approach currently is to use multiple wiping rounds with random data. Later, a support for Secure Erase ATA commands may be added to make the process more reliable.
+- The maximum number of blocks per storage device is 2<sup>32</sup>, or 4,294,967,296. For example, using a block size of 1 MB the size of the storage can be up to 4096 TB.
+- The application hasn't even been tested on RAID storages, beware.
+
+## Current status
+
+The initial active development phase is done.
+I have been using the application for some time for personal needs on all supported platforms. It does what it was designed to do. Didn't have to deal with forensics experts yet though.
+I still make some additions/changes occasionally, but there's no exact roadmap.
+I would love to learn about other people's experience with the application. Let me know if you have any issues!
 
 ## Download
 

@@ -11,7 +11,6 @@ use clap::{App, AppSettings, Arg, SubCommand};
 
 #[macro_use]
 extern crate prettytable;
-use format::FormatBuilder;
 use prettytable::{format, Table};
 
 use ::console::style;
@@ -32,26 +31,10 @@ use ui::*;
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 fn main() -> Result<()> {
-    // ctrlc::set_handler(move || {
-    // }).expect("Error setting Ctrl-C handler");
-
     let schemes = SchemeRepo::default();
     let scheme_keys: Vec<_> = schemes.all().keys().cloned().collect();
 
-    let schemes_explanation = {
-        let mut t = Table::new();
-        let indent_table_format = FormatBuilder::new().padding(4, 1).build();
-        t.set_format(indent_table_format);
-        for (k, v) in schemes.all().iter() {
-            let stages_count = v.stages.len();
-            let passes = if stages_count != 1 { "passes" } else { "pass" };
-            t.add_row(row![
-                k,
-                format!("{}, {} {}", v.description, stages_count, passes)
-            ]);
-        }
-        format!("Data sanitization schemes:\n{}", t)
-    };
+    let schemes_explanation = cli::ConsoleFrontend::explain_schemes(&schemes);
 
     let app = App::new("Lethe")
         .version(VERSION)
@@ -80,7 +63,7 @@ fn main() -> Result<()> {
                         .short("s")
                         .takes_value(true)
                         .possible_values(&scheme_keys)
-                        .default_value("random2")
+                        .default_value("random2x")
                         .help("Data sanitization scheme"),
                 )
                 .arg(
@@ -97,7 +80,7 @@ fn main() -> Result<()> {
                         .long("blocksize")
                         .short("b")
                         .takes_value(true)
-                        .default_value("64k")
+                        .default_value("1m")
                         .help("Block size"),
                 )
                 .arg(
@@ -105,7 +88,7 @@ fn main() -> Result<()> {
                         .long("retries")
                         .short("r")
                         .takes_value(true)
-                        .default_value("32")
+                        .default_value("8")
                         .help("Maximum number of retries"),
                 )
                 .arg(
@@ -117,50 +100,50 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
-    let storage_devices = System::get_storage_devices()
-        .unwrap_or_else(|err| {
-            eprintln!("Unable to enumerate storage devices. {}", err);
+    let storage_devices = System::get_storage_devices().unwrap_or_else(|err| {
+        eprintln!("Unable to enumerate storage devices. {}", err);
 
-            if cfg!(linux) {
-                let is_wsl = std::fs::read_to_string("/proc/version")
-                    .map(|v| v.contains("Microsoft"))
-                    .unwrap_or(false);
+        if cfg!(linux) {
+            let is_wsl = std::fs::read_to_string("/proc/version")
+                .map(|v| v.contains("Microsoft"))
+                .unwrap_or(false);
 
-                if is_wsl {
-                    eprintln!("WSL is not supported at the moment as it doesn't provide direct storage device access.");
-                }
+            if is_wsl {
+                eprintln!("WSL is not supported.");
             }
+        }
 
-            std::process::exit(1);
-        });
+        std::process::exit(1);
+    });
+
+    let ids = idshortcuts::IdShortcuts::from(storage_devices.iter().map(|r| r.id()).collect());
+
     let frontend = cli::ConsoleFrontend::new();
 
     match app.subcommand() {
         ("list", _) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
-            t.set_titles(row![
-                "Device ID",
-                "Size",
-                "Type",
-                "Mount Point",
-                "Block Size"
-            ]);
+            t.set_titles(row!["Device ID", "Short ID", "Size", "Type", "Mount Point",]);
             for x in storage_devices {
                 t.add_row(row![
                     style(x.id()).bold(),
+                    style(ids.get_short(x.id()).unwrap_or(&"".to_owned())).bold(),
                     HumanBytes(x.details().size),
                     x.details().storage_type,
                     (x.details().mount_point)
                         .as_ref()
-                        .unwrap_or(&"".to_string()),
-                    HumanBytes(x.details().block_size as u64)
+                        .unwrap_or(&"".to_string())
                 ]);
             }
             t.printstd();
         }
         ("wipe", Some(cmd)) => {
-            let device_id = cmd.value_of("device").unwrap();
+            let device_id = cmd
+                .value_of("device")
+                .map(|id| ids.get(id))
+                .flatten()
+                .ok_or(anyhow!("Invalid device ID"))?;
             let scheme_id = cmd.value_of("scheme").unwrap();
             let verification = match cmd.value_of("verify").unwrap() {
                 "no" => Verify::No,
@@ -191,12 +174,12 @@ fn main() -> Result<()> {
                 verification,
                 device.details().size,
                 block_size,
-            );
+            )?;
 
             let mut state = WipeState::default();
             state.retries_left = retries;
 
-            let mut session = frontend.wipe_session(device_id, scheme_id, cmd.is_present("yes"));
+            let mut session = frontend.wipe_session(device_id, cmd.is_present("yes"));
 
             match System::access(device) {
                 Ok(mut access) => {
