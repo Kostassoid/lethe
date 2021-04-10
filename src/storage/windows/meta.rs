@@ -199,6 +199,7 @@ impl Iterator for DiskDeviceEnumerator {
 
         PhysicalDrive::from_device_number(device_number)
             .and_then(|x| x.get_storage_list(&self.volumes))
+            .map_err(|e| println!("Error: {:?}", e))
             .ok() //todo: log error?
     }
 }
@@ -219,7 +220,9 @@ impl PhysicalDrive {
         volumes: &Vec<(String, Vec<VolumeExtent>)>,
     ) -> Result<Vec<DiskDeviceInfo>> {
         let geometry = get_drive_geometry(&self.device)?;
-        let alignment = get_alignment_descriptor(&self.device)?;
+        let bytes_per_sector = get_alignment_descriptor(&self.device)
+            .map(|a| a.BytesPerPhysicalSector as usize)
+            .unwrap_or(geometry.Geometry.BytesPerSector as usize);
 
         let storage_type = match geometry.Geometry.MediaType {
             winioctl::RemovableMedia => StorageType::Removable,
@@ -229,7 +232,7 @@ impl PhysicalDrive {
 
         let drive_details = StorageDetails {
             size: unsafe { *geometry.DiskSize.QuadPart() as u64 },
-            block_size: alignment.BytesPerPhysicalSector as usize,
+            block_size: bytes_per_sector,
             storage_type,
             mount_point: None,
         };
