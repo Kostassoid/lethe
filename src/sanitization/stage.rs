@@ -17,8 +17,8 @@ pub enum Stage {
 impl Display for Stage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Stage::Fill { value } => f.write_str(&format!("fill with {:#04X}", value)),
-            Stage::Random { seed: _seed } => f.write_str("random fill"),
+            Stage::Fill { value } => f.write_str(&format!("Value Fill ({:#04X})", value)),
+            Stage::Random { seed: _seed } => f.write_str("Random fill"),
         }
     }
 }

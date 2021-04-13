@@ -5,7 +5,6 @@ use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 
 use crate::actions::{WipeEvent, WipeEventReceiver, WipeState, WipeTask};
 use crate::sanitization::{Scheme, SchemeRepo};
-use crate::stage::Stage;
 use prettytable::format::FormatBuilder;
 use prettytable::Table;
 use std::thread::sleep;
@@ -93,17 +92,12 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 let stage_num = format!("Stage {}/{}", state.stage + 1, task.scheme.stages.len());
                 let stage = &task.scheme.stages[state.stage];
 
-                let stage_description = match stage {
-                    Stage::Fill { value } => format!("Value Fill ({:02x})", value),
-                    Stage::Random { seed: _seed } => String::from("Random Fill"),
-                };
-
                 let pb = create_progress_bar(task.total_size);
 
                 if !state.at_verification {
-                    pb.println(format!("\n{}: Performing {}", stage_num, stage_description));
+                    pb.println(format!("\n{}: Performing {}", stage_num, stage));
                 } else {
-                    pb.println(format!("\n{}: Verifying {}", stage_num, stage_description));
+                    pb.println(format!("\n{}: Verifying {}", stage_num, stage));
                 }
 
                 if !state.at_verification {

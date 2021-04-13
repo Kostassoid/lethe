@@ -309,14 +309,13 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.11.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c60da1c9abea75996b70a931bba6c750730399005b61ccd853cee50ef3d0d0c"
+checksum = "7baab56125e25686df467fe470785512329883aab42696d661247aca2a2896e4"
 dependencies = [
  "console 0.11.2",
  "lazy_static",
  "number_prefix",
- "parking_lot",
  "regex",
 ]
 
@@ -411,22 +410,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-traits"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c62be47e61d1842b9170f0fdeec8eba98e60e90e5446449a0545e5152acd7096"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
 name = "number_prefix"
-version = "0.2.8"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbf9993e59c894e3c08aa1c2712914e9e6bf1fcbfc6bef283e2183df345a4fee"
-dependencies = [
- "num-traits",
-]
+checksum = "17b02fc0ff9a9e4b35b3342880f48e896ebf69f2967921fe8646bf5b7125956a"
 
 [[package]]
 name = "numtoa"
