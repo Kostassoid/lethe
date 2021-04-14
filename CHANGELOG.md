@@ -1,5 +1,16 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+### Added
+
+* [Win] Warn when application is running without Administrator privileges.
+
+### Changed
+
+* [Win] Drive geometry info is used when alignment info is not available.
+* More detailed errors on hardware failures.
+
 ## [v0.5.0] - 2020-12-30
 
 ### Added
