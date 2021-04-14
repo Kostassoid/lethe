@@ -137,7 +137,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
                             }
                         }
                         Some(err) => {
-                            pb.println(format!("❌ FAILED! {}", err));
+                            pb.println(format!("❌ FAILED! {:#}", err));
                         }
                     }
                     pb.finish_and_clear();

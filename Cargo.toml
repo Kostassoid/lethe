@@ -45,6 +45,8 @@ features = [
     "minwinbase",
     "minwindef",
     "ntdef",
+    "processthreadsapi",
+    "securitybaseapi",
     "setupapi",
     "winbase",
     "winerror",

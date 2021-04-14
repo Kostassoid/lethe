@@ -199,8 +199,9 @@ impl Iterator for DiskDeviceEnumerator {
 
         PhysicalDrive::from_device_number(device_number)
             .and_then(|x| x.get_storage_list(&self.volumes))
-            .map_err(|e| println!("Error: {:?}", e))
-            .ok() //todo: log error?
+            //.map_err(|e| println!("Error: {:?}", e)) //todo: figure out how to propagate errors
+            .ok()
+            .or_else(|| self.next()) // skip
     }
 }
 
