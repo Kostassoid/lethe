@@ -12,11 +12,20 @@ use super::windows::meta::*;
 mod access;
 use access::*;
 
-use anyhow::Result;
+mod misc;
+use misc::*;
+
+use anyhow::{Context, Result};
 
 impl System {
     pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
-        let enumerator = DiskDeviceEnumerator::new()?;
+        let enumerator = DiskDeviceEnumerator::new().with_context(|| {
+            if !is_elevated() {
+                format!("Make sure you run the application with Administrator permissions!")
+            } else {
+                format!("") //todo: hints?
+            }
+        })?;
         let mut devices: Vec<DiskDeviceInfo> = enumerator.flatten().collect();
         devices.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(devices)

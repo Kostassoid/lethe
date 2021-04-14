@@ -101,7 +101,7 @@ fn main() -> Result<()> {
         .get_matches();
 
     let storage_devices = System::get_storage_devices().unwrap_or_else(|err| {
-        eprintln!("Unable to enumerate storage devices. {}", err);
+        eprintln!("Unable to enumerate storage devices. {:#}", err);
 
         if cfg!(linux) {
             let is_wsl = std::fs::read_to_string("/proc/version")
