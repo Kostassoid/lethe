@@ -1,6 +1,6 @@
 [package]
 name = "lethe"
-version = "0.5.1"
+version = "0.5.2-dev"
 authors = ["Konstantin Alexandroff <k.alexandroff@gmail.com>"]
 description = "A secure, free, cross-platform and open-source drive wiping utility"
 homepage = "https://github.com/Kostassoid/lethe"
