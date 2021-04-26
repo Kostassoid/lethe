@@ -3,9 +3,8 @@ use std::time::Instant;
 
 use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 
-use crate::actions::{WipeEvent, WipeEventReceiver, WipeState, WipeTask};
-use crate::sanitization::{Scheme, SchemeRepo};
-use crate::stage::Stage;
+use lethe::core::actions::{WipeEvent, WipeEventReceiver, WipeState, WipeTask};
+use lethe::core::sanitization::{Scheme, SchemeRepo, Stage};
 use prettytable::format::FormatBuilder;
 use prettytable::Table;
 use std::thread::sleep;

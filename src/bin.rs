@@ -16,17 +16,12 @@ use prettytable::{format, Table};
 use ::console::style;
 use indicatif::HumanBytes;
 
-mod storage;
-use storage::*;
+use lethe::core::actions::*;
+use lethe::core::sanitization::*;
+use lethe::core::storage::*;
 
-mod sanitization;
-use sanitization::*;
-
-mod actions;
-use actions::*;
-
-mod ui;
-use ui::*;
+mod app;
+use app::ui::*;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -152,7 +147,7 @@ fn main() -> Result<()> {
                 _ => Verify::Last,
             };
             let block_size_arg = cmd.value_of("blocksize").unwrap();
-            let block_size = ui::args::parse_block_size(block_size_arg)
+            let block_size = args::parse_block_size(block_size_arg)
                 .context(format!("Invalid blocksize value: {}", block_size_arg))?;
 
             let device = storage_devices

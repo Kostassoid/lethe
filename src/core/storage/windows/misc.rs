@@ -16,7 +16,7 @@ pub fn is_elevated() -> bool {
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle) } != 0 {
         let mut elevation: TOKEN_ELEVATION = unsafe { mem::zeroed() };
         let size = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
-        let mut ret_size = size;
+        let mut ret_size = 0u32;
         if unsafe {
             GetTokenInformation(
                 handle,

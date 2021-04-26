@@ -1,5 +1,5 @@
 #![cfg(windows)]
-use crate::storage::{StorageAccess, StorageError};
+use super::{StorageAccess, StorageError};
 use anyhow::{Context, Result};
 use std::{io, mem, ptr};
 use widestring::WideCString;

@@ -9,7 +9,7 @@ use std::os::unix::io::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::storage::*;
+use super::*;
 
 impl System {
     pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {

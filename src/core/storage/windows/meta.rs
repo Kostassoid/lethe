@@ -14,9 +14,7 @@ use winapi::um::winioctl::GUID_DEVINTERFACE_DISK;
 use winapi::um::winnt::{PVOID, WCHAR};
 use winapi::um::{fileapi, ioapiset, winioctl};
 
-use windows::access::*;
-
-use crate::storage::*;
+use super::*;
 
 #[derive(Debug)]
 pub struct DiskDeviceInfo {

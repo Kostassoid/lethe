@@ -1,13 +1,13 @@
 #![cfg(windows)]
 extern crate winapi;
 
-use crate::storage::*;
-
 #[macro_use]
 mod helpers;
 
+use super::*;
+
 mod meta;
-use super::windows::meta::*;
+use meta::*;
 
 mod access;
 use access::*;

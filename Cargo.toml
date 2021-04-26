@@ -14,6 +14,14 @@ edition = "2018"
 [badges]
 travis-ci = { repository = "Kostassoid/lethe", branch = "master" }
 
+[lib]
+name = "lethe"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lethe_cli"
+path = "src/bin.rs"
+
 [dependencies]
 anyhow = "1.0"
 thiserror = "1.0"
