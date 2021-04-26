@@ -1,6 +1,6 @@
-/target
+target
 **/*.rs.bk
-/.idea
+.idea
 *.iml
 /.vagrant
 /testing/*.vdi
