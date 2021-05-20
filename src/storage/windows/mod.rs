@@ -17,8 +17,15 @@ use misc::*;
 
 use anyhow::{Context, Result};
 
+#[derive(Debug)]
+pub struct SystemStorageDevice {
+    pub id: String,
+    pub details: StorageDetails,
+    pub children: Vec<SystemStorageDevice>,
+}
+
 impl System {
-    pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
+    pub fn get_storage_devices() -> Result<Vec<SystemStorageDevice>> {
         let enumerator = DiskDeviceEnumerator::new().with_context(|| {
             if !is_elevated() {
                 format!("Make sure you run the application with Administrator permissions!")
@@ -26,22 +33,12 @@ impl System {
                 format!("") //todo: hints?
             }
         })?;
-        let mut devices: Vec<DiskDeviceInfo> = enumerator.flatten().collect();
+        let mut devices: Vec<SystemStorageDevice> = enumerator.collect();
         devices.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(devices)
     }
 
-    pub fn access(storage_ref: &dyn StorageRef) -> Result<impl StorageAccess> {
-        DeviceFile::open(storage_ref.id(), true)
-    }
-}
-
-impl StorageRef for DiskDeviceInfo {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn details(&self) -> &StorageDetails {
-        &self.details
+    pub fn access(device: &SystemStorageDevice) -> Result<impl StorageAccess> {
+        DeviceFile::open(&device.id, true)
     }
 }

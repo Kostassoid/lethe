@@ -101,16 +101,27 @@ impl StorageAccess for FileAccess {
 }
 
 #[derive(Debug)]
-pub struct FileRef {
+pub struct SystemStorageDevice {
     path: PathBuf,
-    details: StorageDetails,
+    pub id: String,
+    pub details: StorageDetails,
+    pub children: Vec<Box<SystemStorageDevice>>,
 }
 
-impl FileRef {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<FileRef> {
+impl SystemStorageDevice {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let p = path.as_ref().to_path_buf();
         let details = Self::build_details(path)?;
-        Ok(FileRef { path: p, details })
+        let id = p
+            .to_str()
+            .expect("Unrepresentable storage device id")
+            .to_owned();
+        Ok(Self {
+            path: p,
+            id,
+            details,
+            children: vec![],
+        })
     }
 
     fn build_details<P: AsRef<Path>>(path: P) -> Result<StorageDetails> {
@@ -134,6 +145,7 @@ impl FileRef {
             block_size: stat.st_blksize as usize,
             storage_type: StorageType::Unknown,
             mount_point: None,
+            label: None,
         };
 
         os::enrich_storage_details(path, &mut details)?;

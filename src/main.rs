@@ -115,8 +115,7 @@ fn main() -> Result<()> {
 
         std::process::exit(1);
     });
-
-    let ids = idshortcuts::IdShortcuts::from(storage_devices.iter().map(|r| r.id()).collect());
+    let storage_repo = storage_repo::StorageRepo::from(storage_devices);
 
     let frontend = cli::ConsoleFrontend::new();
 
@@ -125,25 +124,28 @@ fn main() -> Result<()> {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
             t.set_titles(row!["Device ID", "Short ID", "Size", "Type", "Mount Point",]);
-            for x in storage_devices {
-                t.add_row(row![
-                    style(x.id()).bold(),
-                    style(ids.get_short(x.id()).unwrap_or(&"".to_owned())).bold(),
-                    HumanBytes(x.details().size),
-                    x.details().storage_type,
-                    (x.details().mount_point)
-                        .as_ref()
-                        .unwrap_or(&"".to_string())
+
+            let format_device = |tt: &mut Table, x: &SystemStorageDevice| {
+                tt.add_row(row![
+                    style(&x.id).bold(),
+                    style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
+                    HumanBytes(x.details.size),
+                    &x.details.storage_type,
+                    (&x.details.mount_point).as_ref().unwrap_or(&"".to_string())
                 ]);
+            };
+
+            for x in storage_repo.devices() {
+                format_device(&mut t, &x);
+                for c in &x.children {
+                    format_device(&mut t, &c);
+                }
+                t.add_empty_row();
             }
             t.printstd();
         }
         ("wipe", Some(cmd)) => {
-            let device_id = cmd
-                .value_of("device")
-                .map(|id| ids.get(id))
-                .flatten()
-                .ok_or(anyhow!("Invalid device ID"))?;
+            let device_id = cmd.value_of("device").ok_or(anyhow!("Invalid device ID"))?;
             let scheme_id = cmd.value_of("scheme").unwrap();
             let verification = match cmd.value_of("verify").unwrap() {
                 "no" => Verify::No,
@@ -155,9 +157,8 @@ fn main() -> Result<()> {
             let block_size = ui::args::parse_block_size(block_size_arg)
                 .context(format!("Invalid blocksize value: {}", block_size_arg))?;
 
-            let device = storage_devices
-                .iter()
-                .find(|d| d.id() == device_id)
+            let device = storage_repo
+                .find_by_id(device_id)
                 .ok_or(anyhow!("Unknown device {}", device_id))?;
             let scheme = schemes
                 .find(scheme_id)
@@ -172,14 +173,14 @@ fn main() -> Result<()> {
             let task = WipeTask::new(
                 scheme.clone(),
                 verification,
-                device.details().size,
+                device.details.size,
                 block_size,
             )?;
 
             let mut state = WipeState::default();
             state.retries_left = retries;
 
-            let mut session = frontend.wipe_session(device_id, cmd.is_present("yes"));
+            let mut session = frontend.wipe_session(&device.id, cmd.is_present("yes"));
 
             match System::access(device) {
                 Ok(mut access) => {

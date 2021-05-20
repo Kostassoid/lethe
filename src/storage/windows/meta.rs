@@ -16,13 +16,8 @@ use winapi::um::{fileapi, ioapiset, winioctl};
 
 use windows::access::*;
 
+use crate::storage::windows::SystemStorageDevice;
 use crate::storage::*;
-
-#[derive(Debug)]
-pub struct DiskDeviceInfo {
-    pub id: String,
-    pub details: StorageDetails,
-}
 
 struct PhysicalDrive {
     device_number: DWORD,
@@ -142,7 +137,7 @@ impl Drop for DiskDeviceEnumerator {
 }
 
 impl Iterator for DiskDeviceEnumerator {
-    type Item = Vec<DiskDeviceInfo>;
+    type Item = SystemStorageDevice;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut device_interface_data: SP_DEVICE_INTERFACE_DATA = unsafe { mem::zeroed() };
@@ -198,8 +193,7 @@ impl Iterator for DiskDeviceEnumerator {
         let device_number = get_device_number(&device).unwrap();
 
         PhysicalDrive::from_device_number(device_number)
-            .and_then(|x| x.get_storage_list(&self.volumes))
-            //.map_err(|e| println!("Error: {:?}", e)) //todo: figure out how to propagate errors
+            .and_then(|p| p.describe(&self.volumes))
             .ok()
             .or_else(|| self.next()) // skip
     }
@@ -216,10 +210,7 @@ impl PhysicalDrive {
         })
     }
 
-    fn get_storage_list(
-        &self,
-        volumes: &Vec<(String, Vec<VolumeExtent>)>,
-    ) -> Result<Vec<DiskDeviceInfo>> {
+    fn describe(&self, volumes: &Vec<(String, Vec<VolumeExtent>)>) -> Result<SystemStorageDevice> {
         let geometry = get_drive_geometry(&self.device)?;
         let bytes_per_sector = get_alignment_descriptor(&self.device)
             .map(|a| a.BytesPerPhysicalSector as usize)
@@ -236,11 +227,12 @@ impl PhysicalDrive {
             block_size: bytes_per_sector,
             storage_type,
             mount_point: None,
+            label: None,
         };
 
         let layout = get_drive_layout(&self.device)?;
 
-        let mut devices: Vec<DiskDeviceInfo> = Vec::new();
+        let mut devices: Vec<SystemStorageDevice> = Vec::new();
 
         let partitions = unsafe {
             slice::from_raw_parts(
@@ -282,23 +274,26 @@ impl PhysicalDrive {
                 })
                 .map(|v| v.0.clone());
 
-            devices.push(DiskDeviceInfo {
+            devices.push(SystemStorageDevice {
                 id: partition_path,
                 details: StorageDetails {
                     size: l as u64,
                     block_size: drive_details.block_size,
                     storage_type: StorageType::Partition,
                     mount_point,
+                    label: None,
                 },
+                children: vec![],
             })
         }
 
-        devices.push(DiskDeviceInfo {
+        let root = SystemStorageDevice {
             id: self.path.to_string(),
             details: drive_details,
-        });
+            children: devices,
+        };
 
-        Ok(devices)
+        Ok(root)
     }
 }
 

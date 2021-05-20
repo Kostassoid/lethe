@@ -65,6 +65,21 @@ impl DeviceFile {
                 let mut returned: DWORD = 0;
                 if DeviceIoControl(
                     handle,
+                    winioctl::FSCTL_DISMOUNT_VOLUME,
+                    null_mut(),
+                    0,
+                    null_mut(),
+                    0,
+                    &mut returned,
+                    null_mut(),
+                ) == 0
+                {
+                    return Err(io::Error::last_os_error())
+                        .context(format!("Cannot dismount volume {}.", path));
+                }
+
+                if DeviceIoControl(
+                    handle,
                     winioctl::FSCTL_LOCK_VOLUME,
                     null_mut(),
                     0,
