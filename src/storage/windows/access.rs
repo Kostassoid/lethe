@@ -12,8 +12,8 @@ use winapi::um::fileapi::*;
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::ioapiset::DeviceIoControl;
 use winapi::um::winbase::{
-    FILE_BEGIN, FILE_CURRENT, FILE_FLAG_NO_BUFFERING, FILE_FLAG_SEQUENTIAL_SCAN,
-    FILE_FLAG_WRITE_THROUGH,
+    FILE_BEGIN, FILE_CURRENT, FILE_FLAG_NO_BUFFERING, FILE_FLAG_RANDOM_ACCESS,
+    FILE_FLAG_SEQUENTIAL_SCAN, FILE_FLAG_WRITE_THROUGH,
 };
 use winapi::um::winioctl;
 use winapi::um::winnt::{
@@ -43,7 +43,6 @@ impl DeviceFile {
         unsafe {
             let handle = CreateFileW(
                 WideCString::from_str(file_path.clone()).unwrap().as_ptr(),
-                //file_path.clone().to_wide_null().as_ptr(),
                 access,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 null_mut(),
@@ -51,7 +50,8 @@ impl DeviceFile {
                 FILE_ATTRIBUTE_NORMAL
                     | FILE_FLAG_NO_BUFFERING
                     | FILE_FLAG_WRITE_THROUGH
-                    | FILE_FLAG_SEQUENTIAL_SCAN,
+                    | FILE_FLAG_SEQUENTIAL_SCAN
+                    | FILE_FLAG_RANDOM_ACCESS,
                 null_mut(),
             );
 
@@ -61,22 +61,9 @@ impl DeviceFile {
             }
 
             let mut is_locked = false;
+
             if write_access {
                 let mut returned: DWORD = 0;
-                if DeviceIoControl(
-                    handle,
-                    winioctl::FSCTL_DISMOUNT_VOLUME,
-                    null_mut(),
-                    0,
-                    null_mut(),
-                    0,
-                    &mut returned,
-                    null_mut(),
-                ) == 0
-                {
-                    return Err(io::Error::last_os_error())
-                        .context(format!("Cannot dismount volume {}.", path));
-                }
 
                 if DeviceIoControl(
                     handle,
@@ -90,7 +77,22 @@ impl DeviceFile {
                 ) == 0
                 {
                     return Err(io::Error::last_os_error())
-                        .context(format!("Cannot lock device {}.", path));
+                        .context(format!("Cannot lock device {}. Make sure to close other applications accessing the storage.", path));
+                }
+
+                if DeviceIoControl(
+                    handle,
+                    winioctl::FSCTL_DISMOUNT_VOLUME,
+                    null_mut(),
+                    0,
+                    null_mut(),
+                    0,
+                    &mut returned,
+                    null_mut(),
+                ) == 0
+                {
+                    return Err(io::Error::last_os_error())
+                        .context(format!("Cannot dismount volume {}.", path));
                 }
                 is_locked = true;
             }
