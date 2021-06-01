@@ -12,7 +12,7 @@ use std::process::Command;
 use crate::storage::*;
 
 impl System {
-    pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
+    pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
         get_storage_devices()
     }
 }
@@ -59,7 +59,7 @@ pub fn is_trim_supported(fd: RawFd) -> bool {
     }
 }
 
-pub fn get_storage_devices() -> Result<Vec<FileRef>> {
+pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
     discover_file_based_devices(
         "/dev",
         |p| p.to_str().unwrap().contains("/dev/rdisk"),
@@ -71,31 +71,18 @@ fn discover_file_based_devices<P: AsRef<Path>>(
     root: P,
     path_filter: fn(&PathBuf) -> bool,
     meta_filter: fn(&StorageDetails) -> bool,
-) -> Result<Vec<FileRef>> {
+) -> Result<Vec<StorageRef>> {
     let rd = read_dir(&root)?;
     let mut refs = rd
         .filter_map(std::io::Result::ok)
         .map(|de| de.path())
         .filter(|path| (path_filter)(&path.to_path_buf()))
-        .flat_map(FileRef::new)
+        .flat_map(StorageRef::new)
         .filter(|r| (meta_filter)(&r.details))
         .collect::<Vec<_>>();
 
-    refs.sort_by(|a, b| a.path.to_str().cmp(&b.path.to_str()));
+    refs.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(refs)
-}
-
-pub fn get_bsd_device_name<P: AsRef<Path>>(path: P) -> Result<String> {
-    let n = path
-        .as_ref()
-        .file_name()
-        .ok_or(anyhow!("Invalid path"))?
-        .to_string_lossy();
-    if n.starts_with("rdisk") {
-        Ok(n[1..].into())
-    } else {
-        Ok(n.into())
-    }
 }
 
 pub fn get_diskutils_info<P: AsRef<Path>>(path: P) -> Result<HashMap<String, String>> {
@@ -135,28 +122,4 @@ pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDeta
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_bsd_name_resolver() {
-        assert_eq!(
-            get_bsd_device_name("/dev/rdisk0").unwrap(),
-            "disk0".to_owned()
-        );
-        assert_eq!(
-            get_bsd_device_name("/dev/rdisk0s1").unwrap(),
-            "disk0s1".to_owned()
-        );
-        assert_eq!(
-            get_bsd_device_name("/dev/disk2").unwrap(),
-            "disk2".to_owned()
-        );
-        assert_eq!(get_bsd_device_name("/rdisk3").unwrap(), "disk3".to_owned());
-
-        assert!(get_bsd_device_name("").is_err());
-    }
 }

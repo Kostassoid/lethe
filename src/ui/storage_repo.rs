@@ -1,14 +1,14 @@
-use crate::storage::SystemStorageDevice;
+use crate::storage::StorageRef;
 use crate::ui::idshortcuts::IdShortcuts;
 use std::collections::HashSet;
 
 pub struct StorageRepo {
-    raw: Vec<SystemStorageDevice>,
+    raw: Vec<StorageRef>,
     refs: IdShortcuts,
 }
 
 impl StorageRepo {
-    pub fn from(source: Vec<SystemStorageDevice>) -> Self {
+    pub fn from(source: Vec<StorageRef>) -> Self {
         let flat_id_set: HashSet<String> = source
             .iter()
             .map(|r| {
@@ -27,7 +27,7 @@ impl StorageRepo {
         }
     }
 
-    pub fn devices(&self) -> &[SystemStorageDevice] {
+    pub fn devices(&self) -> &[StorageRef] {
         return self.raw.as_slice();
     }
 
@@ -35,7 +35,7 @@ impl StorageRepo {
         return self.refs.get_short(id);
     }
 
-    pub fn find_by_id(&self, id: &str) -> Option<&SystemStorageDevice> {
+    pub fn find_by_id(&self, id: &str) -> Option<&StorageRef> {
         let canonical_id = self.refs.get(id).map(|s| s.as_str()).unwrap_or(id);
         self.raw.iter().find_map(|r| {
             if r.id == canonical_id {

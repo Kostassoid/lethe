@@ -1,11 +1,8 @@
 #[cfg(unix)]
-use self::nix::*;
-#[cfg(unix)]
 mod nix;
 
 #[cfg(windows)]
 mod windows;
-pub use windows::SystemStorageDevice;
 
 use anyhow::Result;
 use thiserror::Error;
@@ -16,6 +13,13 @@ pub enum StorageError {
     BadBlock,
     #[error("other i/o error")]
     Other(#[from] std::io::Error),
+}
+
+#[derive(Debug)]
+pub struct StorageRef {
+    pub id: String,
+    pub details: StorageDetails,
+    pub children: Vec<StorageRef>,
 }
 
 pub trait StorageAccess {

@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::SeekFrom;
 use std::os::unix::io::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -100,15 +100,7 @@ impl StorageAccess for FileAccess {
     }
 }
 
-#[derive(Debug)]
-pub struct SystemStorageDevice {
-    path: PathBuf,
-    pub id: String,
-    pub details: StorageDetails,
-    pub children: Vec<Box<SystemStorageDevice>>,
-}
-
-impl SystemStorageDevice {
+impl StorageRef {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let p = path.as_ref().to_path_buf();
         let details = Self::build_details(path)?;
@@ -117,7 +109,6 @@ impl SystemStorageDevice {
             .expect("Unrepresentable storage device id")
             .to_owned();
         Ok(Self {
-            path: p,
             id,
             details,
             children: vec![],
@@ -154,18 +145,8 @@ impl SystemStorageDevice {
     }
 }
 
-impl StorageRef for FileRef {
-    fn id(&self) -> &str {
-        self.path.to_str().unwrap()
-    }
-
-    fn details(&self) -> &StorageDetails {
-        &self.details
-    }
-}
-
 impl System {
-    pub fn access(storage_ref: &dyn StorageRef) -> Result<impl StorageAccess> {
-        FileAccess::new(&storage_ref.id())
+    pub fn access(device: &StorageRef) -> Result<impl StorageAccess> {
+        FileAccess::new(&device.id)
     }
 }
