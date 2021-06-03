@@ -125,9 +125,9 @@ fn main() -> Result<()> {
             t.set_format(*format::consts::FORMAT_CLEAN);
             t.set_titles(row!["Device ID", "Short ID", "Size", "Type", "Mount Point",]);
 
-            let format_device = |tt: &mut Table, x: &StorageRef| {
+            let format_device = |tt: &mut Table, x: &StorageRef, level: usize| {
                 tt.add_row(row![
-                    style(&x.id).bold(),
+                    style(format!("{}{}", " ".repeat(level * 2), &x.id)).bold(),
                     style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
                     HumanBytes(x.details.size),
                     &x.details.storage_type,
@@ -136,11 +136,10 @@ fn main() -> Result<()> {
             };
 
             for x in storage_repo.devices() {
-                format_device(&mut t, &x);
+                format_device(&mut t, &x, 0);
                 for c in &x.children {
-                    format_device(&mut t, &c);
+                    format_device(&mut t, &c, 1);
                 }
-                t.add_empty_row();
             }
             t.printstd();
         }
