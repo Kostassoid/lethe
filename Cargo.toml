@@ -27,6 +27,9 @@ console = "0.7.7"
 prettytable-rs = "^0.8"
 streaming-iterator = "0.1.4"
 regex = "1"
+plist = "1"
+serde = "1"
+serde_derive = "1"
 
 [target.'cfg(unix)'.dependencies]
 sysfs-class = "0.1.3"

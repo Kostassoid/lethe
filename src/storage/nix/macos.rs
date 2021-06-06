@@ -1,6 +1,6 @@
-//extern crate IOKit_sys as iokit;
 use ::nix::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use plist;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::read_dir;
@@ -13,7 +13,7 @@ use crate::storage::*;
 
 impl System {
     pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
-        get_storage_devices()
+        DiskUtilCli::default().get_list()
     }
 }
 
@@ -57,14 +57,6 @@ pub fn is_trim_supported(fd: RawFd) -> bool {
             .map(|_| (features & 0x00000010) > 0) // DK_FEATURE_UNMAP
             .unwrap_or(false)
     }
-}
-
-pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
-    discover_file_based_devices(
-        "/dev",
-        |p| p.to_str().unwrap().contains("/dev/rdisk"),
-        |_m| true,
-    )
 }
 
 fn discover_file_based_devices<P: AsRef<Path>>(
@@ -122,4 +114,99 @@ pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDeta
     }
 
     Ok(())
+}
+
+pub trait StorageDeviceEnumerator {
+    fn get_list(&self) -> Result<Vec<StorageRef>>;
+}
+
+pub struct DevFS {}
+
+impl StorageDeviceEnumerator for DevFS {
+    fn get_list(&self) -> Result<Vec<StorageRef>> {
+        discover_file_based_devices(
+            "/dev",
+            |p| p.to_str().unwrap().contains("/dev/rdisk"),
+            |_m| true,
+        )
+    }
+}
+
+pub struct DiskUtilCli {
+    path: PathBuf,
+}
+
+impl Default for DiskUtilCli {
+    fn default() -> Self {
+        DiskUtilCli { path: "/usr/sbin/diskutil".into() }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct DiskUtilPartition {
+    device_identifier: String,
+    size: u64,
+    volume_name: Option<String>,
+    mount_point: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct DiskUtilDiskAndPartitions {
+    device_identifier: String,
+    size: u64,
+    partitions: Option<Vec<DiskUtilPartition>>,
+    a_p_f_s_volumes: Option<Vec<DiskUtilPartition>>,
+    volume_name: Option<String>,
+    mount_point: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct DiskInfoListResult {
+    all_disks_and_partitions: Vec<DiskUtilDiskAndPartitions>,
+}
+
+impl StorageDeviceEnumerator for DiskUtilCli {
+    fn get_list(&self) -> Result<Vec<StorageRef>> {
+        let mut command = Command::new(&self.path);
+        command.arg("list").arg("-plist");
+
+        let output = command.output()?;
+        if !output.status.success() {
+            return Err(anyhow!("Can't run diskutil"));
+        };
+
+        let info: DiskInfoListResult = plist::from_bytes(&output.stdout)
+            .context("Unable to parse diskutil info plist")?;
+
+
+        Ok(info.all_disks_and_partitions.iter().map(|d| {
+            StorageRef {
+                id: format!("/dev/r{}", d.device_identifier),
+                details: StorageDetails{
+                    size: d.size,
+                    block_size: 0,
+                    storage_type: StorageType::Fixed,
+                    mount_point: d.mount_point.to_owned(),
+                    label: d.volume_name.to_owned()
+                },
+                children: d.partitions.as_ref().unwrap_or(&vec![]).iter()
+                    .chain(d.a_p_f_s_volumes.as_ref().unwrap_or(&vec![]).iter()).map(|p| {
+                    StorageRef {
+                        id: format!("/dev/r{}", p.device_identifier),
+                        details: StorageDetails{
+                            size: p.size,
+                            block_size: 0,
+                            storage_type: StorageType::Partition,
+                            mount_point: p.mount_point.to_owned(),
+                            label: p.volume_name.to_owned()
+                        },
+                        children: vec![]
+                    }
+                }).collect()
+            }
+        }).collect())
+    }
 }

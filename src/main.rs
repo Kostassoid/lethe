@@ -13,8 +13,16 @@ use clap::{App, AppSettings, Arg, SubCommand};
 extern crate prettytable;
 use prettytable::{format, Table};
 
+#[cfg(target_os = "macos")]
+#[macro_use]
+extern crate serde_derive;
+
+#[cfg(target_os = "macos")]
+extern crate plist;
+
 use ::console::style;
 use indicatif::HumanBytes;
+
 
 mod storage;
 use storage::*;
@@ -123,7 +131,7 @@ fn main() -> Result<()> {
         ("list", _) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
-            t.set_titles(row!["Device ID", "Short ID", "Size", "Type", "Mount Point",]);
+            t.set_titles(row!["Device ID", "Short ID", "Size", "Type", "Label", "Mount Point",]);
 
             let format_device = |tt: &mut Table, x: &StorageRef, level: usize| {
                 tt.add_row(row![
@@ -131,7 +139,8 @@ fn main() -> Result<()> {
                     style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
                     HumanBytes(x.details.size),
                     &x.details.storage_type,
-                    (&x.details.mount_point).as_ref().unwrap_or(&"".to_string())
+                    (&x.details.label).as_ref().unwrap_or(&"".to_string()),
+                    (&x.details.mount_point).as_ref().unwrap_or(&"".to_string()),
                 ]);
             };
 
