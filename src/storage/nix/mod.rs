@@ -19,6 +19,7 @@ mod macos;
 #[cfg(target_os = "macos")]
 use macos as os;
 
+#[allow(dead_code)]
 enum FileType {
     File,
     Block,
@@ -26,6 +27,7 @@ enum FileType {
     Other,
 }
 
+#[allow(dead_code)]
 fn resolve_file_type(mode: libc::mode_t) -> FileType {
     match mode & libc::S_IFMT {
         libc::S_IFREG => FileType::File,
@@ -35,6 +37,7 @@ fn resolve_file_type(mode: libc::mode_t) -> FileType {
     }
 }
 
+#[allow(dead_code)]
 fn resolve_storage_size(file_type: &FileType, stat: &libc::stat, fd: RawFd) -> u64 {
     match file_type {
         FileType::Block | FileType::Raw => os::get_block_device_size(fd),
@@ -101,6 +104,7 @@ impl StorageAccess for FileAccess {
 }
 
 impl StorageRef {
+    #[allow(dead_code)]
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let p = path.as_ref().to_path_buf();
         let details = Self::build_details(path)?;
@@ -115,6 +119,7 @@ impl StorageRef {
         })
     }
 
+    #[allow(dead_code)]
     fn build_details<P: AsRef<Path>>(path: P) -> Result<StorageDetails> {
         let mut stat: libc::stat = unsafe { std::mem::zeroed() };
         let cpath = CString::new(path.as_ref().to_str().unwrap())?;
