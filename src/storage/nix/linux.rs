@@ -9,7 +9,7 @@ use std::os::unix::io::*;
 use std::path::Path;
 
 impl System {
-    pub fn get_storage_devices() -> Result<Vec<impl StorageRef>> {
+    pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
         get_storage_devices()
     }
 }
@@ -90,7 +90,7 @@ pub fn resolve_mount_point<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
     Ok(None)
 }
 
-pub fn get_storage_devices() -> Result<Vec<FileRef>> {
+pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
     let partitions_file = File::open("/proc/partitions")?;
     let buf = BufReader::new(partitions_file);
     let name_regex = Regex::new(r"\s+(?P<name>\w+)$").unwrap();
@@ -103,7 +103,7 @@ pub fn get_storage_devices() -> Result<Vec<FileRef>> {
                 .map(|c| format!("/dev/{}", &c["name"]))
         })
         .skip(1)
-        .flat_map(FileRef::new)
+        .flat_map(StorageRef::new)
         .collect::<Vec<_>>();
 
     Ok(refs)
