@@ -7,6 +7,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::os::unix::io::*;
 use std::path::Path;
+use sysfs_class::SysClass;
 
 impl System {
     pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
@@ -77,7 +78,7 @@ pub fn resolve_storage_type<P: AsRef<Path>>(path: P) -> Result<StorageType> {
 
 pub fn resolve_mount_point<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
     let s = path.as_ref().to_str().unwrap();
-    let f = File::open("/etc/mtab")?;
+    let f = File::open("/proc/mounts")?;
     let reader = BufReader::new(f);
 
     for line in reader.lines() {
@@ -91,19 +92,53 @@ pub fn resolve_mount_point<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
 }
 
 pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
-    let partitions_file = File::open("/proc/partitions")?;
-    let buf = BufReader::new(partitions_file);
-    let name_regex = Regex::new(r"\s+(?P<name>\w+)$").unwrap();
-    let refs = buf
-        .lines()
-        .filter_map(|io_line| {
-            let line = io_line.unwrap();
-            name_regex
-                .captures(line.as_str())
-                .map(|c| format!("/dev/{}", &c["name"]))
+    // let partitions_file = File::open("/proc/partitions")?;
+    // let buf = BufReader::new(partitions_file);
+    // let name_regex = Regex::new(r"\s+(?P<name>\w+)$").unwrap();
+    // let refs = buf
+    //     .lines()
+    //     .filter_map(|io_line| {
+    //         let line = io_line.unwrap();
+    //         name_regex
+    //             .captures(line.as_str())
+    //             .map(|c| format!("/dev/{}", &c["name"]))
+    //     })
+    //     .skip(1)
+    //     .flat_map(StorageRef::new)
+    //     .collect::<Vec<_>>();
+
+    use sysfs_class::{Block, SysClass};
+    let root = Block::all()?;
+    // root.iter().for_each(|d| {
+    //     println!(
+    //         "path: /dev/{}, device: {}",
+    //         d.path().file_name().unwrap().to_str().unwrap(),
+    //         d.has_device()
+    //     )
+    // });
+    let refs = root
+        .iter()
+        .filter(|d| d.has_device())
+        .map(|d| {
+            let device_path = d.path().file_name().unwrap().to_str().unwrap();
+            StorageRef {
+                id: device_path.to_string(),
+                details: Default::default(),
+                children: d
+                    .children()
+                    .unwrap_or(vec![])
+                    .iter()
+                    .map(|c| {
+                        let child_path = c.path().file_name().unwrap().to_str().unwrap();
+                        StorageRef {
+                            id: child_path.to_string(),
+                            details: Default::default(),
+                            children: vec![],
+                        }
+                    })
+                    .collect(),
+            }
         })
-        .skip(1)
-        .flat_map(StorageRef::new)
         .collect::<Vec<_>>();
 
     Ok(refs)

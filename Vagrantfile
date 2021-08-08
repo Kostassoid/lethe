@@ -34,6 +34,9 @@
 #
 # end
 
+Vagrant.require_version ">= 2.2.8"
+ENV['VAGRANT_EXPERIMENTAL'] = 'disks'
+
 Vagrant.configure("2") do |config|
   config.vm.define "hashicorp" do |h|
     h.vm.box = "hashicorp/bionic64"
