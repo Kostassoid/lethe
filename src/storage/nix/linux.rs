@@ -2,12 +2,13 @@ use crate::storage::*;
 use ::nix::*;
 use anyhow::{Context, Result};
 use regex::Regex;
+use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io::BufRead;
 use std::io::BufReader;
 use std::os::unix::io::*;
 use std::path::Path;
-use sysfs_class::SysClass;
+use sysfs_class::{Block, SysClass};
 
 impl System {
     pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
@@ -116,32 +117,62 @@ pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
     //         d.has_device()
     //     )
     // });
-    let refs = root
+    let mut refs = root
         .iter()
         .filter(|d| d.has_device())
-        .map(|d| {
-            let device_path = d.path().file_name().unwrap().to_str().unwrap();
-            StorageRef {
-                id: device_path.to_string(),
-                details: Default::default(),
-                children: d
-                    .children()
-                    .unwrap_or(vec![])
-                    .iter()
-                    .map(|c| {
-                        let child_path = c.path().file_name().unwrap().to_str().unwrap();
-                        StorageRef {
-                            id: child_path.to_string(),
-                            details: Default::default(),
-                            children: vec![],
-                        }
-                    })
-                    .collect(),
-            }
-        })
+        .flat_map(build_device_info)
         .collect::<Vec<_>>();
 
+    refs.sort_by(|a, b| a.id.cmp(&b.id));
+
     Ok(refs)
+}
+
+fn build_device_info(d: &Block) -> Option<StorageRef> {
+    let device_path = format!("/dev/{}", d.path().file_name()?.to_str()?);
+    let children = d
+        .children()
+        .unwrap_or(vec![])
+        .iter()
+        .flat_map(build_device_info)
+        .collect();
+
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    let cpath = CString::new(device_path.as_str()).ok()?;
+    unsafe {
+        if libc::stat(cpath.as_ptr(), &mut stat) < 0 {
+            return None;
+        }
+    }
+
+    let storage_type = if d.parent_device().is_some() {
+        StorageType::Partition
+    } else if d.removable().ok()? == 1 {
+        StorageType::Removable
+    } else {
+        StorageType::Fixed
+    };
+
+    // println!(
+    //     "stat = {}, logical = {}, physical = {}",
+    //     stat.st_blksize,
+    //     d.queue_logical_block_size().ok()?,
+    //     d.queue_physical_block_size().ok()?
+    // );
+
+    let details = StorageDetails {
+        size: d.size().ok()? * 512,
+        block_size: stat.st_blksize as usize,
+        storage_type,
+        mount_point: resolve_mount_point(&device_path).unwrap_or(None),
+        label: None,
+    };
+
+    Some(StorageRef {
+        id: device_path,
+        details,
+        children,
+    })
 }
 
 pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDetails) -> Result<()> {
