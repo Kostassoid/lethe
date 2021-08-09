@@ -1,7 +1,6 @@
 use crate::storage::*;
 use ::nix::*;
 use anyhow::{Context, Result};
-use regex::Regex;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io::BufRead;
@@ -9,6 +8,8 @@ use std::io::BufReader;
 use std::os::unix::io::*;
 use std::path::Path;
 use sysfs_class::{Block, SysClass};
+
+const SYSFS_BLOCK_SIZE: u64 = 512;
 
 impl System {
     pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
@@ -32,49 +33,9 @@ pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> Res
         ))
 }
 
-pub fn get_block_device_size(fd: RawFd) -> u64 {
-    // requires linux 2.4.10+
-    ioctl_read!(linux_get_block_size, 0x12, 114, u64); // BLKGETSIZE64
-
-    unsafe {
-        let mut block_size: u64 = std::mem::zeroed();
-        linux_get_block_size(fd, &mut block_size).unwrap();
-        block_size
-    }
-}
-
 #[allow(dead_code)]
 pub fn is_trim_supported(_fd: RawFd) -> bool {
     false
-}
-
-pub fn resolve_storage_type<P: AsRef<Path>>(path: P) -> Result<StorageType> {
-    use sysfs_class::{Block, SysClass};
-
-    let name = path.as_ref().file_name().unwrap();
-
-    //todo: don't re-iterate for each device
-    for block in Block::all()? {
-        if block.has_device() {
-            if block.path().file_name().unwrap() == name {
-                return if block.removable()? == 1 {
-                    Ok(StorageType::Removable)
-                } else {
-                    Ok(StorageType::Fixed)
-                };
-            }
-
-            if block
-                .children()?
-                .iter()
-                .find(|c| c.path().file_name().unwrap() == name)
-                .is_some()
-            {
-                return Ok(StorageType::Partition);
-            }
-        }
-    }
-    Ok(StorageType::Unknown)
 }
 
 pub fn resolve_mount_point<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
@@ -92,31 +53,29 @@ pub fn resolve_mount_point<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
     Ok(None)
 }
 
-pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
-    // let partitions_file = File::open("/proc/partitions")?;
-    // let buf = BufReader::new(partitions_file);
-    // let name_regex = Regex::new(r"\s+(?P<name>\w+)$").unwrap();
-    // let refs = buf
-    //     .lines()
-    //     .filter_map(|io_line| {
-    //         let line = io_line.unwrap();
-    //         name_regex
-    //             .captures(line.as_str())
-    //             .map(|c| format!("/dev/{}", &c["name"]))
-    //     })
-    //     .skip(1)
-    //     .flat_map(StorageRef::new)
-    //     .collect::<Vec<_>>();
+pub fn resolve_fs_label<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
+    let labels = std::fs::read_dir("/dev/disk/by-label/")?;
 
-    use sysfs_class::{Block, SysClass};
+    for entry in labels {
+        let label_path = entry.unwrap().path();
+        let label_name = label_path.file_name().unwrap();
+        let linked_device = std::fs::read_link(&label_path)?;
+
+        if linked_device
+            .file_name()
+            .unwrap()
+            .eq(path.as_ref().file_name().unwrap())
+        {
+            return Ok(label_name.to_str().map(|s| s.to_owned()));
+        }
+    }
+
+    Ok(None)
+}
+
+pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
     let root = Block::all()?;
-    // root.iter().for_each(|d| {
-    //     println!(
-    //         "path: /dev/{}, device: {}",
-    //         d.path().file_name().unwrap().to_str().unwrap(),
-    //         d.has_device()
-    //     )
-    // });
+
     let mut refs = root
         .iter()
         .filter(|d| d.has_device())
@@ -153,19 +112,12 @@ fn build_device_info(d: &Block) -> Option<StorageRef> {
         StorageType::Fixed
     };
 
-    // println!(
-    //     "stat = {}, logical = {}, physical = {}",
-    //     stat.st_blksize,
-    //     d.queue_logical_block_size().ok()?,
-    //     d.queue_physical_block_size().ok()?
-    // );
-
     let details = StorageDetails {
-        size: d.size().ok()? * 512,
+        size: d.size().ok()? * SYSFS_BLOCK_SIZE,
         block_size: stat.st_blksize as usize,
         storage_type,
         mount_point: resolve_mount_point(&device_path).unwrap_or(None),
-        label: None,
+        label: resolve_fs_label(&device_path).unwrap_or(None),
     };
 
     Some(StorageRef {
@@ -173,10 +125,4 @@ fn build_device_info(d: &Block) -> Option<StorageRef> {
         details,
         children,
     })
-}
-
-pub fn enrich_storage_details<P: AsRef<Path>>(path: P, details: &mut StorageDetails) -> Result<()> {
-    details.mount_point = resolve_mount_point(&path).unwrap_or(None);
-    details.storage_type = resolve_storage_type(&path).unwrap_or(StorageType::Unknown);
-    Ok(())
 }

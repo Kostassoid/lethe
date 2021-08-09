@@ -2,11 +2,9 @@
 use crate::storage::*;
 use ::nix::*;
 use anyhow::{Context, Result};
-use std::ffi::CString;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::SeekFrom;
-use std::os::unix::io::*;
 use std::path::Path;
 
 #[cfg(target_os = "linux")]
@@ -18,32 +16,6 @@ use linux as os;
 mod macos;
 #[cfg(target_os = "macos")]
 use macos as os;
-
-#[allow(dead_code)]
-enum FileType {
-    File,
-    Block,
-    Raw,
-    Other,
-}
-
-#[allow(dead_code)]
-fn resolve_file_type(mode: libc::mode_t) -> FileType {
-    match mode & libc::S_IFMT {
-        libc::S_IFREG => FileType::File,
-        libc::S_IFBLK => FileType::Block,
-        libc::S_IFCHR => FileType::Raw,
-        _ => FileType::Other,
-    }
-}
-
-#[allow(dead_code)]
-fn resolve_storage_size(file_type: &FileType, stat: &libc::stat, fd: RawFd) -> u64 {
-    match file_type {
-        FileType::Block | FileType::Raw => os::get_block_device_size(fd),
-        _ => stat.st_size as u64,
-    }
-}
 
 impl StorageError {
     fn from(err: std::io::Error) -> StorageError {
@@ -100,53 +72,6 @@ impl StorageAccess for FileAccess {
             .flush()
             .map_err(|e| StorageError::from(e))
             .context("Unable to flush data to the storage")
-    }
-}
-
-impl StorageRef {
-    #[allow(dead_code)]
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let p = path.as_ref().to_path_buf();
-        let details = Self::build_details(path)?;
-        let id = p
-            .to_str()
-            .expect("Unrepresentable storage device id")
-            .to_owned();
-        Ok(Self {
-            id,
-            details,
-            children: vec![],
-        })
-    }
-
-    #[allow(dead_code)]
-    fn build_details<P: AsRef<Path>>(path: P) -> Result<StorageDetails> {
-        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-        let cpath = CString::new(path.as_ref().to_str().unwrap())?;
-        unsafe {
-            if libc::stat(cpath.as_ptr(), &mut stat) < 0 {
-                Err(anyhow!("Unable to get stat info"))?;
-            }
-        }
-
-        let file_type = resolve_file_type(stat.st_mode);
-
-        let f = os::open_file_direct(&path, false)?;
-        let fd = f.as_raw_fd();
-
-        let size = resolve_storage_size(&file_type, &stat, fd);
-
-        let mut details = StorageDetails {
-            size,
-            block_size: stat.st_blksize as usize,
-            storage_type: StorageType::Unknown,
-            mount_point: None,
-            label: None,
-        };
-
-        os::enrich_storage_details(path, &mut details)?;
-
-        Ok(details)
     }
 }
 
