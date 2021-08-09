@@ -4,10 +4,10 @@ set -e
 # set -o xtrace
 
 # reset
-umount /dev/sdb1 || true
-umount /dev/sdb2 || true
-parted /dev/sdb1 rm 1 || true
-parted /dev/sdb2 rm 1 || true
+umount /mnt/extra1 || true
+umount /mnt/extra2 || true
+parted /dev/sdb rm 1 || true
+parted /dev/sdb rm 2 || true
 
 #create partitions
 parted /dev/sdb mklabel gpt --script

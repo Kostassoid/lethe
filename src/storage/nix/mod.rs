@@ -1,5 +1,6 @@
 #![cfg(unix)]
 use crate::storage::*;
+use ::nix::mount::{umount2, MntFlags};
 use ::nix::*;
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -77,6 +78,19 @@ impl StorageAccess for FileAccess {
 
 impl System {
     pub fn access(device: &StorageRef) -> Result<impl StorageAccess> {
+        device
+            .children
+            .iter()
+            .flat_map(|c| &c.details.mount_point)
+            .for_each(|c| {
+                let _ = umount2(c.as_str(), MntFlags::MNT_FORCE);
+            });
+
+        let _ = match &device.details.mount_point {
+            Some(c) => umount2(c.as_str(), MntFlags::MNT_FORCE),
+            _ => Ok(()),
+        };
+
         FileAccess::new(&device.id)
     }
 }
