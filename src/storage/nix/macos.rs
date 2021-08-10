@@ -9,7 +9,7 @@ use std::process::Command;
 use crate::storage::*;
 
 impl System {
-    pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
+    pub fn enumerate_storage_devices() -> Result<Vec<StorageRef>> {
         DiskUtilCli::default().get_list()
     }
 }
@@ -47,7 +47,10 @@ pub fn get_block_device_size(fd: libc::c_int) -> u64 {
 
 //todo: remove this common dependency, the current implementation is not relying on StorageRef ctor
 #[allow(dead_code)]
-pub fn enrich_storage_details<P: AsRef<Path>>(_path: P, _details: &mut StorageDetails) -> Result<()> {
+pub fn enrich_storage_details<P: AsRef<Path>>(
+    _path: P,
+    _details: &mut StorageDetails,
+) -> Result<()> {
     Ok(())
 }
 
@@ -61,7 +64,9 @@ pub struct DiskUtilCli {
 
 impl Default for DiskUtilCli {
     fn default() -> Self {
-        DiskUtilCli { path: "/usr/sbin/diskutil".into() }
+        DiskUtilCli {
+            path: "/usr/sbin/diskutil".into(),
+        }
     }
 }
 
@@ -96,7 +101,6 @@ struct DUDiskInfo {
     mount_point: Option<String>,
 }
 
-
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct DUList {
@@ -104,7 +108,7 @@ struct DUList {
 }
 
 impl DiskUtilCli {
-    fn get_storage_details(&self, id: &str) ->Result<StorageDetails> {
+    fn get_storage_details(&self, id: &str) -> Result<StorageDetails> {
         let mut command = Command::new(&self.path);
         command.arg("info").arg("-plist").arg(id);
 
@@ -113,8 +117,8 @@ impl DiskUtilCli {
             return Err(anyhow!("Can't run diskutil"));
         };
 
-        let info: DUDiskInfo = plist::from_bytes(&output.stdout)
-            .context("Unable to parse diskutil info plist")?;
+        let info: DUDiskInfo =
+            plist::from_bytes(&output.stdout).context("Unable to parse diskutil info plist")?;
 
         let storage_type = if !info.whole_disk {
             StorageType::Partition
@@ -124,12 +128,12 @@ impl DiskUtilCli {
             StorageType::Fixed
         };
 
-        Ok(StorageDetails{
+        Ok(StorageDetails {
             size: info.size,
             block_size: info.device_block_size,
             storage_type,
             mount_point: info.mount_point.to_owned(),
-            label: info.volume_name.to_owned()
+            label: info.volume_name.to_owned(),
         })
     }
 }
@@ -144,26 +148,33 @@ impl StorageDeviceEnumerator for DiskUtilCli {
             return Err(anyhow!("Can't run diskutil"));
         };
 
-        let info: DUList = plist::from_bytes(&output.stdout)
-            .context("Unable to parse diskutil info plist")?;
+        let info: DUList =
+            plist::from_bytes(&output.stdout).context("Unable to parse diskutil info plist")?;
 
+        info.all_disks_and_partitions
+            .iter()
+            .map(|d| {
+                let children: Result<Vec<StorageRef>> = d
+                    .partitions
+                    .as_ref()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .chain(d.a_p_f_s_volumes.as_ref().unwrap_or(&vec![]).iter())
+                    .map(|p| {
+                        Ok(StorageRef {
+                            id: format!("/dev/r{}", p.device_identifier),
+                            details: self.get_storage_details(&p.device_identifier)?,
+                            children: vec![],
+                        })
+                    })
+                    .collect();
 
-        info.all_disks_and_partitions.iter().map(|d| {
-
-            let children: Result<Vec<StorageRef>> = d.partitions.as_ref().unwrap_or(&vec![]).iter()
-                .chain(d.a_p_f_s_volumes.as_ref().unwrap_or(&vec![]).iter()).map(|p| {
                 Ok(StorageRef {
-                    id: format!("/dev/r{}", p.device_identifier),
-                    details: self.get_storage_details(&p.device_identifier)?,
-                    children: vec![]
+                    id: format!("/dev/r{}", d.device_identifier),
+                    details: self.get_storage_details(&d.device_identifier)?,
+                    children: children?,
                 })
-            }).collect();
-
-            Ok(StorageRef {
-                id: format!("/dev/r{}", d.device_identifier),
-                details: self.get_storage_details(&d.device_identifier)?,
-                children: children?,
             })
-        }).collect()
+            .collect()
     }
 }

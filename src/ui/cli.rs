@@ -69,7 +69,7 @@ pub struct ConsoleWipeSession {
 impl WipeEventReceiver for ConsoleWipeSession {
     fn handle(&mut self, task: &WipeTask, state: &WipeState, event: WipeEvent) -> () {
         match event {
-            WipeEvent::Started => {
+            WipeEvent::Created => {
                 let mut t = Table::new();
                 let indent_table_format = FormatBuilder::new().padding(4, 1).build();
                 t.set_format(indent_table_format);
@@ -87,6 +87,8 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     println!("Aborted.");
                     std::process::exit(0);
                 }
+            }
+            WipeEvent::Started => {
                 self.session_started = Some(Instant::now());
             }
             WipeEvent::StageStarted => {
@@ -120,7 +122,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     pb.set_position(position);
                 }
             }
-            WipeEvent::MarkBlockAsBad(block) => {
+            WipeEvent::MarkedBlockAsBad(block) => {
                 if let Some(pb) = &self.pb {
                     pb.println(format!("Unable to access block at {}. Skipping.", block));
                 }

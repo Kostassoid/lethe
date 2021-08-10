@@ -1,7 +1,7 @@
 use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
 use crate::sanitization::mem::*;
 use crate::sanitization::*;
-use crate::storage::{StorageAccess, StorageError};
+use crate::storage::{StorageAccess, StorageDevice, StorageError};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
@@ -77,15 +77,16 @@ impl WipeTask {
 }
 
 #[derive(Debug)]
-pub enum WipeEvent {
+pub enum WipeEvent<'a> {
+    Created,
     Started,
     StageStarted,
     Progress(u64),
-    MarkBlockAsBad(u64),
+    MarkedBlockAsBad(u64),
     StageCompleted(Option<Rc<anyhow::Error>>),
     Retrying,
     Completed(Option<Rc<anyhow::Error>>),
-    Fatal(Rc<anyhow::Error>),
+    Fatal(&'a anyhow::Error),
 }
 
 pub trait WipeEventReceiver {
@@ -94,18 +95,19 @@ pub trait WipeEventReceiver {
 
 impl WipeTask {
     pub fn run(
-        self,
-        access: &mut dyn StorageAccess,
+        &self,
+        device: &dyn StorageDevice,
         state: &mut WipeState,
         frontend: &mut dyn WipeEventReceiver,
-    ) -> bool {
-        WipeRun {
-            access,
+    ) -> Result<bool> {
+        let mut access = device.access()?;
+        Ok(WipeRun {
+            access: access.as_mut(),
             task: &self,
             state,
             frontend,
         }
-        .run()
+        .run())
     }
 }
 
@@ -150,7 +152,7 @@ impl WipeRun<'_> {
             .bad_blocks
             .borrow_mut()
             .mark(self.current_block_number());
-        self.publish(WipeEvent::MarkBlockAsBad(self.state.position));
+        self.publish(WipeEvent::MarkedBlockAsBad(self.state.position));
     }
 
     fn try_seek(&mut self) -> Result<bool> {
@@ -384,7 +386,7 @@ mod test {
         )
         .unwrap();
         let mut state = WipeState::default();
-        let result = task.run(&mut storage, &mut state, &mut receiver);
+        let result = task.run(&storage, &mut state, &mut receiver).unwrap();
 
         assert!(result);
 
@@ -430,7 +432,7 @@ mod test {
         )
         .unwrap();
         let mut state = WipeState::default();
-        let result = task.run(&mut storage, &mut state, &mut receiver);
+        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
 
         assert!(!result);
 
@@ -467,7 +469,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver);
+        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
 
         assert!(result);
 
@@ -519,7 +521,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver);
+        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
 
         assert!(result);
 
@@ -528,7 +530,7 @@ mod test {
         assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
         assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
-        assert_matches!(e.next(), Some((_, MarkBlockAsBad(32768))));
+        assert_matches!(e.next(), Some((_, MarkedBlockAsBad(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
@@ -563,7 +565,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver);
+        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
 
         assert!(result);
 
@@ -571,9 +573,9 @@ mod test {
         assert_matches!(e.next(), Some((_, Started)));
         assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
         assert_matches!(e.next(), Some((_, Progress(0))));
-        assert_matches!(e.next(), Some((_, MarkBlockAsBad(0))));
+        assert_matches!(e.next(), Some((_, MarkedBlockAsBad(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
-        assert_matches!(e.next(), Some((_, MarkBlockAsBad(32768))));
+        assert_matches!(e.next(), Some((_, MarkedBlockAsBad(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
@@ -607,7 +609,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver);
+        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
 
         assert!(result);
 
@@ -618,7 +620,7 @@ mod test {
         assert_matches!(e.next(), Some((_, Progress(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
-        assert_matches!(e.next(), Some((_, MarkBlockAsBad(98304))));
+        assert_matches!(e.next(), Some((_, MarkedBlockAsBad(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
         assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
@@ -653,7 +655,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver);
+        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
 
         assert!(result);
 
@@ -661,13 +663,13 @@ mod test {
         assert_matches!(e.next(), Some((_, Started)));
         assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
         assert_matches!(e.next(), Some((_, Progress(0))));
-        assert_matches!(e.next(), Some((_, MarkBlockAsBad(0))));
+        assert_matches!(e.next(), Some((_, MarkedBlockAsBad(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
-        assert_matches!(e.next(), Some((_, MarkBlockAsBad(32768))));
+        assert_matches!(e.next(), Some((_, MarkedBlockAsBad(32768))));
         assert_matches!(e.next(), Some((_, Progress(65536))));
-        assert_matches!(e.next(), Some((_, MarkBlockAsBad(65536))));
+        assert_matches!(e.next(), Some((_, MarkedBlockAsBad(65536))));
         assert_matches!(e.next(), Some((_, Progress(98304))));
-        assert_matches!(e.next(), Some((_, MarkBlockAsBad(98304))));
+        assert_matches!(e.next(), Some((_, MarkedBlockAsBad(98304))));
         assert_matches!(e.next(), Some((_, Progress(100000))));
         assert_matches!(e.next(), Some((_, StageCompleted(None))));
         assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
@@ -699,7 +701,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 0;
-        let result = task.run(&mut storage, &mut state, &mut receiver);
+        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
 
         assert!(!result);
 
@@ -719,11 +721,11 @@ mod test {
         assert_matches!(e.next(), Some((_, Completed(Some(_)))));
     }
 
-    struct StubReceiver {
-        collected: Vec<(WipeState, WipeEvent)>,
+    struct StubReceiver<'a> {
+        collected: Vec<(WipeState, WipeEvent<'a>)>,
     }
 
-    impl StubReceiver {
+    impl StubReceiver<'_> {
         pub fn new() -> Self {
             StubReceiver {
                 collected: Vec::new(),
@@ -731,8 +733,8 @@ mod test {
         }
     }
 
-    impl WipeEventReceiver for StubReceiver {
-        fn handle(&mut self, _task: &WipeTask, state: &WipeState, event: WipeEvent) -> () {
+    impl<'a> WipeEventReceiver for StubReceiver<'a> {
+        fn handle(&mut self, _task: &WipeTask, state: &WipeState, event: WipeEvent<'_>) -> () {
             println!("{:?}", event);
             self.collected.push((state.clone(), event));
         }
@@ -793,6 +795,12 @@ mod test {
                 }
                 _ => Ok(()),
             }
+        }
+    }
+
+    impl StorageDevice for InMemoryStorage {
+        fn access(&self) -> Result<Box<dyn StorageAccess>> {
+            Ok(Box::new(self))
         }
     }
 

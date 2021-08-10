@@ -12,8 +12,18 @@ use sysfs_class::{Block, SysClass};
 const SYSFS_BLOCK_SIZE: u64 = 512;
 
 impl System {
-    pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
-        get_storage_devices()
+    pub fn enumerate_storage_devices() -> Result<Vec<StorageRef>> {
+        let root = Block::all()?;
+
+        let mut refs = root
+            .iter()
+            .filter(|d| d.has_device())
+            .flat_map(build_device_info)
+            .collect::<Vec<_>>();
+
+        refs.sort_by(|a, b| a.id.cmp(&b.id));
+
+        Ok(refs)
     }
 }
 
@@ -71,20 +81,6 @@ pub fn resolve_fs_label<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
     }
 
     Ok(None)
-}
-
-pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
-    let root = Block::all()?;
-
-    let mut refs = root
-        .iter()
-        .filter(|d| d.has_device())
-        .flat_map(build_device_info)
-        .collect::<Vec<_>>();
-
-    refs.sort_by(|a, b| a.id.cmp(&b.id));
-
-    Ok(refs)
 }
 
 fn build_device_info(d: &Block) -> Option<StorageRef> {

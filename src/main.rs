@@ -1,7 +1,5 @@
 #![recursion_limit = "256"]
 
-use std::rc::Rc;
-
 #[macro_use]
 extern crate anyhow;
 use anyhow::{Context, Result};
@@ -22,7 +20,6 @@ extern crate plist;
 
 use ::console::style;
 use indicatif::HumanBytes;
-
 
 mod storage;
 use storage::*;
@@ -108,7 +105,7 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
-    let storage_devices = System::get_storage_devices().unwrap_or_else(|err| {
+    let storage_devices = System::enumerate_storage_devices().unwrap_or_else(|err| {
         eprintln!("Unable to enumerate storage devices. {:#}", err);
 
         if cfg!(linux) {
@@ -131,7 +128,14 @@ fn main() -> Result<()> {
         ("list", _) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
-            t.set_titles(row!["Device ID", "Short ID", "Size", "Type", "Label", "Mount Point",]);
+            t.set_titles(row![
+                "Device ID",
+                "Short ID",
+                "Size",
+                "Type",
+                "Label",
+                "Mount Point",
+            ]);
 
             let format_device = |tt: &mut Table, x: &StorageRef, level: usize| {
                 tt.add_row(row![
@@ -189,18 +193,16 @@ fn main() -> Result<()> {
             state.retries_left = retries;
 
             let mut session = frontend.wipe_session(&device.id, cmd.is_present("yes"));
+            session.handle(&task, &state, WipeEvent::Created);
 
-            match System::access(device) {
-                Ok(mut access) => {
-                    if !task.run(&mut access, &mut state, &mut session) {
-                        std::process::exit(1);
-                    }
-                }
+            match &task.run(device, &mut state, &mut session) {
+                Ok(success) if !success => std::process::exit(1),
                 Err(err) => {
-                    session.handle(&task, &state, WipeEvent::Fatal(Rc::from(err)));
-                    std::process::exit(1);
+                    session.handle(&task, &state, WipeEvent::Fatal(err));
+                    std::process::exit(1)
                 }
-            }
+                _ => {}
+            };
         }
         _ => {
             println!("{}", app.usage());

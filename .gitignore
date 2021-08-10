@@ -4,3 +4,4 @@
 *.iml
 /.vagrant
 /testing/*.vdi
+*.log

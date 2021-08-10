@@ -18,7 +18,7 @@ use misc::*;
 use anyhow::{Context, Result};
 
 impl System {
-    pub fn get_storage_devices() -> Result<Vec<StorageRef>> {
+    pub fn enumerate_storage_devices() -> Result<Vec<StorageRef>> {
         let enumerator = DiskDeviceEnumerator::new().with_context(|| {
             if !is_elevated() {
                 format!("Make sure you run the application with Administrator permissions!")
@@ -30,9 +30,11 @@ impl System {
         devices.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(devices)
     }
+}
 
-    pub fn access(device: &StorageRef) -> Result<impl StorageAccess> {
-        CompositeStorageAccess::open(device)
+impl StorageDevice for StorageRef {
+    fn access(&self) -> Result<Box<dyn StorageAccess>> {
+        CompositeStorageAccess::open(self).map(Box::new)
     }
 }
 

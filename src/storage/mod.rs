@@ -1,8 +1,12 @@
 #[cfg(unix)]
 mod nix;
+#[cfg(unix)]
+pub use crate::storage::nix::*;
 
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+pub use windows::*;
 
 use anyhow::Result;
 use thiserror::Error;
@@ -20,6 +24,10 @@ pub struct StorageRef {
     pub id: String,
     pub details: StorageDetails,
     pub children: Vec<StorageRef>,
+}
+
+pub trait StorageDevice {
+    fn access(&self) -> Result<Box<dyn StorageAccess>>;
 }
 
 pub trait StorageAccess {
