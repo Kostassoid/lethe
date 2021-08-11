@@ -195,14 +195,17 @@ fn main() -> Result<()> {
             let mut session = frontend.wipe_session(&device.id, cmd.is_present("yes"));
             session.handle(&task, &state, WipeEvent::Created);
 
-            match &task.run(device, &mut state, &mut session) {
-                Ok(success) if !success => std::process::exit(1),
+            match device.access() {
+                Ok(mut access) => {
+                    if !task.run(access.as_mut(), &mut state, &mut session) {
+                        std::process::exit(1);
+                    }
+                }
                 Err(err) => {
                     session.handle(&task, &state, WipeEvent::Fatal(err));
-                    std::process::exit(1)
+                    std::process::exit(1);
                 }
-                _ => {}
-            };
+            }
         }
         _ => {
             println!("{}", app.usage());

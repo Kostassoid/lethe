@@ -1,7 +1,7 @@
 use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
 use crate::sanitization::mem::*;
 use crate::sanitization::*;
-use crate::storage::{StorageAccess, StorageDevice, StorageError};
+use crate::storage::{StorageAccess, StorageError};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
@@ -77,7 +77,7 @@ impl WipeTask {
 }
 
 #[derive(Debug)]
-pub enum WipeEvent<'a> {
+pub enum WipeEvent {
     Created,
     Started,
     StageStarted,
@@ -86,7 +86,7 @@ pub enum WipeEvent<'a> {
     StageCompleted(Option<Rc<anyhow::Error>>),
     Retrying,
     Completed(Option<Rc<anyhow::Error>>),
-    Fatal(&'a anyhow::Error),
+    Fatal(anyhow::Error),
 }
 
 pub trait WipeEventReceiver {
@@ -96,18 +96,17 @@ pub trait WipeEventReceiver {
 impl WipeTask {
     pub fn run(
         &self,
-        device: &dyn StorageDevice,
+        access: &mut dyn StorageAccess,
         state: &mut WipeState,
         frontend: &mut dyn WipeEventReceiver,
-    ) -> Result<bool> {
-        let mut access = device.access()?;
-        Ok(WipeRun {
-            access: access.as_mut(),
+    ) -> bool {
+        WipeRun {
+            access,
             task: &self,
             state,
             frontend,
         }
-        .run())
+        .run()
     }
 }
 
@@ -386,7 +385,7 @@ mod test {
         )
         .unwrap();
         let mut state = WipeState::default();
-        let result = task.run(&storage, &mut state, &mut receiver).unwrap();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
 
@@ -432,7 +431,7 @@ mod test {
         )
         .unwrap();
         let mut state = WipeState::default();
-        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(!result);
 
@@ -469,7 +468,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
 
@@ -521,7 +520,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
 
@@ -565,7 +564,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
 
@@ -609,7 +608,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
 
@@ -655,7 +654,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 8;
-        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
 
@@ -701,7 +700,7 @@ mod test {
         .unwrap();
         let mut state = WipeState::default();
         state.retries_left = 0;
-        let result = task.run(&mut storage, &mut state, &mut receiver).unwrap();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(!result);
 
@@ -721,11 +720,11 @@ mod test {
         assert_matches!(e.next(), Some((_, Completed(Some(_)))));
     }
 
-    struct StubReceiver<'a> {
-        collected: Vec<(WipeState, WipeEvent<'a>)>,
+    struct StubReceiver {
+        collected: Vec<(WipeState, WipeEvent)>,
     }
 
-    impl StubReceiver<'_> {
+    impl StubReceiver {
         pub fn new() -> Self {
             StubReceiver {
                 collected: Vec::new(),
@@ -733,8 +732,8 @@ mod test {
         }
     }
 
-    impl<'a> WipeEventReceiver for StubReceiver<'a> {
-        fn handle(&mut self, _task: &WipeTask, state: &WipeState, event: WipeEvent<'_>) -> () {
+    impl WipeEventReceiver for StubReceiver {
+        fn handle(&mut self, _task: &WipeTask, state: &WipeState, event: WipeEvent) -> () {
             println!("{:?}", event);
             self.collected.push((state.clone(), event));
         }
@@ -795,12 +794,6 @@ mod test {
                 }
                 _ => Ok(()),
             }
-        }
-    }
-
-    impl StorageDevice for InMemoryStorage {
-        fn access(&self) -> Result<Box<dyn StorageAccess>> {
-            Ok(Box::new(self))
         }
     }
 
