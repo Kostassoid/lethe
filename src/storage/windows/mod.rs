@@ -34,7 +34,7 @@ impl System {
 
 impl StorageDevice for StorageRef {
     fn access(&self) -> Result<Box<dyn StorageAccess>> {
-        CompositeStorageAccess::open(self).map(Box::new)
+        CompositeStorageAccess::open(self).map(|a| Box::new(a) as Box<dyn StorageAccess>)
     }
 }
 
