@@ -180,7 +180,7 @@ impl StorageDeviceEnumerator for DiskUtilCli {
     }
 }
 
-fn unmount(path: &str) -> Result<()> {
+pub fn unmount(path: &str) -> Result<()> {
     let cpath = CString::new(path)?;
     match unsafe { libc::unmount(cpath.as_ptr(), libc::MNT_FORCE) } {
         0 => Ok(()),

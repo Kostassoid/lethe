@@ -123,7 +123,7 @@ fn build_device_info(d: &Block) -> Option<StorageRef> {
     })
 }
 
-pub(crate) fn unmount(path: &str) -> Result<()> {
+pub fn unmount(path: &str) -> Result<()> {
     let cpath = CString::new(path)?;
     match unsafe { libc::umount2(cpath.as_ptr(), libc::MNT_FORCE) } {
         0 => Ok(()),
