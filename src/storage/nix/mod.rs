@@ -1,6 +1,6 @@
 #![cfg(unix)]
+
 use crate::storage::*;
-use ::nix::mount::{umount2, MntFlags};
 use ::nix::*;
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -10,13 +10,16 @@ use std::path::Path;
 
 #[cfg(target_os = "linux")]
 mod linux;
+
 #[cfg(target_os = "linux")]
 use linux as os;
 
 #[cfg(target_os = "macos")]
 mod macos;
+
 #[cfg(target_os = "macos")]
 use macos as os;
+use std::ffi::CString;
 
 impl StorageError {
     fn from(err: std::io::Error) -> StorageError {
@@ -82,14 +85,25 @@ impl StorageDevice for StorageRef {
             .iter()
             .flat_map(|c| &c.details.mount_point)
             .for_each(|c| {
-                let _ = umount2(c.as_str(), MntFlags::MNT_FORCE);
+                let _ = unmount(c.as_str());
             });
 
-        let _ = match &self.details.mount_point {
-            Some(c) => umount2(c.as_str(), MntFlags::MNT_FORCE),
-            _ => Ok(()),
+        match &self.details.mount_point {
+            Some(c) => unmount(c.as_str())?,
+            _ => (),
         };
 
         FileAccess::new(&self.id).map(|a| Box::new(a) as Box<dyn StorageAccess>)
+    }
+}
+
+fn unmount(path: &str) -> Result<()> {
+    let cpath = CString::new(path)?;
+    match unsafe { libc::unmount(cpath.as_ptr(), libc::MNT_FORCE) } {
+        0 => Ok(()),
+        _ if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) => Ok(()), // not found
+        _ => Err(anyhow::Error::new(
+            std::io::Error::last_os_error()
+        ).context("Failed to unmount a volume")),
     }
 }
