@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::storage::*;
+use std::ffi::CString;
 
 impl System {
     pub fn enumerate_storage_devices() -> Result<Vec<StorageRef>> {
@@ -176,5 +177,15 @@ impl StorageDeviceEnumerator for DiskUtilCli {
                 })
             })
             .collect()
+    }
+}
+
+fn unmount(path: &str) -> Result<()> {
+    let cpath = CString::new(path)?;
+    match unsafe { libc::unmount(cpath.as_ptr(), libc::MNT_FORCE) } {
+        0 => Ok(()),
+        _ if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) => Ok(()), // not found
+        _ => Err(anyhow::Error::new(std::io::Error::last_os_error())
+            .context("Failed to unmount a volume")),
     }
 }
