@@ -1,5 +1,20 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+### Added
+
+* All mounting points associated with a device get unmounted before wiping, including nested partitions/volumes. Previously, this caused issues on Windows, for example, when it was impossible to access a physical drive for writing if it had any mounted volumes.
+* Volume label is now part of the storage device description.
+
+### Changed
+
+* Storage devices are now presented as a tree instead of a flat list. This allows to quickly understand the dependency between storage devices.
+* Elevated privileges are not required for listing the devices.
+* [macOS] Device enumeration implementation was replaced with the one based on 'diskutil'. There upside is that 'sudo' is not required for the 'list' command and that the data is more complete. The downside is that this method is pretty slow and there is a bug in 'diskutil' tool not returning a correct storage size for APFS volumes.
+* [linux] Device enumeration implementation was replaced with the one based on 'sysfs' abstractions. Mostly to get the accurate device hierarchy info.
+* The progress bar is red now, because DANGER.
+
 ## [v0.5.1] - 2021-04-15
 
 ### Added
