@@ -1,6 +1,6 @@
 # Lethe
 
-[![Build Status](https://travis-ci.org/Kostassoid/lethe.svg?branch=master)](https://travis-ci.org/Kostassoid/lethe)
+[![Build Status](https://travis-ci.com/Kostassoid/lethe.svg?branch=master)](https://travis-ci.com/Kostassoid/lethe)
 
 A secure, free, cross-platform and open-source drive wiping utility.
 
@@ -12,7 +12,7 @@ static pattern.
 This is basically what this tool does.
 
 There are other similar applications around (including multiple built-in Linux tools). Most of them are proprietary, or slow,
-or non cross-platform, which was a requirement for me. So I wrote this application.
+or non-cross-platform, which was a requirement for me. So I wrote this application.
 
 ## Features
 
@@ -40,9 +40,9 @@ I would love to learn about other people's experience with the application. Let 
 Current release: **v0.5.1** [Changelog](CHANGELOG.md)
 
 Download and unzip binaries for your OS:
-- [Windows x64](https://github.com/Kostassoid/lethe/releases/download/v0.5.1/lethe-v0.5.1-x86_64-pc-windows-gnu.zip)
-- [macOS x64](https://github.com/Kostassoid/lethe/releases/download/v0.5.1/lethe-v0.5.1-x86_64-apple-darwin.tar.gz)
-- [Linux x64](https://github.com/Kostassoid/lethe/releases/download/v0.5.1/lethe-v0.5.1-x86_64-unknown-linux-musl.tar.gz)
+- [Windows x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.5.1/lethe-v0.5.1-x86_64-pc-windows-gnu.zip)
+- [macOS x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.5.1/lethe-v0.5.1-x86_64-apple-darwin.tar.gz)
+- [Linux x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.5.1/lethe-v0.5.1-x86_64-unknown-linux-musl.tar.gz)
 
 Or install `lethe` from sources using latest [Rust toolchain](https://www.rust-lang.org/tools/install):
 
