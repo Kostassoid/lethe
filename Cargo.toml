@@ -15,7 +15,7 @@ edition = "2018"
 travis-ci = { repository = "Kostassoid/lethe", branch = "master" }
 
 [dependencies]
-anyhow = "1.0"
+anyhow = { version = "1.0.48", features = ["backtrace"] }
 thiserror = "1.0"
 roaring = "0.6.2"
 clap = "~2.33"
@@ -75,6 +75,7 @@ incremental = true
 
 [profile.dev]
 opt-level = 0
+debug = true
 
 [profile.test]
 opt-level = 3

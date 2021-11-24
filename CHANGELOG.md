@@ -1,5 +1,11 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+### Changed
+
+* [Windows] Locked devices are now correctly skipped during device enumeration.
+
 ## [v0.6.0] - 2021-08-15
 
 ### Added

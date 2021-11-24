@@ -193,10 +193,9 @@ impl Iterator for DiskDeviceEnumerator {
             )
         };
 
-        let device = DeviceFile::open(interface_details.path().as_str(), false).unwrap();
-        let device_number = get_device_number(&device).unwrap();
-
-        PhysicalDrive::from_device_number(device_number)
+        DeviceFile::open(interface_details.path().as_str(), false)
+            .and_then(|d| get_device_number(&d))
+            .and_then(PhysicalDrive::from_device_number)
             .and_then(|p| p.describe(&self.volumes))
             .ok()
             .or_else(|| self.next()) // skip
@@ -401,17 +400,18 @@ fn get_volumes() -> Result<Vec<(String, VolumeDetails)>> {
                 _ => continue,
             };
             let volume_label = get_volume_label(device_path.as_str()).ok();
-            let device = DeviceFile::open(volume_path.as_str(), false)?;
-            match get_volume_extents(&device) {
-                Ok(e) => volumes.push((
-                    device_path,
-                    VolumeDetails {
-                        label: volume_label,
-                        extents: e,
-                    },
-                )),
-                _ => {}
-            }
+            DeviceFile::open(volume_path.as_str(), false)
+                .and_then(|d| get_volume_extents(&d))
+                .map(|e| {
+                    volumes.push((
+                        device_path,
+                        VolumeDetails {
+                            label: volume_label,
+                            extents: e,
+                        },
+                    ))
+                })
+                .unwrap_or_default();
         }
     }
 

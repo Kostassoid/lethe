@@ -148,6 +148,12 @@ fn main() -> Result<()> {
                 ]);
             };
 
+            let devices = storage_repo.devices();
+            if devices.is_empty() {
+                eprintln!("No devices found! Are you running the application with root/administrator permissions?");
+                std::process::exit(1);
+            }
+
             for x in storage_repo.devices() {
                 format_device(&mut t, &x, 0);
                 for c in &x.children {
