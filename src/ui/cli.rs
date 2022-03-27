@@ -80,6 +80,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     ConsoleFrontend::describe_scheme(&task.scheme)
                 ]);
                 t.add_row(row!["Block size", HumanBytes(task.block_size as u64)]);
+                t.add_row(row!["Starting offset", format!("{} bytes", task.offset)]);
                 t.add_row(row!["Verification", task.verify]);
                 print!("Wiping:\n{}", t);
 
