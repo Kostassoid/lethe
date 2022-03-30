@@ -89,6 +89,14 @@ fn main() -> Result<()> {
                         .help("Block size"),
                 )
                 .arg(
+                    Arg::with_name("offset")
+                        .long("offset")
+                        .short("o")
+                        .takes_value(true)
+                        .default_value("0")
+                        .help("Starting offset (in bytes)"),
+                )
+                .arg(
                     Arg::with_name("retries")
                         .long("retries")
                         .short("r")
@@ -175,6 +183,10 @@ fn main() -> Result<()> {
             let block_size = ui::args::parse_block_size(block_size_arg)
                 .context(format!("Invalid blocksize value: {}", block_size_arg))?;
 
+            let offset_arg = cmd.value_of("offset").unwrap();
+            let offset: u64 = ui::args::parse_bytes(offset_arg)
+                .context(format!("Invalid offset value: {}", offset_arg))?;
+
             let device = storage_repo
                 .find_by_id(device_id)
                 .ok_or(anyhow!("Unknown device {}", device_id))?;
@@ -193,6 +205,7 @@ fn main() -> Result<()> {
                 verification,
                 device.details.size,
                 block_size,
+                offset,
             )?;
 
             let mut state = WipeState::default();

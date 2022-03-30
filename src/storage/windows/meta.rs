@@ -75,6 +75,7 @@ impl DeviceInterfaceDetailData {
         unsafe { (*data).cbSize = cb_size as UINT };
 
         // Compute offset of `SP_DEVICE_INTERFACE_DETAIL_DATA_W.DevicePath`.
+        #[allow(deref_nullptr)]
         let offset = offset_of!(SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath);
 
         Ok(Self {

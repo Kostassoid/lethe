@@ -74,12 +74,23 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 let indent_table_format = FormatBuilder::new().padding(4, 1).build();
                 t.set_format(indent_table_format);
                 t.add_row(row!["Device", self.device_id]);
-                t.add_row(row!["Size", HumanBytes(task.total_size)]);
+                t.add_row(row![
+                    "Size",
+                    format!(
+                        "{} ({} bytes)",
+                        HumanBytes(task.total_size),
+                        task.total_size
+                    )
+                ]);
                 t.add_row(row![
                     "Scheme",
                     ConsoleFrontend::describe_scheme(&task.scheme)
                 ]);
                 t.add_row(row!["Block size", HumanBytes(task.block_size as u64)]);
+                t.add_row(row![
+                    "Starting offset",
+                    format!("{} ({} bytes)", HumanBytes(task.offset), task.offset)
+                ]);
                 t.add_row(row!["Verification", task.verify]);
                 print!("Wiping:\n{}", t);
 
@@ -159,13 +170,15 @@ impl WipeEventReceiver for ConsoleWipeSession {
                         println!("✔ Total time: {}", elapsed);
                     }
                     let total_blocks = task.total_size / task.block_size as u64;
+                    let wiped_blocks = (task.total_size - task.offset) / task.block_size as u64;
                     let bad_blocks = state.bad_blocks.borrow_mut().total_marked();
 
                     let mut t = Table::new();
                     let indent_table_format = FormatBuilder::new().padding(4, 1).build();
                     t.set_format(indent_table_format);
                     t.add_row(row!["Total device size", HumanBytes(task.total_size)]);
-                    t.add_row(row!["Total blocks", total_blocks]);
+                    t.add_row(row!["Total device blocks", total_blocks]);
+                    t.add_row(row!["Total blocks wiped", wiped_blocks]);
                     t.add_row(row![
                         "Skipped blocks",
                         format!(

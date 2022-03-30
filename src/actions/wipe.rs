@@ -30,6 +30,7 @@ pub struct WipeTask {
     pub verify: Verify,
     pub total_size: u64,
     pub block_size: usize,
+    pub offset: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -61,17 +62,29 @@ impl Default for WipeState {
 }
 
 impl WipeTask {
-    pub fn new(scheme: Scheme, verify: Verify, total_size: u64, block_size: usize) -> Result<Self> {
+    pub fn new(
+        scheme: Scheme,
+        verify: Verify,
+        total_size: u64,
+        block_size: usize,
+        offset: u64,
+    ) -> Result<Self> {
         if total_size / block_size as u64 > 1 << 32 {
             Err(anyhow!(
                 "Number of blocks in this device is more than 2^32. Try using a bigger block size."
             ))?;
         }
+        if offset >= total_size {
+            Err(anyhow!("Starting offset is greater than the storage size"))?;
+        }
+        let corrected_offset = (offset / block_size as u64) * block_size as u64;
+
         Ok(WipeTask {
             scheme,
             verify,
             total_size,
             block_size,
+            offset: corrected_offset,
         })
     }
 }
@@ -221,7 +234,7 @@ impl WipeRun<'_> {
             };
 
             self.state.stage = i;
-            self.state.position = 0;
+            self.state.position = self.task.offset;
             self.state.at_verification = false;
 
             let stage_error = loop {
@@ -363,14 +376,14 @@ mod test {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("zero").unwrap();
 
-        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 32, 1).is_ok());
-        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 35, 8).is_ok());
-        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 33, 1).is_err());
-        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 36, 8).is_err());
+        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 32, 1, 0).is_ok());
+        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 35, 8, 0).is_ok());
+        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 33, 1, 0).is_err());
+        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 36, 8, 0).is_err());
     }
 
     #[test]
-    fn test_wiping_happy_path() {
+    fn test_wiping_from_beginning() {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("zero").unwrap();
         let mut storage = InMemoryStorage::new(100000);
@@ -382,6 +395,7 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
+            0,
         )
         .unwrap();
         let mut state = WipeState::default();
@@ -414,6 +428,65 @@ mod test {
     }
 
     #[test]
+    fn test_wiping_from_offset() {
+        let scheme = Scheme {
+            description: "Single zeroes fill x2".to_string(),
+            stages: vec![Stage::zero(), Stage::zero()],
+        };
+        let mut storage = InMemoryStorage::new(100000);
+        let block_size = 32768;
+        let mut receiver = StubReceiver::new();
+
+        let task = WipeTask::new(
+            scheme.clone(),
+            Verify::All,
+            storage.size as u64,
+            block_size,
+            70000,
+        )
+        .unwrap();
+        let mut state = WipeState::default();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
+
+        assert!(result);
+
+        let mut e = receiver.collected.iter();
+        assert_matches!(e.next(), Some((_, Started)));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if !s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((ref s, StageStarted)) if s.at_verification);
+        assert_matches!(e.next(), Some((_, Progress(65536))));
+        assert_matches!(e.next(), Some((_, Progress(98304))));
+        assert_matches!(e.next(), Some((_, Progress(100000))));
+        assert_matches!(e.next(), Some((_, StageCompleted(None))));
+        assert_matches!(e.next(), Some((_, Completed(None))));
+
+        assert_eq!(
+            storage
+                .file
+                .get_ref()
+                .iter()
+                .skip(task.offset as usize)
+                .filter(|x| **x != 0u8)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
     fn test_wiping_fill_failure() {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("zero").unwrap();
@@ -428,6 +501,7 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
+            0,
         )
         .unwrap();
         let mut state = WipeState::default();
@@ -464,6 +538,7 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
+            0,
         )
         .unwrap();
         let mut state = WipeState::default();
@@ -516,6 +591,7 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
+            0,
         )
         .unwrap();
         let mut state = WipeState::default();
@@ -560,6 +636,7 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
+            0,
         )
         .unwrap();
         let mut state = WipeState::default();
@@ -604,6 +681,7 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
+            0,
         )
         .unwrap();
         let mut state = WipeState::default();
@@ -650,6 +728,7 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
+            0,
         )
         .unwrap();
         let mut state = WipeState::default();
@@ -696,6 +775,7 @@ mod test {
             Verify::Last,
             storage.size as u64,
             block_size,
+            0,
         )
         .unwrap();
         let mut state = WipeState::default();
