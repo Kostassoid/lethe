@@ -183,11 +183,9 @@ fn main() -> Result<()> {
             let block_size = ui::args::parse_block_size(block_size_arg)
                 .context(format!("Invalid blocksize value: {}", block_size_arg))?;
 
-            let offset: u64 = cmd
-                .value_of("offset")
-                .unwrap()
-                .parse()
-                .context("Invalid offset value")?;
+            let offset_arg = cmd.value_of("offset").unwrap();
+            let offset: u64 = ui::args::parse_bytes(offset_arg)
+                .context(format!("Invalid offset value: {}", offset_arg))?;
 
             let device = storage_repo
                 .find_by_id(device_id)
