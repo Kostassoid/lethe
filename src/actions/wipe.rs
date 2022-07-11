@@ -271,6 +271,11 @@ impl WipeRun<'_> {
                         self.state.retries_left -= 1;
                         self.state.at_verification = false;
                         self.publish(WipeEvent::Retrying);
+
+                        if let Err(err) = self.access.refresh() {
+                            break Some(Rc::from(err));
+                        }
+
                         continue;
                     }
                     break Some(err_rc);
@@ -899,6 +904,10 @@ mod test {
         }
 
         fn flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn refresh(&mut self) -> Result<()> {
             Ok(())
         }
     }

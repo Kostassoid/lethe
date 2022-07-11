@@ -23,6 +23,7 @@ use winapi::um::winnt::{
 
 pub struct DeviceFile {
     is_locked: bool,
+    // volume_name: String,
     pub handle: HANDLE,
 }
 
@@ -80,20 +81,8 @@ impl DeviceFile {
                         .context(format!("Cannot lock device {}. Make sure to close other applications accessing the storage.", path));
                 }
 
-                if DeviceIoControl(
-                    handle,
-                    winioctl::FSCTL_DISMOUNT_VOLUME,
-                    null_mut(),
-                    0,
-                    null_mut(),
-                    0,
-                    &mut returned,
-                    null_mut(),
-                ) == 0
-                {
-                    return Err(io::Error::last_os_error())
-                        .context(format!("Cannot dismount volume {}.", path));
-                }
+                dismount_volume(handle)?;
+
                 is_locked = true;
             }
 
@@ -103,7 +92,7 @@ impl DeviceFile {
 }
 
 impl StorageError {
-    fn from(err: std::io::Error) -> StorageError {
+    fn from(err: io::Error) -> StorageError {
         match err.raw_os_error() {
             Some(c)
                 if c == ERROR_CRC as i32
@@ -219,4 +208,47 @@ impl StorageAccess for DeviceFile {
             Ok(())
         }
     }
+
+    fn refresh(&mut self) -> Result<()> {
+        // https://docs.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_dismount_volume
+        // according to the documentation, dismount should be done AFTER the file system is changed/destroyed
+        // otherwise, it looks like parts of the partition cannot be overwritten (the last sector problem)
+        unsafe { dismount_volume(self.handle) }
+    }
+}
+
+unsafe fn dismount_volume(handle: HANDLE) -> Result<()> {
+    let mut returned: DWORD = 0;
+    if DeviceIoControl(
+        handle,
+        winioctl::FSCTL_DISMOUNT_VOLUME,
+        null_mut(),
+        0,
+        null_mut(),
+        0,
+        &mut returned,
+        null_mut(),
+    ) == 0
+    {
+        return Err(io::Error::last_os_error()).context("Cannot dismount the volume.");
+    }
+    Ok(())
+}
+
+unsafe fn refresh_volume(handle: HANDLE) -> Result<()> {
+    let mut returned: DWORD = 0;
+    if DeviceIoControl(
+        handle,
+        winioctl::IOCTL_DISK_UPDATE_PROPERTIES,
+        null_mut(),
+        0,
+        null_mut(),
+        0,
+        &mut returned,
+        null_mut(),
+    ) == 0
+    {
+        return Err(io::Error::last_os_error()).context("Cannot update disk properties.");
+    }
+    Ok(())
 }

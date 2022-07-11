@@ -151,8 +151,15 @@ fn main() -> Result<()> {
                     style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
                     HumanBytes(x.details.size),
                     &x.details.storage_type,
-                    (&x.details.label).as_ref().unwrap_or(&"".to_string()),
-                    (&x.details.mount_point).as_ref().unwrap_or(&"".to_string()),
+                    &x.details
+                        .volume
+                        .as_ref()
+                        .map_or(None, |v| { v.label.clone() })
+                        .unwrap_or("".to_string()),
+                    &x.details
+                        .volume
+                        .as_ref()
+                        .map_or("", |v| { v.mount_point.as_str() }),
                 ]);
             };
 

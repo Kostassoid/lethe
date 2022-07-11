@@ -41,24 +41,28 @@ impl StorageDevice for StorageRef {
 /// On Windows, to work with a low level PhysicalDrive, we have to acquire locks to all partitions/volumes
 /// located on this drive and we have to keep these locks for the duration of wiping process.
 /// In terms of implementation we just open the whole tree of devices for write which effectively
-/// locks and dismounts every volume in that tree.
+/// locks every volume in that tree.
 struct CompositeStorageAccess {
+    id: String,
     device: DeviceFile,
+    volume: Option<VolumeDetails>,
     _children: Vec<DeviceFile>,
 }
 
 impl CompositeStorageAccess {
-    fn open(device: &StorageRef) -> Result<Self> {
-        let children: Result<Vec<DeviceFile>> = device
+    fn open(device_ref: &StorageRef) -> Result<Self> {
+        let children: Result<Vec<DeviceFile>> = device_ref
             .children
             .iter()
             .map(|c| DeviceFile::open(&c.id, true))
             .collect();
 
-        let device = DeviceFile::open(&device.id, true)?;
+        let device = DeviceFile::open(&device_ref.id, true)?;
 
         Ok(Self {
+            id: device_ref.id.clone(),
             device,
+            volume: device_ref.details.volume.clone(),
             _children: children?,
         })
     }
@@ -83,5 +87,22 @@ impl StorageAccess for CompositeStorageAccess {
 
     fn flush(&mut self) -> Result<()> {
         self.device.flush()
+    }
+
+    fn refresh(&mut self) -> Result<()> {
+        //drop(*self.device);
+
+        self.device = DeviceFile::open(&self.id, true)?;
+
+        Ok(())
+
+        //self.device.refresh()
+        // drop(self.device);
+        //
+        // if let Some(v) = &self.volume {
+        //     DeviceFile::open(v.path.as_str(), false)?.refresh()
+        // } else {
+        //     Ok(())
+        // }
     }
 }

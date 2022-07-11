@@ -36,6 +36,7 @@ pub trait StorageAccess {
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize>;
     fn write(&mut self, data: &[u8]) -> Result<()>;
     fn flush(&mut self) -> Result<()>;
+    fn refresh(&mut self) -> Result<()>;
 }
 
 #[derive(Clone, Debug)]
@@ -59,12 +60,18 @@ impl std::fmt::Display for StorageType {
 }
 
 #[derive(Debug, Clone)]
+pub struct VolumeDetails {
+    pub path: String,
+    pub mount_point: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct StorageDetails {
     pub size: u64,
     pub block_size: usize,
     pub storage_type: StorageType,
-    pub mount_point: Option<String>,
-    pub label: Option<String>,
+    pub volume: Option<VolumeDetails>,
 }
 
 impl Default for StorageDetails {
@@ -73,8 +80,7 @@ impl Default for StorageDetails {
             size: 0,
             block_size: 0,
             storage_type: StorageType::Unknown,
-            mount_point: None,
-            label: None,
+            volume: None,
         }
     }
 }

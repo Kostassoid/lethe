@@ -48,9 +48,10 @@ struct VolumeExtent {
     starting_offset: u64,
 }
 
-struct VolumeDetails {
+struct VolumeInfo {
     extents: Vec<VolumeExtent>,
     label: Option<String>,
+    path: String,
 }
 
 impl DeviceInterfaceDetailData {
@@ -106,7 +107,7 @@ impl Drop for DeviceInterfaceDetailData {
 pub struct DiskDeviceEnumerator {
     device_info_list: HDEVINFO,
     device_index: DWORD,
-    volumes: Vec<(String, VolumeDetails)>,
+    volumes: Vec<(String, VolumeInfo)>,
 }
 
 impl DiskDeviceEnumerator {
@@ -214,7 +215,7 @@ impl PhysicalDrive {
         })
     }
 
-    fn describe(&self, volumes: &Vec<(String, VolumeDetails)>) -> Result<StorageRef> {
+    fn describe(&self, volumes: &Vec<(String, VolumeInfo)>) -> Result<StorageRef> {
         let geometry = get_drive_geometry(&self.device)?;
         let bytes_per_sector = get_alignment_descriptor(&self.device)
             .map(|a| a.BytesPerPhysicalSector as usize)
@@ -230,8 +231,7 @@ impl PhysicalDrive {
             size: unsafe { *geometry.DiskSize.QuadPart() as u64 },
             block_size: bytes_per_sector,
             storage_type,
-            mount_point: None,
-            label: None,
+            volume: None,
         };
 
         let layout = get_drive_layout(&self.device)?;
@@ -268,7 +268,7 @@ impl PhysicalDrive {
                 self.device_number, x.PartitionNumber
             );
 
-            let mount_point_and_label = volumes
+            let volume_details = volumes
                 .iter()
                 .find(|v| {
                     v.1.extents.iter().any(|e| unsafe {
@@ -276,7 +276,11 @@ impl PhysicalDrive {
                             && e.starting_offset == *x.StartingOffset.QuadPart() as u64
                     })
                 })
-                .map(|v| (v.0.clone(), v.1.label.clone()));
+                .map(|v| VolumeDetails {
+                    path: v.1.path.clone(),
+                    mount_point: v.0.clone(),
+                    label: v.1.label.clone(),
+                });
 
             devices.push(StorageRef {
                 id: partition_path,
@@ -284,11 +288,7 @@ impl PhysicalDrive {
                     size: l as u64,
                     block_size: drive_details.block_size,
                     storage_type: StorageType::Partition,
-                    mount_point: mount_point_and_label.iter().map(|v| v.0.clone()).next(),
-                    label: mount_point_and_label
-                        .iter()
-                        .flat_map(|v| v.1.clone())
-                        .next(),
+                    volume: volume_details,
                 },
                 children: vec![],
             })
@@ -389,9 +389,9 @@ fn get_drive_geometry(device: &DeviceFile) -> Result<winioctl::DISK_GEOMETRY_EX>
     }
 }
 
-fn get_volumes() -> Result<Vec<(String, VolumeDetails)>> {
+fn get_volumes() -> Result<Vec<(String, VolumeInfo)>> {
     let drives = unsafe { fileapi::GetLogicalDrives() };
-    let mut volumes: Vec<(String, VolumeDetails)> = Vec::new();
+    let mut volumes: Vec<(String, VolumeInfo)> = Vec::new();
 
     for c in b'A'..b'Z' + 1 {
         if drives & (1 << (c - b'A') as u32) != 0 {
@@ -406,7 +406,8 @@ fn get_volumes() -> Result<Vec<(String, VolumeDetails)>> {
                 .map(|e| {
                     volumes.push((
                         device_path,
-                        VolumeDetails {
+                        VolumeInfo {
+                            path: volume_path,
                             label: volume_label,
                             extents: e,
                         },
