@@ -37,12 +37,12 @@ I would love to learn about other people's experience with the application. Let 
 
 ## Download
 
-Current release: **v0.6.1** [Changelog](CHANGELOG.md)
+Current release: **v0.7.0** [Changelog](CHANGELOG.md)
 
 Download and unzip binaries for your OS:
-- [Windows x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.6.1/lethe-v0.6.1-x86_64-pc-windows-gnu.zip)
-- [macOS x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.6.1/lethe-v0.6.1-x86_64-apple-darwin.tar.gz)
-- [Linux x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.6.1/lethe-v0.6.1-x86_64-unknown-linux-musl.tar.gz)
+- [Windows x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-pc-windows-gnu.zip)
+- [macOS x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-apple-darwin.tar.gz)
+- [Linux x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-unknown-linux-musl.tar.gz)
 
 Or install `lethe` from sources using latest [Rust toolchain](https://www.rust-lang.org/tools/install):
 
