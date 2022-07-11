@@ -6,6 +6,10 @@
 
 * It's now possible to specify starting offset when wiping a storage. Useful for retrying and handling some tricky situations.
 
+### Changed
+
+* Fixed known issues in external dependencies.
+
 ## [v0.6.1] - 2021-11-25
 
 ### Changed
