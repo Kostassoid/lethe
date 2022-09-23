@@ -5,7 +5,7 @@ extern crate anyhow;
 use anyhow::{Context, Result};
 
 extern crate clap;
-use clap::{App, AppSettings, Arg, SubCommand};
+use clap::{AppSettings, Arg, Command, SubCommand};
 
 #[macro_use]
 extern crate prettytable;
@@ -41,13 +41,13 @@ fn main() -> Result<()> {
 
     let schemes_explanation = cli::ConsoleFrontend::explain_schemes(&schemes);
 
-    let app = App::new("Lethe")
+    let mut app = Command::new("Lethe")
         .version(VERSION)
         .author("https://github.com/Kostassoid/lethe")
         .about("Secure disk wipe")
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .setting(AppSettings::UnifiedHelpMessage)
-        .setting(AppSettings::VersionlessSubcommands)
+        //.setting(AppSettings::VersionlessSubcommands)
         .subcommand(SubCommand::with_name("list").about("list available storage devices"))
         .subcommand(
             SubCommand::with_name("wipe")
@@ -55,8 +55,6 @@ fn main() -> Result<()> {
                 .after_help(schemes_explanation.as_str())
                 .arg(
                     Arg::with_name("device")
-                        .long("device")
-                        .short("d")
                         .required(true)
                         .takes_value(true)
                         .index(1)
@@ -65,7 +63,7 @@ fn main() -> Result<()> {
                 .arg(
                     Arg::with_name("scheme")
                         .long("scheme")
-                        .short("s")
+                        .short('s')
                         .takes_value(true)
                         .possible_values(&scheme_keys)
                         .default_value("random2x")
@@ -74,7 +72,7 @@ fn main() -> Result<()> {
                 .arg(
                     Arg::with_name("verify")
                         .long("verify")
-                        .short("v")
+                        .short('v')
                         .takes_value(true)
                         .possible_values(&["no", "last", "all"])
                         .default_value("last")
@@ -83,7 +81,7 @@ fn main() -> Result<()> {
                 .arg(
                     Arg::with_name("blocksize")
                         .long("blocksize")
-                        .short("b")
+                        .short('b')
                         .takes_value(true)
                         .default_value("1m")
                         .help("Block size"),
@@ -91,7 +89,7 @@ fn main() -> Result<()> {
                 .arg(
                     Arg::with_name("offset")
                         .long("offset")
-                        .short("o")
+                        .short('o')
                         .takes_value(true)
                         .default_value("0")
                         .help("Starting offset (in bytes)"),
@@ -99,7 +97,7 @@ fn main() -> Result<()> {
                 .arg(
                     Arg::with_name("retries")
                         .long("retries")
-                        .short("r")
+                        .short('r')
                         .takes_value(true)
                         .default_value("8")
                         .help("Maximum number of retries"),
@@ -107,11 +105,10 @@ fn main() -> Result<()> {
                 .arg(
                     Arg::with_name("yes")
                         .long("yes")
-                        .short("y")
+                        .short('y')
                         .help("Automatically confirm"),
                 ),
-        )
-        .get_matches();
+        );
 
     let storage_devices = System::enumerate_storage_devices().unwrap_or_else(|err| {
         eprintln!("Unable to enumerate storage devices. {:#}", err);
@@ -132,8 +129,8 @@ fn main() -> Result<()> {
 
     let frontend = cli::ConsoleFrontend::new();
 
-    match app.subcommand() {
-        ("list", _) => {
+    match app.get_matches_mut().subcommand() {
+        Some(("list", _)) => {
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
             t.set_titles(row![
@@ -170,7 +167,7 @@ fn main() -> Result<()> {
             }
             t.printstd();
         }
-        ("wipe", Some(cmd)) => {
+        Some(("wipe", cmd)) => {
             let device_id = cmd.value_of("device").ok_or(anyhow!("Invalid device ID"))?;
             let scheme_id = cmd.value_of("scheme").unwrap();
             let verification = match cmd.value_of("verify").unwrap() {
@@ -227,7 +224,8 @@ fn main() -> Result<()> {
             }
         }
         _ => {
-            println!("{}", app.usage());
+            app.print_help()?;
+            // println!("{}", app.render_usage());
             std::process::exit(1)
         }
     }
