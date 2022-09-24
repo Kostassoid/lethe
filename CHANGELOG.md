@@ -1,5 +1,15 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+### Added
+
+* Experimental Apple Silicon (M1) support
+
+### Changed
+
+* MAJOR dependencies upgrade
+
 ## [v0.7.0] - 2022-07-11
 
 ### Added

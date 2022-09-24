@@ -41,7 +41,8 @@ Current release: **v0.7.0** [Changelog](CHANGELOG.md)
 
 Download and unzip binaries for your OS:
 - [Windows x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-pc-windows-gnu.zip)
-- [macOS x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-apple-darwin.tar.gz)
+- [macOS Intel](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-apple-darwin.tar.gz)
+- [macOS Apple](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-aarch64-apple-darwin.tar.gz)
 - [Linux x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-unknown-linux-musl.tar.gz)
 
 Or install `lethe` from sources using latest [Rust toolchain](https://www.rust-lang.org/tools/install):
@@ -70,7 +71,7 @@ Note that `lethe` operates on a low level and will require a root/administrator 
 
 ### macOS
 
-Tested on Macbook Pro 2015 with macOS 10.14.4 (Mojave) using a Sandisk 64G Flash Drive with USB 3.0 interface. OS recommended block size is 128k.
+Measured on Macbook Pro 2015 with macOS 10.14.4 (Mojave) using a Sandisk 64G Flash Drive with USB 3.0 interface. OS recommended block size is 128k.
 
 **Zero fill**
 
