@@ -5,7 +5,7 @@ extern crate anyhow;
 use anyhow::{Context, Result};
 
 extern crate clap;
-use clap::{AppSettings, Arg, Command, SubCommand};
+use clap::{Arg, Command, SubCommand};
 
 #[macro_use]
 extern crate prettytable;
@@ -45,9 +45,8 @@ fn main() -> Result<()> {
         .version(VERSION)
         .author("https://github.com/Kostassoid/lethe")
         .about("Secure disk wipe")
-        .setting(AppSettings::SubcommandRequiredElseHelp)
-        .setting(AppSettings::UnifiedHelpMessage)
-        //.setting(AppSettings::VersionlessSubcommands)
+        .subcommand_required(true)
+        .arg_required_else_help(true)
         .subcommand(SubCommand::with_name("list").about("list available storage devices"))
         .subcommand(
             SubCommand::with_name("wipe")
