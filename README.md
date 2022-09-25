@@ -41,10 +41,11 @@ Current release: **v0.7.0** [Changelog](CHANGELOG.md)
 
 Download and unzip binaries for your OS:
 - [Windows x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-pc-windows-gnu.zip)
-- [macOS x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-apple-darwin.tar.gz)
+- [macOS Intel](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-apple-darwin.tar.gz)
+- [macOS Apple](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-aarch64-apple-darwin.tar.gz) (Experimental)
 - [Linux x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.7.0/lethe-v0.7.0-x86_64-unknown-linux-musl.tar.gz)
 
-Or install `lethe` from sources using latest [Rust toolchain](https://www.rust-lang.org/tools/install):
+Or install `lethe` from sources using the latest [Rust toolchain](https://www.rust-lang.org/tools/install):
 
 ```
 cargo install lethe
@@ -52,7 +53,7 @@ cargo install lethe
 
 ## Usage
 
-`lethe` is a CLI (command-line interface). Run it without parameters or use `help` command to dispay usage information.
+`lethe` is a CLI (command-line interface). Run it without parameters or use `help` command to display usage information.
 
 ```
 lethe help
@@ -70,23 +71,23 @@ Note that `lethe` operates on a low level and will require a root/administrator 
 
 ### macOS
 
-Tested on Macbook Pro 2015 with macOS 10.14.4 (Mojave) using a Sandisk 64G Flash Drive with USB 3.0 interface. OS recommended block size is 128k.
+Measured on Macbook Pro 2015 with macOS 10.14.4 (Mojave) using a Sandisk 64G Flash Drive with USB 3.0 interface. OS recommended block size is 128k.
 
 **Zero fill**
 
- Command | Block size | Time taken (seconds)
----------|------------|----------
- `dd if=/dev/zero of=/dev/rdisk3 bs=131072` | 128k | 2667.21
- `lethe wipe --scheme=zero --blocksize=128k --verify=no /dev/rdisk3` | 128k | 2725.77
- `dd if=/dev/zero of=/dev/rdisk3 bs=1m` | 1m | 2134.99
- `lethe wipe --scheme=zero --blocksize=1m --verify=no /dev/rdisk3` | 1m | 2129.61
+| Command                                                             | Block size | Time taken (seconds) |
+|---------------------------------------------------------------------|------------|----------------------|
+| `dd if=/dev/zero of=/dev/rdisk3 bs=131072`                          | 128k       | 2667.21              |
+| `lethe wipe --scheme=zero --blocksize=128k --verify=no /dev/rdisk3` | 128k       | 2725.77              |
+| `dd if=/dev/zero of=/dev/rdisk3 bs=1m`                              | 1m         | 2134.99              |
+| `lethe wipe --scheme=zero --blocksize=1m --verify=no /dev/rdisk3`   | 1m         | 2129.61              |
 
 **Random fill**
 
- Command | Block size | Time taken (seconds)
----------|------------|----------
- `dd if=/dev/urandom of=/dev/rdisk3 bs=131072` | 128k | 4546.48
- `lethe wipe --scheme=random --blocksize=128k --verify=no /dev/rdisk3` | 128k | 2758.11
+| Command                                                               | Block size | Time taken (seconds) |
+|-----------------------------------------------------------------------|------------|----------------------|
+| `dd if=/dev/urandom of=/dev/rdisk3 bs=131072`                         | 128k       | 4546.48              |
+| `lethe wipe --scheme=random --blocksize=128k --verify=no /dev/rdisk3` | 128k       | 2758.11              |
 
 ## License
 
