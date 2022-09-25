@@ -49,13 +49,13 @@ jobs:
           echo "PROJECT_NAME=lethe" >> $GITHUB_ENV
           echo "PROJECT_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)" >> $GITHUB_ENV
 
-#      - name: Install Rust toolchain
-#        uses: actions-rs/toolchain@v1
-#        with:
-#          toolchain: stable
-#          target: ${{ matrix.job.target }}
-#          override: true
-#          profile: minimal # minimal component installation (ie, no documentation)
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.job.target }}
+          override: true
+          profile: minimal # minimal component installation (ie, no documentation)
 
       - name: Show version information (Rust, cargo)
         shell: bash
