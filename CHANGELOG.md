@@ -1,6 +1,6 @@
 # Change Log
 
-## [Unreleased] - ReleaseDate
+## [v0.8.0] - 2022-09-25
 
 ### Added
 
