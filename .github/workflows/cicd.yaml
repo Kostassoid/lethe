@@ -1,0 +1,156 @@
+name: CI/CD
+
+env:
+  RUST_VERSION: "1.64.0"
+  OUTPUT_PATH: "_out"
+  CARGO_TERM_COLOR: always
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+    tags:
+      - '*'
+
+jobs:
+  fmt:
+    name: Ensure 'cargo fmt' has been run
+    runs-on: ubuntu-20.04
+    steps:
+#      - uses: actions-rs/toolchain@v1
+#        with:
+#          toolchain: stable
+#          default: true
+#          profile: minimal
+#          components: rustfmt
+      - uses: actions/checkout@v3
+      - run: cargo fmt -- --check
+
+  build:
+    name: ${{ matrix.job.target }} (${{ matrix.job.os }})
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { target: x86_64-pc-windows-gnu       , os: windows-2019                    }
+          - { target: x86_64-unknown-linux-musl   , os: ubuntu-20.04                    }
+          - { target: x86_64-apple-darwin         , os: macos-11                        }
+          - { target: aarch64-apple-darwin        , os: macos-11     , skip-tests: true }
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v3
+
+      - name: Extract crate information
+        shell: bash
+        run: |
+          echo "PROJECT_NAME=lethe" >> $GITHUB_ENV
+          echo "PROJECT_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)" >> $GITHUB_ENV
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.job.target }}
+          override: true
+          profile: minimal # minimal component installation (ie, no documentation)
+
+      - name: Show version information (Rust, cargo)
+        shell: bash
+        run: |
+          rustup -V
+          rustup toolchain list
+          rustup default
+          cargo -V
+          rustc -V
+
+      - name: Activate newest available Xcode
+        if: contains(matrix.job.target, 'aarch64-apple-darwin')
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Setup macOS SDK for aarch64
+        if: contains(matrix.job.target, 'aarch64-apple-darwin')
+        shell: bash
+        run: |
+          xcodebuild -showsdks
+          echo "SDKROOT=$(xcrun -sdk macosx12.1 --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx12.1 --show-sdk-platform-version)" >> $GITHUB_ENV
+
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ matrix.job.use-cross }}
+          command: build
+          args: --locked --release --target=${{ matrix.job.target }}
+
+      - name: Run tests
+        if: ${{ !matrix.job.skip-tests }}
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ matrix.job.use-cross }}
+          command: test
+          args: --locked --target=${{ matrix.job.target }}
+
+      - name: Run app
+        if: ${{ !matrix.job.skip-tests }}
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ matrix.job.use-cross }}
+          command: run
+          args: --locked --target=${{ matrix.job.target }} -- --help
+
+      - name: Check for release
+        id: is-release
+        shell: bash
+        run: |
+          unset IS_RELEASE ; if [[ $GITHUB_REF =~ ^refs/tags/v[0-9].* ]]; then IS_RELEASE='true' ; fi
+          echo ::set-output name=IS_RELEASE::${IS_RELEASE}
+
+      - name: Create tarball
+        id: package
+        if: steps.is-release.outputs.IS_RELEASE
+        shell: bash
+        run: |
+          PKG_suffix=".tar.gz" ; case ${{ matrix.job.target }} in *-pc-windows-*) PKG_suffix=".zip" ;; esac;
+          PKG_BASENAME=${PROJECT_NAME}-v${PROJECT_VERSION}-${{ matrix.job.target }}
+          PKG_NAME=${PKG_BASENAME}${PKG_suffix}
+          echo ::set-output name=PKG_NAME::${PKG_NAME}
+          
+          PKG_STAGING="${{ env.OUTPUT_PATH }}/package"
+          ARCHIVE_DIR="${PKG_STAGING}/${PKG_BASENAME}/"
+          mkdir -p "${ARCHIVE_DIR}"
+          
+          # Binary
+          cp "target/${{ matrix.job.target }}/release/${BIN_NAME}" "$ARCHIVE_DIR"
+          
+          # base compressed package
+          pushd "${PKG_STAGING}/" >/dev/null
+          case ${{ matrix.job.target }} in
+            *-pc-windows-*) 7z -y a "${PKG_NAME}" "${PKG_BASENAME}"/* | tail -2 ;;
+            *) tar czf "${PKG_NAME}" "${PKG_BASENAME}"/* ;;
+          esac;
+          popd >/dev/null
+          
+          # Let subsequent steps know where to find the compressed package
+          echo ::set-output name=PKG_PATH::"${PKG_STAGING}/${PKG_NAME}"
+
+      - name: "Artifact upload: tarball"
+        uses: actions/upload-artifact@master
+        if: steps.is-release.outputs.IS_RELEASE
+        with:
+          name: ${{ steps.package.outputs.PKG_NAME }}
+          path: ${{ steps.package.outputs.PKG_PATH }}
+
+
+      - name: Publish archives and packages
+        uses: softprops/action-gh-release@v1
+        if: steps.is-release.outputs.IS_RELEASE
+        with:
+          files: |
+            ${{ steps.package.outputs.PKG_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
