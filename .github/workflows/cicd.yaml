@@ -66,12 +66,26 @@ jobs:
           cargo -V
           rustc -V
 
+      - name: Activate newest available Xcode
+        if: contains(matrix.job.target, 'aarch64-apple-darwin')
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Setup macOS SDK for aarch64
         if: contains(matrix.job.target, 'aarch64-apple-darwin')
         shell: bash
         run: |
+          xcodebuild -showsdks
           echo "SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path)" >> $GITHUB_ENV
           echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.1 --show-sdk-platform-version)" >> $GITHUB_ENV
+
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ matrix.job.use-cross }}
+          command: build
+          args: --locked --release --target=${{ matrix.job.target }}
 
       - name: Run tests
         uses: actions-rs/cargo@v1
@@ -80,12 +94,6 @@ jobs:
           command: test
           args: --locked --target=${{ matrix.job.target }}
 
-      - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: ${{ matrix.job.use-cross }}
-          command: build
-          args: --locked --release --target=${{ matrix.job.target }}
 
       - name: Run app
         uses: actions-rs/cargo@v1
