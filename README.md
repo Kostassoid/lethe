@@ -37,13 +37,13 @@ I would love to learn about other people's experience with the application. Let 
 
 ## Download
 
-Current release: **v0.8.1** [Changelog](CHANGELOG.md)
+Current release: **v0.8.2** [Changelog](CHANGELOG.md)
 
 Download and unzip binaries for your OS:
-- [Windows x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.8.1/lethe-v0.8.1-x86_64-pc-windows-gnu.zip)
-- [macOS Intel](https://github.com/Kostassoid/lethe/releases/download/v0.8.1/lethe-v0.8.1-x86_64-apple-darwin.tar.gz)
-- [macOS Apple](https://github.com/Kostassoid/lethe/releases/download/v0.8.1/lethe-v0.8.1-aarch64-apple-darwin.tar.gz) (Experimental)
-- [Linux x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.8.1/lethe-v0.8.1-x86_64-unknown-linux-musl.tar.gz)
+- [Windows x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.8.2/lethe-v0.8.2-x86_64-pc-windows-gnu.zip)
+- [macOS Intel](https://github.com/Kostassoid/lethe/releases/download/v0.8.2/lethe-v0.8.2-x86_64-apple-darwin.tar.gz)
+- [macOS Apple](https://github.com/Kostassoid/lethe/releases/download/v0.8.2/lethe-v0.8.2-aarch64-apple-darwin.tar.gz) (Experimental)
+- [Linux x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.8.2/lethe-v0.8.2-x86_64-unknown-linux-musl.tar.gz)
 
 Or install `lethe` from sources using the latest [Rust toolchain](https://www.rust-lang.org/tools/install):
 
