@@ -35,10 +35,10 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          - { target: x86_64-pc-windows-gnu       , os: windows-2019 }
-          - { target: x86_64-unknown-linux-musl   , os: ubuntu-20.04 }
-          - { target: x86_64-apple-darwin         , os: macos-11     }
-          - { target: aarch64-apple-darwin        , os: macos-11     }
+          - { target: x86_64-pc-windows-gnu       , os: windows-2019                    }
+          - { target: x86_64-unknown-linux-musl   , os: ubuntu-20.04                    }
+          - { target: x86_64-apple-darwin         , os: macos-11                        }
+          - { target: aarch64-apple-darwin        , os: macos-11     , skip-tests: true }
     steps:
       - name: Checkout source code
         uses: actions/checkout@v3
@@ -77,8 +77,8 @@ jobs:
         shell: bash
         run: |
           xcodebuild -showsdks
-          echo "SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path)" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.1 --show-sdk-platform-version)" >> $GITHUB_ENV
+          echo "SDKROOT=$(xcrun -sdk macosx12.1 --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx12.1 --show-sdk-platform-version)" >> $GITHUB_ENV
 
       - name: Build
         uses: actions-rs/cargo@v1
@@ -88,14 +88,15 @@ jobs:
           args: --locked --release --target=${{ matrix.job.target }}
 
       - name: Run tests
+        if: ${{ !matrix.job.skip-tests }}
         uses: actions-rs/cargo@v1
         with:
           use-cross: ${{ matrix.job.use-cross }}
           command: test
           args: --locked --target=${{ matrix.job.target }}
 
-
       - name: Run app
+        if: ${{ !matrix.job.skip-tests }}
         uses: actions-rs/cargo@v1
         with:
           use-cross: ${{ matrix.job.use-cross }}
