@@ -115,6 +115,13 @@ jobs:
         if: steps.is-release.outputs.IS_RELEASE
         shell: bash
         run: |
+          # Figure out suffix of binary
+          EXE_suffix=""
+          case ${{ matrix.job.target }} in
+          *-pc-windows-*) EXE_suffix=".exe" ;;
+          esac;
+          BIN_NAME="${{ env.PROJECT_NAME }}${EXE_suffix}"
+        
           PKG_suffix=".tar.gz" ; case ${{ matrix.job.target }} in *-pc-windows-*) PKG_suffix=".zip" ;; esac;
           PKG_BASENAME=${PROJECT_NAME}-v${PROJECT_VERSION}-${{ matrix.job.target }}
           PKG_NAME=${PKG_BASENAME}${PKG_suffix}
