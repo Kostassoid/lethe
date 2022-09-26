@@ -66,6 +66,13 @@ jobs:
           cargo -V
           rustc -V
 
+      - name: Setup macOS SDK for aarch64
+        if: contains(matrix.job.target, 'aarch64-apple-darwin')
+        shell: bash
+        run: |
+          echo "SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.1 --show-sdk-platform-version)" >> $GITHUB_ENV
+
       - name: Run tests
         uses: actions-rs/cargo@v1
         with:
