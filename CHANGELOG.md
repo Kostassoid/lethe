@@ -1,5 +1,9 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+* Fixed known issues in external dependencies.
+
 ## [v0.8.0] - 2022-09-25
 
 ### Added
