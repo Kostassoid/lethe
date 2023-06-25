@@ -1,21 +1,18 @@
-use super::winapi::shared::ntdef::PVOID;
+use std::ascii::escape_default;
 use std::mem;
-use std::ptr::null_mut;
-use winapi::um::handleapi::CloseHandle;
-use winapi::um::processthreadsapi::GetCurrentProcess;
-use winapi::um::processthreadsapi::OpenProcessToken;
-use winapi::um::securitybaseapi::GetTokenInformation;
-use winapi::um::winnt::TokenElevation;
-use winapi::um::winnt::HANDLE;
-use winapi::um::winnt::TOKEN_ELEVATION;
-use winapi::um::winnt::TOKEN_QUERY;
+
+use windows::{
+    Win32::Foundation::{CloseHandle, HANDLE},
+    Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY},
+    Win32::System::Threading::{GetCurrentProcess, OpenProcessToken},
+};
 
 pub fn is_elevated() -> bool {
     let mut result = false;
-    let mut handle: HANDLE = null_mut();
+    let mut handle: HANDLE = HANDLE::default();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle) } != 0 {
         let mut elevation: TOKEN_ELEVATION = unsafe { mem::zeroed() };
-        let size = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
+        let size = mem::size_of::<TOKEN_ELEVATION>() as u32;
         let mut ret_size = size;
         if unsafe {
             GetTokenInformation(
