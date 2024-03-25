@@ -176,11 +176,11 @@ fn main() -> Result<()> {
                 _ => Verify::Last,
             };
             let block_size_arg = cmd.value_of("blocksize").unwrap();
-            let block_size = ui::args::parse_block_size(block_size_arg)
+            let block_size = args::parse_block_size(block_size_arg)
                 .context(format!("Invalid blocksize value: {}", block_size_arg))?;
 
             let offset_arg = cmd.value_of("offset").unwrap();
-            let offset: u64 = ui::args::parse_bytes(offset_arg)
+            let offset: u64 = args::parse_bytes(offset_arg)
                 .context(format!("Invalid offset value: {}", offset_arg))?;
 
             let device = storage_repo
