@@ -464,7 +464,7 @@ fn get_volume_path_from_mount_point(path: &str) -> Result<String> {
     let mut volume_name_buffer: [WCHAR; MAX_PATH] = [0; MAX_PATH];
     unsafe {
         if fileapi::GetVolumeNameForVolumeMountPointW(
-            WideCString::from_str(path.clone()).unwrap().as_ptr(),
+            WideCString::from_str(path).unwrap().as_ptr(),
             volume_name_buffer.as_mut_ptr(),
             MAX_PATH as DWORD,
         ) == 0
@@ -485,7 +485,7 @@ fn get_volume_label(path: &str) -> Result<String> {
     let mut volume_name_buffer: [WCHAR; MAX_PATH] = [0; MAX_PATH];
     unsafe {
         if fileapi::GetVolumeInformationW(
-            WideCString::from_str(path.clone()).unwrap().as_ptr(),
+            WideCString::from_str(path).unwrap().as_ptr(),
             volume_name_buffer.as_mut_ptr(),
             MAX_PATH as DWORD,
             null_mut(),

@@ -5,7 +5,7 @@ extern crate anyhow;
 use anyhow::{Context, Result};
 
 extern crate clap;
-use clap::{Arg, Command, SubCommand};
+use clap::{Arg, Command};
 
 #[macro_use]
 extern crate prettytable;
@@ -19,6 +19,7 @@ extern crate serde_derive;
 extern crate plist;
 
 use ::console::style;
+use clap::builder::PossibleValuesParser;
 use indicatif::HumanBytes;
 
 mod storage;
@@ -47,62 +48,62 @@ fn main() -> Result<()> {
         .about("Secure disk wipe")
         .subcommand_required(true)
         .arg_required_else_help(true)
-        .subcommand(SubCommand::with_name("list").about("list available storage devices"))
+        .subcommand(Command::new("list").about("list available storage devices"))
         .subcommand(
-            SubCommand::with_name("wipe")
+            Command::new("wipe")
                 .about("Wipe storage device")
-                .after_help(schemes_explanation.as_str())
+                .after_help(schemes_explanation)
                 .arg(
-                    Arg::with_name("device")
+                    Arg::new("device")
                         .required(true)
-                        .takes_value(true)
+                        .num_args(1)
                         .index(1)
                         .help("Storage device ID"),
                 )
                 .arg(
-                    Arg::with_name("scheme")
+                    Arg::new("scheme")
                         .long("scheme")
                         .short('s')
-                        .takes_value(true)
-                        .possible_values(&scheme_keys)
+                        .num_args(1)
+                        .value_parser(PossibleValuesParser::from(&scheme_keys))
                         .default_value("random2x")
                         .help("Data sanitization scheme"),
                 )
                 .arg(
-                    Arg::with_name("verify")
+                    Arg::new("verify")
                         .long("verify")
                         .short('v')
-                        .takes_value(true)
-                        .possible_values(&["no", "last", "all"])
+                        .num_args(1)
+                        .value_parser(PossibleValuesParser::from(&["no", "last", "all"]))
                         .default_value("last")
                         .help("Verify after completion"),
                 )
                 .arg(
-                    Arg::with_name("blocksize")
+                    Arg::new("blocksize")
                         .long("blocksize")
                         .short('b')
-                        .takes_value(true)
+                        .num_args(1)
                         .default_value("1m")
                         .help("Block size"),
                 )
                 .arg(
-                    Arg::with_name("offset")
+                    Arg::new("offset")
                         .long("offset")
                         .short('o')
-                        .takes_value(true)
+                        .num_args(1)
                         .default_value("0")
                         .help("Starting offset (in bytes)"),
                 )
                 .arg(
-                    Arg::with_name("retries")
+                    Arg::new("retries")
                         .long("retries")
                         .short('r')
-                        .takes_value(true)
+                        .num_args(1)
                         .default_value("8")
                         .help("Maximum number of retries"),
                 )
                 .arg(
-                    Arg::with_name("yes")
+                    Arg::new("yes")
                         .long("yes")
                         .short('y')
                         .help("Automatically confirm"),
@@ -167,19 +168,21 @@ fn main() -> Result<()> {
             t.printstd();
         }
         Some(("wipe", cmd)) => {
-            let device_id = cmd.value_of("device").ok_or(anyhow!("Invalid device ID"))?;
-            let scheme_id = cmd.value_of("scheme").unwrap();
-            let verification = match cmd.value_of("verify").unwrap() {
+            let device_id = cmd
+                .get_one::<String>("device")
+                .ok_or(anyhow!("Invalid device ID"))?;
+            let scheme_id = cmd.get_one::<String>("scheme").unwrap();
+            let verification = match cmd.get_one::<String>("verify").unwrap().as_str() {
                 "no" => Verify::No,
                 "last" => Verify::Last,
                 "all" => Verify::All,
                 _ => Verify::Last,
             };
-            let block_size_arg = cmd.value_of("blocksize").unwrap();
+            let block_size_arg = cmd.get_one::<String>("blocksize").unwrap();
             let block_size = args::parse_block_size(block_size_arg)
                 .context(format!("Invalid blocksize value: {}", block_size_arg))?;
 
-            let offset_arg = cmd.value_of("offset").unwrap();
+            let offset_arg = cmd.get_one::<String>("offset").unwrap();
             let offset: u64 = args::parse_bytes(offset_arg)
                 .context(format!("Invalid offset value: {}", offset_arg))?;
 
@@ -191,10 +194,8 @@ fn main() -> Result<()> {
                 .ok_or(anyhow!("Unknown scheme {}", scheme_id))?;
 
             let retries = cmd
-                .value_of("retries")
-                .unwrap()
-                .parse()
-                .context("Invalid retries number value")?;
+                .get_one::<u32>("retries")
+                .ok_or(anyhow!("Invalid retries number value"))?;
 
             let task = WipeTask::new(
                 scheme.clone(),
@@ -205,9 +206,9 @@ fn main() -> Result<()> {
             )?;
 
             let mut state = WipeState::default();
-            state.retries_left = retries;
+            state.retries_left = *retries;
 
-            let mut session = frontend.wipe_session(&device.id, cmd.is_present("yes"));
+            let mut session = frontend.wipe_session(&device.id, cmd.get_flag("yes"));
             session.handle(&task, &state, WipeEvent::Created);
 
             match device.access() {
@@ -224,7 +225,6 @@ fn main() -> Result<()> {
         }
         _ => {
             app.print_help()?;
-            // println!("{}", app.render_usage());
             std::process::exit(1)
         }
     }
