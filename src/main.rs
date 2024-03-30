@@ -191,19 +191,14 @@ fn main() -> Result<()> {
                 .find(scheme_id)
                 .ok_or(anyhow!("Unknown scheme {}", scheme_id))?;
 
-            let coverage = cmd.get_one::<f32>("coverage").unwrap();
-            if !(0f32..=100f32).contains(coverage) {
-                Err(anyhow!(
-                    "Coverage value {} is outside of range 0..100",
-                    *coverage
-                ))?
-            }
+            let coverage_value = cmd.get_one::<f32>("coverage").unwrap();
+            let coverage = Percent::new(*coverage_value).context("Invalid coverage argument")?;
 
             let verification = match cmd.get_one::<String>("verify").unwrap().as_str() {
                 "no" => Verification::No,
-                "last" => Verification::Last(*coverage),
-                "all" => Verification::All(*coverage),
-                _ => Verification::Last(*coverage),
+                "last" => Verification::Last(coverage),
+                "all" => Verification::All(coverage),
+                _ => Verification::Last(coverage),
             };
 
             let block_size_arg = cmd.get_one::<String>("blocksize").unwrap();

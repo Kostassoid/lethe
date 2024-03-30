@@ -376,7 +376,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verification::Last(100.0),
+            Verification::Last(Percent::new(100.0).unwrap()),
             storage.size as u64,
             block_size,
             0,
@@ -423,7 +423,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verification::All(100.0),
+            Verification::All(Percent::new(100.0).unwrap()),
             storage.size as u64,
             block_size,
             70000,
@@ -482,7 +482,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verification::Last(100.0),
+            Verification::Last(Percent::new(100.0).unwrap()),
             storage.size as u64,
             block_size,
             0,
@@ -519,7 +519,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verification::Last(100.0),
+            Verification::Last(Percent::new(100.0).unwrap()),
             storage.size as u64,
             block_size,
             0,
@@ -572,7 +572,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verification::Last(100.0),
+            Verification::Last(Percent::new(100.0).unwrap()),
             storage.size as u64,
             block_size,
             0,
@@ -617,7 +617,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verification::Last(100.0),
+            Verification::Last(Percent::new(100.0).unwrap()),
             storage.size as u64,
             block_size,
             0,
@@ -662,7 +662,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verification::Last(100.0),
+            Verification::Last(Percent::new(100.0).unwrap()),
             storage.size as u64,
             block_size,
             0,
@@ -709,7 +709,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verification::Last(100.0),
+            Verification::Last(Percent::new(100.0).unwrap()),
             storage.size as u64,
             block_size,
             0,
@@ -756,7 +756,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verification::Last(100.0),
+            Verification::Last(Percent::new(100.0).unwrap()),
             storage.size as u64,
             block_size,
             0,
