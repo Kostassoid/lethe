@@ -15,6 +15,7 @@ pub struct WipeTask {
     pub total_size: u64,
     pub block_size: usize,
     pub offset: u64,
+    pub retries: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,7 @@ pub struct WipeState {
     pub position: u64,
     pub retries_left: u32,
     pub bad_blocks: Rc<RefCell<dyn BlockMarker>>,
+    pub coverage: CoverageMap,
 }
 
 pub struct WipeRun<'a> {
@@ -33,14 +35,15 @@ pub struct WipeRun<'a> {
     pub frontend: &'a mut dyn WipeEventReceiver,
 }
 
-impl Default for WipeState {
-    fn default() -> Self {
+impl From<&WipeTask> for WipeState {
+    fn from(task: &WipeTask) -> Self {
         WipeState {
             stage: 0,
             at_verification: false,
             position: 0,
-            retries_left: 0,
+            retries_left: task.retries,
             bad_blocks: Rc::new(RefCell::new(RoaringBlockMarker::new())),
+            coverage: task.verification.build_map(task.total_size), // TODO: use blocks
         }
     }
 }
@@ -52,6 +55,7 @@ impl WipeTask {
         total_size: u64,
         block_size: usize,
         offset: u64,
+        retries: u32,
     ) -> Result<Self> {
         if total_size / block_size as u64 > 1 << 32 {
             Err(anyhow!(
@@ -69,6 +73,7 @@ impl WipeTask {
             total_size,
             block_size,
             offset: corrected_offset,
+            retries,
         })
     }
 }
@@ -360,10 +365,10 @@ mod test {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("zero").unwrap();
 
-        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 32, 1, 0).is_ok());
-        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 35, 8, 0).is_ok());
-        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 33, 1, 0).is_err());
-        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 36, 8, 0).is_err());
+        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 32, 1, 0, 1).is_ok());
+        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 35, 8, 0, 1).is_ok());
+        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 33, 1, 0, 1).is_err());
+        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 36, 8, 0, 1).is_err());
     }
 
     #[test]
@@ -380,9 +385,10 @@ mod test {
             storage.size as u64,
             block_size,
             0,
+            0,
         )
         .unwrap();
-        let mut state = WipeState::default();
+        let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
@@ -427,9 +433,10 @@ mod test {
             storage.size as u64,
             block_size,
             70000,
+            0,
         )
         .unwrap();
-        let mut state = WipeState::default();
+        let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
@@ -486,9 +493,10 @@ mod test {
             storage.size as u64,
             block_size,
             0,
+            0,
         )
         .unwrap();
-        let mut state = WipeState::default();
+        let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(!result);
@@ -523,10 +531,10 @@ mod test {
             storage.size as u64,
             block_size,
             0,
+            8,
         )
         .unwrap();
-        let mut state = WipeState::default();
-        state.retries_left = 8;
+        let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
@@ -576,10 +584,10 @@ mod test {
             storage.size as u64,
             block_size,
             0,
+            8,
         )
         .unwrap();
-        let mut state = WipeState::default();
-        state.retries_left = 8;
+        let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
@@ -621,10 +629,10 @@ mod test {
             storage.size as u64,
             block_size,
             0,
+            8,
         )
         .unwrap();
-        let mut state = WipeState::default();
-        state.retries_left = 8;
+        let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
@@ -666,10 +674,10 @@ mod test {
             storage.size as u64,
             block_size,
             0,
+            8,
         )
         .unwrap();
-        let mut state = WipeState::default();
-        state.retries_left = 8;
+        let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
@@ -713,10 +721,10 @@ mod test {
             storage.size as u64,
             block_size,
             0,
+            8,
         )
         .unwrap();
-        let mut state = WipeState::default();
-        state.retries_left = 8;
+        let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(result);
@@ -760,10 +768,10 @@ mod test {
             storage.size as u64,
             block_size,
             0,
+            0,
         )
         .unwrap();
-        let mut state = WipeState::default();
-        state.retries_left = 0;
+        let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
         assert!(!result);

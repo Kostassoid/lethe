@@ -37,19 +37,32 @@ impl Display for Verification {
     }
 }
 
-impl Verification {}
+impl Verification {
+    pub fn build_map(&self, total: u64) -> CoverageMap {
+        match self {
+            Verification::No => CoverageMap::empty(),
+            Verification::Last(c) => CoverageMap::from(total, c),
+            Verification::All(c) => CoverageMap::from(total, c),
+        }
+    }
+}
 
-struct VerificationMap {
+#[derive(Debug, Clone)]
+pub struct CoverageMap {
     range: Vec<Range<u64>>,
 }
 
-impl VerificationMap {
-    fn from(total: u64, coverage: Percent) -> VerificationMap {
+impl CoverageMap {
+    pub fn empty() -> CoverageMap {
+        CoverageMap { range: Vec::new() }
+    }
+
+    fn from(total: u64, ratio: &Percent) -> CoverageMap {
         let mut r = Vec::<Range<u64>>::new();
 
         r.push(0..total);
 
-        VerificationMap { range: r }
+        CoverageMap { range: r }
     }
 
     fn should_verify(&self, current: u64) -> bool {

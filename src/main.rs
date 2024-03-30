@@ -19,7 +19,6 @@ extern crate serde_derive;
 extern crate plist;
 
 use ::console::style;
-use clap::builder::ValueParser;
 use indicatif::HumanBytes;
 
 mod storage;
@@ -219,10 +218,10 @@ fn main() -> Result<()> {
                 device.details.size,
                 block_size,
                 offset,
+                *retries,
             )?;
 
-            let mut state = WipeState::default();
-            state.retries_left = *retries;
+            let mut state = (&task).into();
 
             let mut session = frontend.wipe_session(&device.id, cmd.get_flag("yes"));
             session.handle(&task, &state, WipeEvent::Created);
