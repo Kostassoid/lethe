@@ -91,7 +91,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     "Starting offset",
                     format!("{} ({} bytes)", HumanBytes(task.offset), task.offset)
                 ]);
-                t.add_row(row!["Verification", task.verify]);
+                t.add_row(row!["Verification", task.verification]);
                 print!("Wiping:\n{}", t);
 
                 if !self.auto_confirm && !ask_for_confirmation() {

@@ -1,33 +1,17 @@
 use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
+use crate::actions::verification::*;
 use crate::sanitization::mem::*;
 use crate::sanitization::*;
 use crate::storage::{StorageAccess, StorageError};
 use anyhow::Result;
 use std::cell::RefCell;
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
 use std::rc::Rc;
-
-#[derive(Debug)]
-pub enum Verify {
-    No,
-    Last,
-    All,
-}
-
-impl Display for Verify {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Verify::No => f.write_str("No"),
-            Verify::Last => f.write_str("Last stage only"),
-            Verify::All => f.write_str("After each stage"),
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct WipeTask {
     pub scheme: Scheme,
-    pub verify: Verify,
+    pub verification: Verification,
     pub total_size: u64,
     pub block_size: usize,
     pub offset: u64,
@@ -64,7 +48,7 @@ impl Default for WipeState {
 impl WipeTask {
     pub fn new(
         scheme: Scheme,
-        verify: Verify,
+        verification: Verification,
         total_size: u64,
         block_size: usize,
         offset: u64,
@@ -81,7 +65,7 @@ impl WipeTask {
 
         Ok(WipeTask {
             scheme,
-            verify,
+            verification,
             total_size,
             block_size,
             offset: corrected_offset,
@@ -226,10 +210,10 @@ impl WipeRun<'_> {
         let mut wipe_error = None;
 
         for (i, stage) in stages.iter().enumerate() {
-            let have_to_verify = match self.task.verify {
-                Verify::No => false,
-                Verify::Last if i + 1 == stages.len() => true,
-                Verify::All => true,
+            let have_to_verify = match self.task.verification {
+                Verification::No => false,
+                Verification::Last(_) if i + 1 == stages.len() => true,
+                Verification::All(_) => true,
                 _ => false,
             };
 
@@ -376,10 +360,10 @@ mod test {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("zero").unwrap();
 
-        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 32, 1, 0).is_ok());
-        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 35, 8, 0).is_ok());
-        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 33, 1, 0).is_err());
-        assert!(WipeTask::new(scheme.clone(), Verify::No, 1 << 36, 8, 0).is_err());
+        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 32, 1, 0).is_ok());
+        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 35, 8, 0).is_ok());
+        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 33, 1, 0).is_err());
+        assert!(WipeTask::new(scheme.clone(), Verification::No, 1 << 36, 8, 0).is_err());
     }
 
     #[test]
@@ -392,7 +376,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verify::Last,
+            Verification::Last(100.0),
             storage.size as u64,
             block_size,
             0,
@@ -439,7 +423,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verify::All,
+            Verification::All(100.0),
             storage.size as u64,
             block_size,
             70000,
@@ -498,7 +482,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verify::Last,
+            Verification::Last(100.0),
             storage.size as u64,
             block_size,
             0,
@@ -535,7 +519,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verify::Last,
+            Verification::Last(100.0),
             storage.size as u64,
             block_size,
             0,
@@ -588,7 +572,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verify::Last,
+            Verification::Last(100.0),
             storage.size as u64,
             block_size,
             0,
@@ -633,7 +617,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verify::Last,
+            Verification::Last(100.0),
             storage.size as u64,
             block_size,
             0,
@@ -678,7 +662,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verify::Last,
+            Verification::Last(100.0),
             storage.size as u64,
             block_size,
             0,
@@ -725,7 +709,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verify::Last,
+            Verification::Last(100.0),
             storage.size as u64,
             block_size,
             0,
@@ -772,7 +756,7 @@ mod test {
 
         let task = WipeTask::new(
             scheme.clone(),
-            Verify::Last,
+            Verification::Last(100.0),
             storage.size as u64,
             block_size,
             0,

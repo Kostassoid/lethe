@@ -5,7 +5,7 @@ extern crate anyhow;
 use anyhow::{Context, Result};
 
 extern crate clap;
-use clap::{Arg, Command};
+use clap::{value_parser, Arg, ArgAction, Command};
 
 #[macro_use]
 extern crate prettytable;
@@ -19,7 +19,7 @@ extern crate serde_derive;
 extern crate plist;
 
 use ::console::style;
-use clap::builder::PossibleValuesParser;
+use clap::builder::ValueParser;
 use indicatif::HumanBytes;
 
 mod storage;
@@ -65,7 +65,7 @@ fn main() -> Result<()> {
                         .long("scheme")
                         .short('s')
                         .num_args(1)
-                        .value_parser(PossibleValuesParser::from(&scheme_keys))
+                        .value_parser(scheme_keys)
                         .default_value("random2x")
                         .help("Data sanitization scheme"),
                 )
@@ -74,9 +74,18 @@ fn main() -> Result<()> {
                         .long("verify")
                         .short('v')
                         .num_args(1)
-                        .value_parser(PossibleValuesParser::from(&["no", "last", "all"]))
+                        .value_parser(["no", "last", "all"])
                         .default_value("last")
                         .help("Verify after completion"),
+                )
+                .arg(
+                    Arg::new("coverage")
+                        .long("coverage")
+                        .short('c')
+                        .help("Verification coverage (in percents)")
+                        .num_args(1)
+                        .value_parser(value_parser!(f32))
+                        .default_value("100.0"),
                 )
                 .arg(
                     Arg::new("blocksize")
@@ -99,6 +108,7 @@ fn main() -> Result<()> {
                         .long("retries")
                         .short('r')
                         .num_args(1)
+                        .value_parser(value_parser!(u32))
                         .default_value("8")
                         .help("Maximum number of retries"),
                 )
@@ -106,7 +116,8 @@ fn main() -> Result<()> {
                     Arg::new("yes")
                         .long("yes")
                         .short('y')
-                        .help("Automatically confirm"),
+                        .help("Automatically confirm")
+                        .action(ArgAction::SetTrue),
                 ),
         );
 
@@ -171,13 +182,30 @@ fn main() -> Result<()> {
             let device_id = cmd
                 .get_one::<String>("device")
                 .ok_or(anyhow!("Invalid device ID"))?;
+            let device = storage_repo
+                .find_by_id(device_id)
+                .ok_or(anyhow!("Unknown device {}", device_id))?;
+
             let scheme_id = cmd.get_one::<String>("scheme").unwrap();
+            let scheme = schemes
+                .find(scheme_id)
+                .ok_or(anyhow!("Unknown scheme {}", scheme_id))?;
+
+            let coverage = cmd.get_one::<f32>("coverage").unwrap();
+            if !(0f32..=100f32).contains(coverage) {
+                Err(anyhow!(
+                    "Coverage value {} is outside of range 0..100",
+                    *coverage
+                ))?
+            }
+
             let verification = match cmd.get_one::<String>("verify").unwrap().as_str() {
-                "no" => Verify::No,
-                "last" => Verify::Last,
-                "all" => Verify::All,
-                _ => Verify::Last,
+                "no" => Verification::No,
+                "last" => Verification::Last(*coverage),
+                "all" => Verification::All(*coverage),
+                _ => Verification::Last(*coverage),
             };
+
             let block_size_arg = cmd.get_one::<String>("blocksize").unwrap();
             let block_size = args::parse_block_size(block_size_arg)
                 .context(format!("Invalid blocksize value: {}", block_size_arg))?;
@@ -185,13 +213,6 @@ fn main() -> Result<()> {
             let offset_arg = cmd.get_one::<String>("offset").unwrap();
             let offset: u64 = args::parse_bytes(offset_arg)
                 .context(format!("Invalid offset value: {}", offset_arg))?;
-
-            let device = storage_repo
-                .find_by_id(device_id)
-                .ok_or(anyhow!("Unknown device {}", device_id))?;
-            let scheme = schemes
-                .find(scheme_id)
-                .ok_or(anyhow!("Unknown scheme {}", scheme_id))?;
 
             let retries = cmd
                 .get_one::<u32>("retries")
