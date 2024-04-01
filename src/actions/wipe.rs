@@ -327,6 +327,10 @@ impl WipeRun<'_> {
                 continue;
             }
 
+            // if !self.state.coverage.in_range(self.state.position) {
+            //     let next_position = self.state.coverage.next();
+            // }
+
             let b = &mut buf.as_mut_slice()[..chunk.len()];
 
             self.access.read(b)?;
