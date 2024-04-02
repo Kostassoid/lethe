@@ -12,7 +12,7 @@ type RandomGenerator = rand_chacha::ChaCha8Rng;
 pub enum Stage {
     Fill { value: u8 },
     Random { seed: [u8; RANDOM_SEED_SIZE] },
-    Incremental { block_size: usize },
+    Incremental { step: usize },
 }
 
 impl Display for Stage {
@@ -20,9 +20,7 @@ impl Display for Stage {
         match self {
             Stage::Fill { value } => f.write_str(&format!("fill with {:#04X}", value)),
             Stage::Random { seed: _seed } => f.write_str("random fill"),
-            Stage::Incremental {
-                block_size: _block_size,
-            } => f.write_str("incremental fill"),
+            Stage::Incremental { step: _block_size } => f.write_str("incremental fill"),
         }
     }
 }
@@ -37,14 +35,14 @@ struct StreamState {
 }
 
 #[derive(Debug)]
-enum StreamKind {
+enum StreamGenerator {
     Fill,
     Random { gen: RandomGenerator },
-    Incremental { block_size: usize, position: u64 },
+    Incremental { step: usize, position: u64 },
 }
 
-pub struct SanitizationStream {
-    kind: StreamKind,
+pub struct Stream {
+    generator: StreamGenerator,
     state: StreamState,
 }
 
@@ -66,7 +64,7 @@ impl Stage {
     }
 
     pub fn incremental(block_size: usize) -> Stage {
-        Stage::Incremental { block_size }
+        Stage::Incremental { step: block_size }
     }
 
     pub fn random() -> Stage {
@@ -75,26 +73,21 @@ impl Stage {
         Stage::random_with_seed(seed)
     }
 
-    pub fn stream(
-        &self,
-        total_size: u64,
-        block_size: usize,
-        start_from: u64,
-    ) -> SanitizationStream {
+    pub fn stream(&self, total_size: u64, block_size: usize, start_from: u64) -> Stream {
         let mut buf = AlignedBuffer::new(block_size, block_size);
 
         let kind = match self {
             Stage::Fill { value } => {
                 buf.fill(*value);
-                StreamKind::Fill
+                StreamGenerator::Fill
             }
             Stage::Random { seed } => {
                 let mut gen = RandomGenerator::from_seed(*seed);
                 gen.set_word_pos((start_from >> 2) as u128);
-                StreamKind::Random { gen }
+                StreamGenerator::Random { gen }
             }
-            Stage::Incremental { block_size } => StreamKind::Incremental {
-                block_size: *block_size,
+            Stage::Incremental { step } => StreamGenerator::Incremental {
+                step: *step,
                 position: start_from,
             },
         };
@@ -107,11 +100,27 @@ impl Stage {
             eof: false,
             current_block_size: 0,
         };
-        SanitizationStream { kind, state }
+        Stream {
+            generator: kind,
+            state,
+        }
     }
 }
 
-impl StreamingIterator for SanitizationStream {
+impl Stream {
+    pub fn seek(&mut self, position: u64) {
+        match &mut self.generator {
+            StreamGenerator::Fill => (),
+            StreamGenerator::Random { gen } => gen.set_word_pos((position >> 2) as u128),
+            StreamGenerator::Incremental {
+                step: _step,
+                position: gen_position,
+            } => *gen_position = position,
+        };
+    }
+}
+
+impl StreamingIterator for Stream {
     type Item = [u8];
 
     fn advance(&mut self) {
@@ -121,17 +130,14 @@ impl StreamingIterator for SanitizationStream {
                 self.state.total_size - self.state.position,
             ) as usize;
 
-            match &mut self.kind {
-                StreamKind::Fill => (),
-                StreamKind::Random { gen } => gen.fill_bytes(self.state.buf.as_mut_slice()),
-                StreamKind::Incremental {
-                    block_size,
-                    position,
-                } => {
+            match &mut self.generator {
+                StreamGenerator::Fill => (),
+                StreamGenerator::Random { gen } => gen.fill_bytes(self.state.buf.as_mut_slice()),
+                StreamGenerator::Incremental { step, position } => {
                     self.state
                         .buf
-                        .fill(((*position / *block_size as u64) % 256) as u8);
-                    *position = *position + *block_size as u64;
+                        .fill(((*position / *step as u64) % 256) as u8);
+                    *position = *position + *step as u64;
                 }
             };
 
@@ -154,7 +160,6 @@ impl StreamingIterator for SanitizationStream {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::io::Read;
 
     const TEST_SIZE: u64 = 10245;
     const TEST_BLOCK: usize = 256;
@@ -218,9 +223,7 @@ mod test {
     #[test]
     fn test_stage_incremental_behaves() {
         let mut data1 = create_test_vec();
-        let mut stage = Stage::Incremental {
-            block_size: TEST_BLOCK,
-        };
+        let mut stage = Stage::Incremental { step: TEST_BLOCK };
 
         fill(&mut data1, &mut stage);
 

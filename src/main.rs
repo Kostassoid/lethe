@@ -227,8 +227,8 @@ fn main() -> Result<()> {
             session.handle(&task, &state, WipeEvent::Created);
 
             match device.access() {
-                Ok(mut access) => {
-                    if !task.run(access.as_mut(), &mut state, &mut session) {
+                Ok(mut storage) => {
+                    if !task.run(storage.as_mut(), &mut state, &mut session) {
                         std::process::exit(1);
                     }
                 }

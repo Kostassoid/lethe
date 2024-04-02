@@ -109,9 +109,9 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 let stage_description = match stage {
                     Stage::Fill { value } => format!("Value Fill ({:02x})", value),
                     Stage::Random { seed: _seed } => "Random Fill".to_string(),
-                    Stage::Incremental {
-                        block_size: _block_size,
-                    } => "Incremental fill (per block)".to_string(),
+                    Stage::Incremental { step: _block_size } => {
+                        "Incremental fill (per block)".to_string()
+                    }
                 };
 
                 let pb = create_progress_bar(task.total_size);
@@ -132,6 +132,11 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 self.stage_started = Some(Instant::now());
             }
             WipeEvent::Progress(position) => {
+                if let Some(pb) = &self.pb {
+                    pb.set_position(position);
+                }
+            }
+            WipeEvent::SkippedTo(position) => {
                 if let Some(pb) = &self.pb {
                     pb.set_position(position);
                 }
