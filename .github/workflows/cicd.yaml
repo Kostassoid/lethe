@@ -30,9 +30,9 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          - { target: x86_64-pc-windows-gnu       , os: windows-2019                    }
-          - { target: x86_64-unknown-linux-musl   , os: ubuntu-20.04                    }
-          - { target: x86_64-apple-darwin         , os: macos-11                        }
+          - { target: x86_64-pc-windows-gnu       , os: windows-2019 }
+          - { target: x86_64-unknown-linux-musl   , os: ubuntu-20.04 }
+          - { target: x86_64-apple-darwin         , os: macos-11 }
           - { target: aarch64-apple-darwin        , os: macos-11     , skip-tests: true }
     steps:
       - name: Checkout source code
@@ -103,7 +103,7 @@ jobs:
           *-pc-windows-*) EXE_suffix=".exe" ;;
           esac;
           BIN_NAME="${{ env.PROJECT_NAME }}${EXE_suffix}"
-        
+          
           PKG_suffix=".tar.gz" ; case ${{ matrix.job.target }} in *-pc-windows-*) PKG_suffix=".zip" ;; esac;
           PKG_BASENAME=${PROJECT_NAME}-v${PROJECT_VERSION}-${{ matrix.job.target }}
           PKG_NAME=${PKG_BASENAME}${PKG_suffix}

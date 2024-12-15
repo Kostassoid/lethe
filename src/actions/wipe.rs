@@ -118,7 +118,7 @@ impl WipeTask {
             state,
             frontend,
         }
-        .run()
+            .run()
     }
 }
 
@@ -398,7 +398,7 @@ mod test {
             0,
             0,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -446,7 +446,7 @@ mod test {
             70000,
             0,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -506,7 +506,7 @@ mod test {
             0,
             0,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -544,7 +544,7 @@ mod test {
             0,
             8,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -597,7 +597,7 @@ mod test {
             0,
             8,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -642,7 +642,7 @@ mod test {
             0,
             8,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -687,7 +687,7 @@ mod test {
             0,
             8,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -734,7 +734,7 @@ mod test {
             0,
             8,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -781,7 +781,7 @@ mod test {
             0,
             0,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 
@@ -819,7 +819,7 @@ mod test {
             0,
             0,
         )
-        .unwrap();
+            .unwrap();
         let mut state = (&task).into();
         let result = task.run(&mut storage, &mut state, &mut receiver);
 

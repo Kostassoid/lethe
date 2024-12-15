@@ -176,8 +176,8 @@ mod test {
                 "\\\\.\\PhysicalDrive3",
                 "\\\\.\\PhysicalDrive4",
             ]
-            .iter()
-            .cloned(),
+                .iter()
+                .cloned(),
         ));
 
         let mut sorted = ids.keys();
@@ -203,8 +203,8 @@ mod test {
                 "/dev/rdisk2",
                 "/dev/rdisk2s1",
             ]
-            .iter()
-            .cloned(),
+                .iter()
+                .cloned(),
         ));
 
         let mut sorted = ids.keys();

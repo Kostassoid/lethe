@@ -106,14 +106,14 @@ impl StorageError {
     fn from(err: std::io::Error) -> StorageError {
         match err.raw_os_error() {
             Some(c)
-                if c == ERROR_CRC as i32
-                    || c == ERROR_SEEK as i32
-                    || c == ERROR_SECTOR_NOT_FOUND as i32
-                    || c == ERROR_WRITE_FAULT as i32
-                    || c == ERROR_READ_FAULT as i32 =>
-            {
-                StorageError::BadBlock
-            }
+            if c == ERROR_CRC as i32
+                || c == ERROR_SEEK as i32
+                || c == ERROR_SECTOR_NOT_FOUND as i32
+                || c == ERROR_WRITE_FAULT as i32
+                || c == ERROR_READ_FAULT as i32 =>
+                {
+                    StorageError::BadBlock
+                }
             _ => StorageError::Other(err),
         }
     }
