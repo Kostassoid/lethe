@@ -38,7 +38,6 @@ const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 fn main() -> Result<()> {
     let schemes = SchemeRepo::default();
     let scheme_keys: Vec<_> = schemes.all().keys().cloned().collect();
-
     let schemes_explanation = cli::ConsoleFrontend::explain_schemes(&schemes);
 
     let mut app = Command::new("Lethe")
@@ -153,14 +152,26 @@ fn main() -> Result<()> {
             ]);
 
             let format_device = |tt: &mut Table, x: &StorageRef, level: usize| {
-                tt.add_row(row![
-                    style(format!("{}{}", " ".repeat(level * 2), &x.id)).bold(),
-                    style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
-                    HumanBytes(x.details.size),
-                    &x.details.storage_type,
-                    (&x.details.label).as_ref().unwrap_or(&"".to_string()),
-                    (&x.details.mount_point).as_ref().unwrap_or(&"".to_string()),
-                ]);
+                match x.readiness {
+                    StorageReadiness::Ready(ref details) =>
+                        tt.add_row(row![
+                        style(format!("{}{}", " ".repeat(level * 2), &x.id)).bold(),
+                        style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
+                        HumanBytes(details.size),
+                        &details.storage_type,
+                        (&details.label).as_ref().unwrap_or(&"".to_string()),
+                        (&details.mount_point).as_ref().unwrap_or(&"".to_string()),
+                    ]),
+                    StorageReadiness::Locked =>
+                        tt.add_row(row![
+                        style(format!("{}{}", " ".repeat(level * 2), &x.id)).bold(),
+                        style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
+                        HumanBytes(0),
+                        "locked",
+                        "locked",
+                        "locked",
+                    ]),
+                };
             };
 
             let devices = storage_repo.devices();
@@ -170,9 +181,9 @@ fn main() -> Result<()> {
             }
 
             for x in storage_repo.devices() {
-                format_device(&mut t, &x, 0);
+                format_device(&mut t, x, 0);
                 for c in &x.children {
-                    format_device(&mut t, &c, 1);
+                    format_device(&mut t, c, 1);
                 }
             }
             t.printstd();
@@ -184,6 +195,9 @@ fn main() -> Result<()> {
             let device = storage_repo
                 .find_by_id(device_id)
                 .ok_or(anyhow!("Unknown device {}", device_id))?;
+
+            let StorageReadiness::Ready(device_details) = &device.readiness
+            else { Err(anyhow!("Device {} is locked.", device_id))? };
 
             let scheme_id = cmd.get_one::<String>("scheme").unwrap();
             let scheme = schemes
@@ -215,7 +229,7 @@ fn main() -> Result<()> {
             let task = WipeTask::new(
                 scheme.clone(),
                 verification,
-                device.details.size,
+                device_details.size,
                 block_size,
                 offset,
                 *retries,

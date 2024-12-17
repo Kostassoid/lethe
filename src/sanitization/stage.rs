@@ -2,7 +2,7 @@ use rand::RngCore;
 use rand::SeedableRng;
 pub use streaming_iterator::StreamingIterator;
 
-use super::mem::*;
+use crate::sanitization::mem::*;
 use std::fmt::{Display, Formatter};
 
 const RANDOM_SEED_SIZE: usize = 32;

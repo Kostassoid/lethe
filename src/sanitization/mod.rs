@@ -1,7 +1,7 @@
 pub mod stage;
-pub use stage::*;
-
 pub mod mem;
+
+pub use stage::*;
 
 use std::collections::BTreeMap;
 

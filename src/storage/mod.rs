@@ -5,8 +5,6 @@ pub use crate::storage::nix::*;
 
 #[cfg(windows)]
 mod windows;
-#[cfg(windows)]
-pub use windows::*;
 
 use anyhow::Result;
 use thiserror::Error;
@@ -20,9 +18,15 @@ pub enum StorageError {
 }
 
 #[derive(Debug)]
+pub enum StorageReadiness {
+    Ready(StorageDetails),
+    Locked,
+}
+
+#[derive(Debug)]
 pub struct StorageRef {
     pub id: String,
-    pub details: StorageDetails,
+    pub readiness: StorageReadiness,
     pub children: Vec<StorageRef>,
 }
 

@@ -28,7 +28,7 @@ impl AlignedBuffer {
 
 impl Drop for AlignedBuffer {
     fn drop(&mut self) {
-        unsafe { std::alloc::dealloc(self.ptr as *mut u8, self.layout) }
+        unsafe { std::alloc::dealloc(self.ptr, self.layout) }
     }
 }
 

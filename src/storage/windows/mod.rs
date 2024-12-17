@@ -21,9 +21,9 @@ impl System {
     pub fn enumerate_storage_devices() -> Result<Vec<StorageRef>> {
         let enumerator = DiskDeviceEnumerator::new().with_context(|| {
             if !is_elevated() {
-                format!("Make sure you run the application with Administrator permissions!")
+                "Make sure you run the application with Administrator permissions!".to_string()
             } else {
-                format!("") //todo: hints?
+                "".to_string() //todo: hints?
             }
         })?;
         let mut devices: Vec<StorageRef> = enumerator.collect();

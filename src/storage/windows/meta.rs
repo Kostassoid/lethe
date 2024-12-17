@@ -6,7 +6,6 @@ use std::{io, mem, ptr};
 use anyhow::{Context, Result};
 use libc;
 use widestring::WideCString;
-use winapi::_core::ptr::null_mut;
 use winapi::shared::minwindef::*;
 use winapi::um::handleapi::INVALID_HANDLE_VALUE;
 use winapi::um::setupapi::*;
@@ -15,8 +14,11 @@ use winapi::um::winnt::{PVOID, WCHAR};
 use winapi::um::{fileapi, ioapiset, winioctl};
 
 use windows::access::*;
-
 use crate::storage::*;
+
+#[repr(align(64))]
+#[derive(Debug, Clone, Copy)]
+struct FixedAlignedBuffer<const N: usize>([u8; N]);
 
 struct PhysicalDrive {
     device_number: DWORD,
@@ -146,7 +148,7 @@ impl Iterator for DiskDeviceEnumerator {
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut device_interface_data: SP_DEVICE_INTERFACE_DATA = unsafe { mem::zeroed() };
-        device_interface_data.cbSize = mem::size_of::<SP_DEVICE_INTERFACE_DATA>() as UINT;
+        device_interface_data.cbSize = size_of::<SP_DEVICE_INTERFACE_DATA>() as UINT;
 
         let result = unsafe {
             SetupDiEnumDeviceInterfaces(
@@ -194,12 +196,17 @@ impl Iterator for DiskDeviceEnumerator {
             )
         };
 
-        DeviceFile::open(interface_details.path().as_str(), false)
+        Some(DeviceFile::open(interface_details.path().as_str(), false)
             .and_then(|d| get_device_number(&d))
             .and_then(PhysicalDrive::from_device_number)
             .and_then(|p| p.describe(&self.volumes))
-            .ok()
-            .or_else(|| self.next()) // skip
+            .unwrap_or(
+                StorageRef {
+                    id: interface_details.path().to_string(),
+                    readiness: StorageReadiness::Locked,
+                    children: vec![],
+                })
+        )
     }
 }
 
@@ -280,7 +287,7 @@ impl PhysicalDrive {
 
             devices.push(StorageRef {
                 id: partition_path,
-                details: StorageDetails {
+                readiness: StorageReadiness::Ready(StorageDetails {
                     size: l as u64,
                     block_size: drive_details.block_size,
                     storage_type: StorageType::Partition,
@@ -289,14 +296,14 @@ impl PhysicalDrive {
                         .iter()
                         .flat_map(|v| v.1.clone())
                         .next(),
-                },
+                }),
                 children: vec![],
             })
         }
 
         let root = StorageRef {
             id: self.path.to_string(),
-            details: drive_details,
+            readiness: StorageReadiness::Ready(drive_details),
             children: devices,
         };
 
@@ -304,52 +311,51 @@ impl PhysicalDrive {
     }
 }
 
-fn get_drive_layout(device: &DeviceFile) -> Result<&mut Layout> {
-    const LAYOUT_BUFFER_SIZE: usize = std::mem::size_of::<Layout>();
-    let mut layout_buffer: [BYTE; LAYOUT_BUFFER_SIZE] = [0; LAYOUT_BUFFER_SIZE];
+fn get_drive_layout(device: &DeviceFile) -> Result<Layout> {
+    const LAYOUT_BUFFER_SIZE: usize = size_of::<Layout>();
+    let mut layout: Layout = unsafe { mem::zeroed() };
     let mut bytes: DWORD = 0;
     unsafe {
-        let layout: &mut Layout = std::mem::transmute(layout_buffer.as_mut_ptr());
-
         if ioapiset::DeviceIoControl(
             device.handle,
             winioctl::IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
-            std::ptr::null_mut(),
+            ptr::null_mut(),
             0,
-            layout_buffer.as_mut_ptr() as PVOID,
+            &mut layout as *mut _ as PVOID,
             LAYOUT_BUFFER_SIZE as DWORD,
             &mut bytes,
-            std::ptr::null_mut(),
+            ptr::null_mut(),
         ) == 0
         {
             return Err(io::Error::last_os_error()).context("Unable to get device layout.");
         }
+
         Ok(layout)
     }
 }
 
 fn get_volume_extents(device: &DeviceFile) -> Result<Vec<VolumeExtent>> {
     const EXTENTS_BUFFER_SIZE: usize =
-        16 + std::mem::size_of::<winioctl::VOLUME_DISK_EXTENTS>() * 32;
-    let mut extents_buffer: [BYTE; EXTENTS_BUFFER_SIZE] = [0; EXTENTS_BUFFER_SIZE];
+        16 + size_of::<winioctl::VOLUME_DISK_EXTENTS>() * 32;
+    let mut extents_buffer = FixedAlignedBuffer::<EXTENTS_BUFFER_SIZE>([0u8; EXTENTS_BUFFER_SIZE]);
     let mut bytes: DWORD = 0;
     unsafe {
-        let extents: &mut winioctl::VOLUME_DISK_EXTENTS =
-            std::mem::transmute(extents_buffer.as_mut_ptr());
-
         if ioapiset::DeviceIoControl(
             device.handle,
             winioctl::IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-            std::ptr::null_mut(),
+            ptr::null_mut(),
             0,
-            extents_buffer.as_mut_ptr() as PVOID,
+            &mut extents_buffer as *mut _ as PVOID,
             EXTENTS_BUFFER_SIZE as DWORD,
             &mut bytes,
-            std::ptr::null_mut(),
+            ptr::null_mut(),
         ) == 0
         {
             return Err(io::Error::last_os_error()).context("Unable to get volume extents.");
         }
+
+        let extents: &winioctl::VOLUME_DISK_EXTENTS =
+            mem::transmute(&extents_buffer as *const _);
 
         let mut r: Vec<VolumeExtent> = Vec::new();
         let ex = slice::from_raw_parts(
@@ -432,12 +438,12 @@ fn get_device_number(device: &DeviceFile) -> Result<DWORD> {
         if ioapiset::DeviceIoControl(
             device.handle,
             winioctl::IOCTL_STORAGE_GET_DEVICE_NUMBER,
-            null_mut(),
+            ptr::null_mut(),
             0,
             &mut dev_number as *mut _ as LPVOID,
             std::mem::size_of::<StorageDeviceNumber>() as DWORD,
             &mut bytes,
-            null_mut(),
+            ptr::null_mut(),
         ) == 0
         {
             return Err(io::Error::last_os_error()).context("Unable to get device number.");
@@ -488,10 +494,10 @@ fn get_volume_label(path: &str) -> Result<String> {
             WideCString::from_str(path).unwrap().as_ptr(),
             volume_name_buffer.as_mut_ptr(),
             MAX_PATH as DWORD,
-            null_mut(),
-            null_mut(),
-            null_mut(),
-            null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
             0 as DWORD,
         ) == 0
         {
