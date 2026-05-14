@@ -3,9 +3,9 @@ use std::time::Instant;
 
 use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 
-use crate::actions::{WipeEvent, WipeEventReceiver, WipeState, WipeTask};
-use crate::sanitization::{Scheme, SchemeRepo};
-use crate::stage::Stage;
+use crate::actions::{Step, WipeEvent, WipeEventHandler, WipeSession, WipeSessionState};
+use crate::sanitization::scheme::{Scheme, SchemeRepo};
+use crate::scheme::Stage;
 use prettytable::format::FormatBuilder;
 use prettytable::Table;
 use std::thread::sleep;
@@ -19,8 +19,8 @@ impl ConsoleFrontend {
         ConsoleFrontend {}
     }
 
-    pub fn wipe_session(self, device_id: &str, auto_confirm: bool) -> ConsoleWipeSession {
-        ConsoleWipeSession {
+    pub fn wipe_session(self, device_id: &str, auto_confirm: bool) -> ConsoleEventHandler {
+        ConsoleEventHandler {
             device_id: String::from(device_id),
             auto_confirm,
             pb: None,
@@ -58,7 +58,7 @@ impl ConsoleFrontend {
     }
 }
 
-pub struct ConsoleWipeSession {
+pub struct ConsoleEventHandler {
     device_id: String,
     auto_confirm: bool,
     pb: Option<ProgressBar>,
@@ -66,8 +66,8 @@ pub struct ConsoleWipeSession {
     stage_started: Option<Instant>,
 }
 
-impl WipeEventReceiver for ConsoleWipeSession {
-    fn handle(&mut self, task: &WipeTask, state: &WipeState, event: WipeEvent) -> () {
+impl WipeEventHandler for ConsoleEventHandler {
+    fn handle(&mut self, state: &WipeSessionState, event: WipeEvent) -> () {
         match event {
             WipeEvent::Created => {
                 let mut t = Table::new();
@@ -78,20 +78,41 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     "Size",
                     format!(
                         "{} ({} bytes)",
-                        HumanBytes(task.total_size),
-                        task.total_size
+                        HumanBytes(state.plan.range.end),
+                        state.plan.range.end
+                    )
+                ]);
+
+                let steps = state
+                    .plan
+                    .steps
+                    .iter()
+                    .map(|s| match s {
+                        Step::Write(_) => "fill",
+                        Step::Verify(_) => "verify",
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                t.add_row(row!["Steps", steps]);
+                t.add_row(row!["Block size", HumanBytes(state.plan.block_size as u64)]);
+                t.add_row(row![
+                    "Starting offset",
+                    format!(
+                        "{} ({} bytes)",
+                        HumanBytes(state.plan.range.start),
+                        state.plan.range.start
                     )
                 ]);
                 t.add_row(row![
-                    "Scheme",
-                    ConsoleFrontend::describe_scheme(&task.scheme)
+                    "Total area size",
+                    format!(
+                        "{} ({} bytes)",
+                        HumanBytes(state.plan.total_bytes()),
+                        state.plan.total_bytes()
+                    )
                 ]);
-                t.add_row(row!["Block size", HumanBytes(task.block_size as u64)]);
-                t.add_row(row![
-                    "Starting offset",
-                    format!("{} ({} bytes)", HumanBytes(task.offset), task.offset)
-                ]);
-                t.add_row(row!["Verification", task.verification]);
+                t.add_row(row!["Verification", state.plan.verification]);
                 print!("Wiping:\n{}", t);
 
                 if !self.auto_confirm && !ask_for_confirmation() {
@@ -102,29 +123,29 @@ impl WipeEventReceiver for ConsoleWipeSession {
             WipeEvent::Started => {
                 self.session_started = Some(Instant::now());
             }
-            WipeEvent::StageStarted => {
-                let stage_num = format!("Stage {}/{}", state.stage + 1, task.scheme.stages.len());
-                let stage = &task.scheme.stages[state.stage];
+            WipeEvent::StepStarted => {
+                let step_description = format!("Step {}/{}", state.step + 1, state.plan.steps.len());
+
+                let (stage, at_verification) = match state.plan.steps[state.step] {
+                    Step::Verify(i) => (&state.plan.scheme.stages[i], true),
+                    Step::Write(i) => (&state.plan.scheme.stages[i], false),
+                };
 
                 let stage_description = match stage {
                     Stage::Fill { value } => format!("Value Fill ({:02x})", value),
-                    Stage::Random { seed: _seed } => "Random Fill".to_string(),
+                    Stage::Random => "Random Fill".to_string(),
                     Stage::Incremental { step: _block_size } => {
                         "Incremental fill (per block)".to_string()
                     }
                 };
 
-                let pb = create_progress_bar(task.total_size);
+                let pb = create_progress_bar(state.plan.total_bytes());
 
-                if !state.at_verification {
-                    pb.println(format!("\n{}: Performing {}", stage_num, stage_description));
-                } else {
-                    pb.println(format!("\n{}: Verifying {}", stage_num, stage_description));
-                }
-
-                if !state.at_verification {
+                if !at_verification {
+                    pb.println(format!("\n{}: Performing {}", step_description, stage_description));
                     pb.set_message("Writing");
                 } else {
+                    pb.println(format!("\n{}: Verifying {}", step_description, stage_description));
                     pb.set_message("Checking");
                 }
 
@@ -146,7 +167,7 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     pb.println(format!("Unable to access block at {}. Skipping.", block));
                 }
             }
-            WipeEvent::StageCompleted(result) => {
+            WipeEvent::StepCompleted(result) => {
                 if let Some(pb) = &self.pb {
                     match result {
                         None => {
@@ -177,16 +198,22 @@ impl WipeEventReceiver for ConsoleWipeSession {
                         let elapsed = HumanDuration(s.elapsed());
                         println!("✔ Total time: {}", elapsed);
                     }
-                    let total_blocks = task.total_size / task.block_size as u64;
-                    let wiped_blocks = (task.total_size - task.offset) / task.block_size as u64;
-                    let bad_blocks = state.bad_blocks.borrow_mut().total_marked();
+                    let total_blocks = state.plan.total_bytes() / state.plan.block_size as u64;
+                    let bad_blocks = state.bad_blocks.total_marked();
 
                     let mut t = Table::new();
                     let indent_table_format = FormatBuilder::new().padding(4, 1).build();
                     t.set_format(indent_table_format);
-                    t.add_row(row!["Total device size", HumanBytes(task.total_size)]);
-                    t.add_row(row!["Total device blocks", total_blocks]);
-                    t.add_row(row!["Total blocks wiped", wiped_blocks]);
+                    t.add_row(row![
+                        "Total covered area",
+                        format!(
+                            "{} - {} ({})",
+                            HumanBytes(state.plan.range.start),
+                            HumanBytes(state.plan.range.end),
+                            HumanBytes(state.plan.total_bytes())
+                        )
+                    ]);
+                    t.add_row(row!["Total blocks", total_blocks]);
                     t.add_row(row![
                         "Skipped blocks",
                         format!(

@@ -24,6 +24,10 @@ impl AlignedBuffer {
     pub(crate) fn as_mut_slice(&self) -> &mut [u8] {
         unsafe { &mut *slice_from_raw_parts_mut(self.ptr, self.layout.size()) }
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.layout.size()
+    }
 }
 
 impl Drop for AlignedBuffer {

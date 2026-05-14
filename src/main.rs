@@ -122,7 +122,7 @@ fn main() -> Result<()> {
     let storage_devices = System::enumerate_storage_devices().unwrap_or_else(|err| {
         eprintln!("Unable to enumerate storage devices. {:#}", err);
 
-        if cfg!(linux) {
+        if cfg!(target_os = "linux") {
             let is_wsl = std::fs::read_to_string("/proc/version")
                 .map(|v| v.contains("Microsoft"))
                 .unwrap_or(false);
@@ -226,31 +226,11 @@ fn main() -> Result<()> {
                 .get_one::<u32>("retries")
                 .ok_or(anyhow!("Invalid retries number value"))?;
 
-            let task = WipeTask::new(
-                scheme.clone(),
-                verification,
-                device_details.size,
-                block_size,
-                offset,
-                *retries,
-            )?;
+            let plan = WipePlan::from(scheme.clone(), verification, offset..device_details.size, block_size)?;
 
-            let mut state = (&task).into();
+            let session = frontend.wipe_session(&device.id, cmd.get_flag("yes"));
 
-            let mut session = frontend.wipe_session(&device.id, cmd.get_flag("yes"));
-            session.handle(&task, &state, WipeEvent::Created);
-
-            match device.access() {
-                Ok(mut storage) => {
-                    if !task.run(storage.as_mut(), &mut state, &mut session) {
-                        std::process::exit(1);
-                    }
-                }
-                Err(err) => {
-                    session.handle(&task, &state, WipeEvent::Fatal(err));
-                    std::process::exit(1);
-                }
-            }
+            plan.execute(&device, Box::new(session), *retries)?;
         }
         _ => {
             app.print_help()?;

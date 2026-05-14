@@ -1,5 +1,5 @@
 use crate::storage::StorageRef;
-use crate::ui::idshortcuts::IdShortcuts;
+use crate::ui::id_shortcuts::IdShortcuts;
 use std::collections::HashSet;
 
 pub struct StorageRepo {

@@ -3,36 +3,10 @@ use rand::SeedableRng;
 pub use streaming_iterator::StreamingIterator;
 
 use crate::sanitization::mem::*;
-use std::fmt::{Display, Formatter};
+use crate::sanitization::scheme::Stage;
 
 const RANDOM_SEED_SIZE: usize = 32;
 type RandomGenerator = rand_chacha::ChaCha8Rng;
-
-#[derive(Debug, Clone)]
-pub enum Stage {
-    Fill { value: u8 },
-    Random { seed: [u8; RANDOM_SEED_SIZE] },
-    Incremental { step: usize },
-}
-
-impl Display for Stage {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Stage::Fill { value } => f.write_str(&format!("fill with {:#04X}", value)),
-            Stage::Random { seed: _seed } => f.write_str("random fill"),
-            Stage::Incremental { step: _block_size } => f.write_str("incremental fill"),
-        }
-    }
-}
-
-struct StreamState {
-    total_size: u64,
-    block_size: usize,
-    position: u64,
-    buf: AlignedBuffer,
-    current_block_size: usize,
-    eof: bool,
-}
 
 #[derive(Debug)]
 enum StreamGenerator {
@@ -43,72 +17,55 @@ enum StreamGenerator {
 
 pub struct Stream {
     generator: StreamGenerator,
-    state: StreamState,
+    total_size: u64,
+    pub position: u64,
+    last_position: u64,
+    buf: AlignedBuffer,
 }
 
-impl Stage {
-    pub fn constant(value: u8) -> Stage {
-        Stage::Fill { value }
-    }
-
-    pub fn zero() -> Stage {
-        Self::constant(0)
-    }
-
-    pub fn one() -> Stage {
-        Self::constant(0xff)
-    }
-
-    pub fn random_with_seed(seed: [u8; RANDOM_SEED_SIZE]) -> Stage {
-        Stage::Random { seed }
-    }
-
-    pub fn incremental(block_size: usize) -> Stage {
-        Stage::Incremental { step: block_size }
-    }
-
-    pub fn random() -> Stage {
-        let mut seed: [u8; RANDOM_SEED_SIZE] = [0; RANDOM_SEED_SIZE];
-        rand::thread_rng().fill_bytes(&mut seed[..]);
-        Stage::random_with_seed(seed)
-    }
-
-    pub fn stream(&self, total_size: u64, block_size: usize, start_from: u64) -> Stream {
+impl Stream {
+    pub fn from(stage: &Stage, total_size: u64, block_size: usize) -> Self {
         let mut buf = AlignedBuffer::new(block_size, block_size);
 
-        let kind = match self {
+        let generator = match stage {
             Stage::Fill { value } => {
                 buf.fill(*value);
                 StreamGenerator::Fill
             }
-            Stage::Random { seed } => {
-                let mut gen = RandomGenerator::from_seed(*seed);
-                gen.set_word_pos((start_from >> 2) as u128);
+            Stage::Random => {
+                let mut seed: [u8; RANDOM_SEED_SIZE] = [0; RANDOM_SEED_SIZE];
+                rand::thread_rng().fill_bytes(&mut seed[..]);
+                let mut gen = RandomGenerator::from_seed(seed);
+                gen.set_word_pos(0);
                 StreamGenerator::Random { gen }
             }
             Stage::Incremental { step } => StreamGenerator::Incremental {
                 step: *step,
-                position: start_from,
+                position: 0,
             },
         };
 
-        let state = StreamState {
-            total_size,
-            block_size,
-            position: start_from,
-            buf,
-            eof: false,
-            current_block_size: 0,
-        };
         Stream {
-            generator: kind,
-            state,
+            generator,
+            total_size,
+            position: 0,
+            last_position: 0,
+            buf,
         }
     }
-}
 
-impl Stream {
+    pub fn eof(&self) -> bool {
+        self.position >= self.total_size && self.position == self.last_position
+    }
+
     pub fn seek(&mut self, position: u64) {
+        self.position = position;
+        if self.position > self.total_size {
+            self.position = self.total_size;
+        }
+
+        self.last_position = self.position;
+
         match &mut self.generator {
             StreamGenerator::Fill => (),
             StreamGenerator::Random { gen } => gen.set_word_pos((position >> 2) as u128),
@@ -124,35 +81,33 @@ impl StreamingIterator for Stream {
     type Item = [u8];
 
     fn advance(&mut self) {
-        if !self.state.eof && self.state.position < self.state.total_size {
-            let chunk_size = std::cmp::min(
-                self.state.block_size as u64,
-                self.state.total_size - self.state.position,
-            ) as usize;
+        if self.eof() {
+            return;
+        }
 
-            match &mut self.generator {
-                StreamGenerator::Fill => (),
-                StreamGenerator::Random { gen } => gen.fill_bytes(self.state.buf.as_mut_slice()),
-                StreamGenerator::Incremental { step, position } => {
-                    self.state
-                        .buf
-                        .fill(((*position / *step as u64) % 256) as u8);
-                    *position = *position + *step as u64;
-                }
-            };
+        match &mut self.generator {
+            StreamGenerator::Fill => (),
+            StreamGenerator::Random { gen } => gen.fill_bytes(self.buf.as_mut_slice()),
+            StreamGenerator::Incremental { step, position } => {
+                self.buf.fill(((*position / *step as u64) % 256) as u8);
+                *position = *position + *step as u64;
+            }
+        };
 
-            self.state.current_block_size = chunk_size;
-            self.state.position += chunk_size as u64;
-        } else {
-            self.state.eof = true;
+        self.last_position = self.position;
+
+        self.position += self.buf.len() as u64;
+        if self.position > self.total_size {
+            self.position = self.total_size;
         }
     }
 
     fn get(&self) -> Option<&Self::Item> {
-        if !self.state.eof {
-            Some(&self.state.buf.as_mut_slice()[..self.state.current_block_size as usize])
-        } else {
+        if self.eof() {
             None
+        } else {
+            let chunk_size = self.position - self.last_position;
+            Some(&self.buf.as_mut_slice()[..chunk_size as usize])
         }
     }
 }
@@ -167,13 +122,14 @@ mod test {
     #[test]
     fn test_stage_fill_behaves() {
         let mut data1 = create_test_vec();
-        let mut stage = Stage::Fill { value: 0x33 };
+        let mut stream = Stream::from(&Stage::constant(0x33), TEST_SIZE, TEST_BLOCK);
 
-        fill(&mut data1, &mut stage);
+        fill(&mut data1, &mut stream);
+        
         assert!(data1.iter().find(|x| **x != 0x33).is_none());
 
         let mut data2 = create_test_vec();
-        fill(&mut data2, &mut stage);
+        fill(&mut data2, &mut stream);
 
         assert_eq!(data1, data2);
     }
@@ -181,9 +137,9 @@ mod test {
     #[test]
     fn test_stage_random_behaves() {
         let mut data1 = create_test_vec();
-        let mut stage = Stage::random_with_seed([13; 32]);
+        let mut stream =  Stream::from(&Stage::random(), TEST_SIZE, TEST_BLOCK);
 
-        fill(&mut data1, &mut stage);
+        fill(&mut data1, &mut stream);
 
         assert_ne!(data1, create_test_vec());
 
@@ -196,13 +152,13 @@ mod test {
         assert!(unchanged < TEST_SIZE / 100); // allows for some edge cases
 
         let mut data2 = create_test_vec();
-        fill(&mut data2, &mut stage);
+        fill(&mut data2, &mut stream);
 
         assert_eq!(data1, data2);
 
-        let mut stage3 = Stage::random_with_seed([66; 32]);
+        let mut stream3 = Stream::from(&Stage::random(), TEST_SIZE, TEST_BLOCK);
         let mut data3 = create_test_vec();
-        fill(&mut data3, &mut stage3);
+        fill(&mut data3, &mut stream3);
 
         assert_ne!(data3, data2);
     }
@@ -210,7 +166,7 @@ mod test {
     #[test]
     fn test_stage_random_entropy() {
         let mut data = create_test_vec();
-        let mut stage = Stage::random_with_seed([13; 32]);
+        let mut stage = Stream::from(&Stage::random(), TEST_SIZE, TEST_BLOCK);
         fill(&mut data, &mut stage);
 
         let source_entropy = calculate_entropy(create_test_vec().as_ref());
@@ -223,9 +179,9 @@ mod test {
     #[test]
     fn test_stage_incremental_behaves() {
         let mut data1 = create_test_vec();
-        let mut stage = Stage::Incremental { step: TEST_BLOCK };
+        let mut stream = Stream::from(&Stage::incremental(TEST_BLOCK), TEST_SIZE, TEST_BLOCK);
 
-        fill(&mut data1, &mut stage);
+        fill(&mut data1, &mut stream);
 
         for block in 0..TEST_SIZE / TEST_BLOCK as u64 {
             assert!(data1
@@ -237,7 +193,7 @@ mod test {
         }
 
         let mut data2 = create_test_vec();
-        fill(&mut data2, &mut stage);
+        fill(&mut data2, &mut stream);
 
         assert_eq!(data1, data2);
     }
@@ -246,10 +202,10 @@ mod test {
         (0..TEST_SIZE).map(|x| (x % 256) as u8).collect()
     }
 
-    fn fill(v: &mut Vec<u8>, stage: &mut Stage) -> () {
-        let mut stream = stage.stream(TEST_SIZE, TEST_BLOCK, 0);
-
+    fn fill(v: &mut Vec<u8>, stream: &mut Stream) -> () {
         let mut position = 0;
+        stream.seek(0);
+
         while let Some(chunk) = stream.next() {
             let chunk_size = chunk.len();
             v[position..position + chunk_size].clone_from_slice(chunk);
