@@ -1,37 +1,42 @@
 use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
 use crate::actions::plan::WipePlan;
 use crate::actions::verification::*;
-use crate::actions::Step;
+use crate::actions::{Step, StreamId};
 use crate::sanitization::mem::*;
 use crate::sanitization::stream::Stream;
 use crate::storage::{StorageAccess, StorageError};
 use anyhow::Result;
-use std::rc::Rc;
 use streaming_iterator::StreamingIterator;
 
 pub struct WipeSession {
     pub event_handler: Box<dyn WipeEventHandler>,
     pub storage: Box<dyn StorageAccess>,
+    pub plan: WipePlan,
+    pub streams: Vec<Stream>,
     pub state: WipeSessionState,
 }
+
+type StepIndex = usize;
+type BytePosition = u64;
 
 #[derive(Debug)]
 pub enum WipeEvent {
     Created,
     Started,
-    StepStarted,
-    Progress(u64),
-    SkippedTo(u64),
-    MarkedBlockAsBad(u64),
-    StepCompleted(Option<Rc<anyhow::Error>>),
-    Retrying,
-    Completed(Option<Rc<anyhow::Error>>),
+    StepStarted(StepIndex),
+    Progress(BytePosition),
+    SkippedTo(BytePosition),
+    MarkedBlockAsBad(BytePosition),
+    StepCompleted(StepIndex),
+    StepFailed(StepIndex, String),
+    Retrying(StepIndex, BytePosition),
+    Completed,
+    Failed(String),
     Fatal(anyhow::Error),
 }
 
 pub struct WipeSessionState {
-    pub plan: WipePlan,
-    pub position: usize,
+    pub position: u64,
     pub retries_left: u32,
     pub step: usize,
     pub bad_blocks: Box<dyn BlockMarker>,
@@ -52,7 +57,6 @@ impl WipeSession {
         let coverage = plan.verification.build_map(plan.total_bytes()); // TODO: use blocks
 
         let state = WipeSessionState {
-            plan,
             position: 0,
             retries_left: retries,
             step: 0,
@@ -60,11 +64,17 @@ impl WipeSession {
             coverage,
         };
 
+        let streams = plan.scheme.stages.iter()
+            .map(|s| Stream::from(s, plan.range.end, plan.block_size))
+            .collect();
+
         event_handler.handle(&state, WipeEvent::Created);
 
         WipeSession {
             event_handler,
             storage: storage_access,
+            plan,
+            streams,
             state,
         }
     }
@@ -74,29 +84,28 @@ impl WipeSession {
     }
 
     fn advance(&mut self, bytes: usize) {
-        self.advance(self.task, bytes);
-        self.publish(WipeEvent::Progress(self.position));
+        self.state.position += bytes as u64;
+        if self.state.position > self.plan.range.end {
+            self.state.position = self.plan.range.end
+        }
+        self.publish(WipeEvent::Progress(self.state.position));
     }
 
     fn at_the_end(&self) -> bool {
-        self.position >= self.task.total_size
+        self.state.position >= self.plan.range.end
     }
 
     fn current_block_number(&self) -> u32 {
-        (self.position / self.task.block_size as u64) as u32
+        (self.state.position / self.plan.block_size as u64) as u32
     }
 
     fn is_at_bad_block(&self) -> bool {
-        self.bad_blocks
-            .borrow()
-            .is_marked(self.current_block_number())
+        self.state.bad_blocks.is_marked(self.current_block_number())
     }
 
     fn mark_bad_block(&mut self) -> () {
-        self.bad_blocks
-            .borrow_mut()
-            .mark(self.current_block_number());
-        self.publish(WipeEvent::MarkedBlockAsBad(self.position));
+        self.state.bad_blocks.mark(self.current_block_number());
+        self.publish(WipeEvent::MarkedBlockAsBad(self.state.position));
     }
 
     fn try_seek(&mut self) -> Result<bool> {
@@ -104,7 +113,7 @@ impl WipeSession {
             return Ok(false);
         }
 
-        if let Err(err) = self.storage.seek(self.position) {
+        if let Err(err) = self.storage.seek(self.state.position) {
             return match underlying_storage_error(&err) {
                 Some(StorageError::BadBlock) => {
                     self.mark_bad_block();
@@ -141,7 +150,7 @@ impl WipeSession {
             }
 
             if self.is_at_bad_block() || !self.try_seek()? {
-                self.advance(self.task.block_size);
+                self.advance(self.plan.block_size);
                 continue;
             }
 
@@ -150,72 +159,71 @@ impl WipeSession {
         Ok(())
     }
 
-    pub(crate) fn run(&mut self) -> Result<()> {
+    pub(crate) fn run(mut self) -> Result<()> {
         self.publish(WipeEvent::Started);
 
-        let mut wipe_error = None;
+        self.state.step = 0;
+        self.state.position = self.plan.range.start;
 
-        for (i, stage) in self.plan.steps.iter().enumerate() {
-            match stage {
-                Step::Verify(stream) => {}
-                Step::Write(stream) => {}
+        let result = loop {
+            if self.state.step >= self.plan.steps.len() {
+                break Ok(());
             }
 
-            // old code
+            let step = self.plan.steps[self.state.step].clone();
 
-            self.stage = i;
-            self.position = self.task.offset;
+            self.publish(WipeEvent::StepStarted(self.state.step));
 
-            let stage_error = loop {
-                let watermark = self.position;
+            match step {
+                Step::Write(stream_id) => {
+                    let stream = &mut self.streams[stream_id];
+                    stream.seek(self.state.position);
 
-                self.publish(WipeEvent::StepStarted);
-                if let Err(err) = self.fill(stage) {
-                    let err_rc = Rc::from(err);
-                    self.publish(WipeEvent::StepCompleted(Some(Rc::clone(&err_rc))));
+                    if let Err(err) = self.fill(stream) {
+                        let err_message = err.to_string();
+                        self.publish(WipeEvent::StepFailed(self.state.step, err_message));
 
-                    if self.retries_left > 0 {
-                        self.retries_left -= 1;
-                        self.publish(WipeEvent::Retrying);
-                        continue;
+                        if self.state.retries_left > 0 {
+                            self.state.retries_left -= 1;
+                            self.publish(WipeEvent::Retrying(self.state.step, self.state.position));
+                            continue;
+                        }
+
+                        break Err(err.context("Failed to fill stream"));
                     }
 
-                    break Some(err_rc);
+                    self.state.step += 1;
+                    self.state.position = self.plan.range.start;
                 }
-                self.publish(WipeEvent::StepCompleted(None));
+                Step::Verify(stream_id) => {
+                    let stream = &mut self.streams[stream_id];
+                    stream.seek(self.state.position);
+                    if let Err(err) = self.verify(stream) {
+                        let err_message = err.to_string();
+                        self.publish(WipeEvent::StepFailed(self.state.step, err_message));
 
-                if !have_to_verify {
-                    break None;
-                }
+                        if self.state.retries_left > 0 {
+                            self.state.retries_left -= 1;
+                            self.state.step -= 1;
+                            self.publish(WipeEvent::Retrying(self.state.step, self.state.position));
+                            continue;
+                        }
 
-                self.position = watermark;
-                self.at_verification = true;
-
-                self.publish(WipeEvent::StepStarted);
-                if let Err(err) = self.verify(stage) {
-                    let err_rc = Rc::from(err);
-                    self.publish(WipeEvent::StepCompleted(Some(Rc::clone(&err_rc))));
-
-                    if self.retries_left > 0 {
-                        self.retries_left -= 1;
-                        self.at_verification = false;
-                        self.publish(WipeEvent::Retrying);
-                        continue;
+                        break Err(err.context("Failed to verify stream"));
                     }
-                    break Some(err_rc);
-                }
-                self.publish(WipeEvent::StepCompleted(None));
-                break None;
-            };
 
-            if stage_error.is_some() {
-                wipe_error = stage_error;
-                break;
-            };
+                    self.state.step += 1;
+                    self.state.position = self.plan.range.start;
+                }
+            }
+
+            self.publish(WipeEvent::StepCompleted(self.state.step));
+        };
+
+        match &result {
+            Ok(_) =>self.publish(WipeEvent::Completed),
+            Err(err) =>self.publish(WipeEvent::Failed(err.to_string())),
         }
-
-        let result = wipe_error.is_none();
-        self.publish(WipeEvent::Completed(wipe_error));
 
         result
     }
@@ -255,7 +263,7 @@ impl WipeSession {
             return Ok(());
         }
 
-        let buf = AlignedBuffer::new(self.task.block_size, self.task.block_size);
+        let buf = AlignedBuffer::new(self.plan.block_size, self.plan.block_size);
 
         while let Some(chunk) = stream.next() {
             if self.is_at_bad_block() {
@@ -296,9 +304,10 @@ pub fn underlying_storage_error(error: &anyhow::Error) -> Option<&StorageError> 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::sanitization::SchemeRepo;
+    use crate::sanitization::{Scheme, SchemeRepo, Stage};
     use anyhow::{Context, Result};
     use assert_matches::*;
+    use std::cell::RefCell;
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use WipeEvent::*;
 
@@ -307,10 +316,10 @@ mod test {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("zero").unwrap();
 
-        assert!(WipePlan::from(scheme.clone(), Verification::No, 1 << 32, 1, 0, 1).is_ok());
-        assert!(WipePlan::from(scheme.clone(), Verification::No, 1 << 35, 8, 0, 1).is_ok());
-        assert!(WipePlan::from(scheme.clone(), Verification::No, 1 << 33, 1, 0, 1).is_err());
-        assert!(WipePlan::from(scheme.clone(), Verification::No, 1 << 36, 8, 0, 1).is_err());
+        assert!(WipePlan::from(scheme.clone(), Verification::No, 0..1 << 32, 1).is_ok());
+        assert!(WipePlan::from(scheme.clone(), Verification::No, 0..1 << 35, 8).is_ok());
+        assert!(WipePlan::from(scheme.clone(), Verification::No, 0..1 << 33, 1).is_err());
+        assert!(WipePlan::from(scheme.clone(), Verification::No, 0..1 << 36, 8).is_err());
     }
 
     #[test]
@@ -321,19 +330,16 @@ mod test {
         let block_size = 32768;
         let mut receiver = StubReceiver::new();
 
-        let task = WipeTask::new(
+        let plan = WipePlan::from(
             scheme.clone(),
             Verification::Last(Percent::new(100.0).unwrap()),
-            storage.size as u64,
+            0..storage.size as u64,
             block_size,
-            0,
-            0,
         )
         .unwrap();
-        let mut state = (&task).into();
-        let result = task.run(&mut storage, &mut state, &mut receiver);
+        let result = plan.execute(Box::new(storage), Box::new(receiver), 0);
 
-        assert!(result);
+        assert!(result.is_ok());
 
         let mut e = receiver.collected.iter();
         assert_matches!(e.next(), Some((_, Started)));
@@ -730,73 +736,75 @@ mod test {
         assert_matches!(e.next(), Some((ref s, StepStarted)) if s.at_verification);
         assert_matches!(e.next(), Some((_, Progress(0))));
         assert_matches!(e.next(), Some((_, Progress(32768))));
-        assert_matches!(e.next(), Some((_, StepCompleted(Some(_)))));
-        assert_matches!(e.next(), Some((_, Completed(Some(_)))));
+        assert_matches!(e.next(), Some((_, StepFailed(0, _))));
+        assert_matches!(e.next(), Some((_, Failed(_))));
     }
 
     #[test]
     fn test_wiping_validation_with_partial_coverage() {
         let schemes = SchemeRepo::default();
         let scheme = schemes.find("random").unwrap();
-        let mut storage = InMemoryStorage::new(100000);
+        let storage = InMemoryStorage::new(100000);
         let block_size = 8192;
-        let mut receiver = StubReceiver::new();
+        let receiver = StubReceiver::new();
 
-        let task = WipeTask::new(
+        let plan = WipePlan::from(
             scheme.clone(),
             Verification::Last(Percent::new(30.0).unwrap()),
-            storage.size as u64,
+            0..storage.size as u64,
             block_size,
-            0,
-            0,
         )
         .unwrap();
-        let mut state = (&task).into();
-        let result = task.run(&mut storage, &mut state, &mut receiver);
 
-        assert!(result);
+        let result = plan
+            .clone()
+            .execute(Box::new(storage), Box::new(receiver.clone()), 0);
 
-        let mut e = receiver.collected.iter();
-        assert_matches!(e.next(), Some((_, Started)));
-        assert_matches!(e.next(), Some((ref s, StepStarted)) if !s.at_verification);
-        assert_matches!(e.next(), Some((_, Progress(0))));
-        assert_matches!(e.next(), Some((_, Progress(8192))));
-        assert_matches!(e.next(), Some((_, Progress(16384))));
-        assert_matches!(e.next(), Some((_, Progress(24576))));
-        assert_matches!(e.next(), Some((_, Progress(32768))));
-        assert_matches!(e.next(), Some((_, Progress(40960))));
-        assert_matches!(e.next(), Some((_, Progress(49152))));
-        assert_matches!(e.next(), Some((_, Progress(57344))));
-        assert_matches!(e.next(), Some((_, Progress(65536))));
-        assert_matches!(e.next(), Some((_, Progress(73728))));
-        assert_matches!(e.next(), Some((_, Progress(81920))));
-        assert_matches!(e.next(), Some((_, Progress(90112))));
-        assert_matches!(e.next(), Some((_, Progress(98304))));
-        assert_matches!(e.next(), Some((_, Progress(100000))));
-        assert_matches!(e.next(), Some((_, StepCompleted(None))));
-        assert_matches!(e.next(), Some((ref s, StepStarted)) if s.at_verification);
-        assert_matches!(e.next(), Some((_, Progress(0))));
-        assert_matches!(e.next(), Some((_, Progress(32768))));
-        assert_matches!(e.next(), Some((_, StepCompleted(None))));
-        assert_matches!(e.next(), Some((_, Completed(None))));
+        assert!(result.is_ok());
+
+        let collected = receiver.collected.borrow();
+        let mut e = collected.iter();
+        assert_matches!(e.next(), Some(Started));
+        assert_matches!(e.next(), Some(StepStarted(0)));
+        assert_matches!(e.next(), Some(Progress(0)));
+        assert_matches!(e.next(), Some(Progress(8192)));
+        assert_matches!(e.next(), Some(Progress(16384)));
+        assert_matches!(e.next(), Some(Progress(24576)));
+        assert_matches!(e.next(), Some(Progress(32768)));
+        assert_matches!(e.next(), Some(Progress(40960)));
+        assert_matches!(e.next(), Some(Progress(49152)));
+        assert_matches!(e.next(), Some(Progress(57344)));
+        assert_matches!(e.next(), Some(Progress(65536)));
+        assert_matches!(e.next(), Some(Progress(73728)));
+        assert_matches!(e.next(), Some(Progress(81920)));
+        assert_matches!(e.next(), Some(Progress(90112)));
+        assert_matches!(e.next(), Some(Progress(98304)));
+        assert_matches!(e.next(), Some(Progress(100000)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
+        assert_matches!(e.next(), Some(StepStarted(1)));
+        assert_matches!(e.next(), Some(Progress(0)));
+        assert_matches!(e.next(), Some(Progress(32768)));
+        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(Completed));
     }
 
+    #[derive(Clone)]
     struct StubReceiver {
-        collected: Vec<(WipeState, WipeEvent)>,
+        collected: Rc<RefCell<Vec<WipeEvent>>>,
     }
 
     impl StubReceiver {
         pub fn new() -> Self {
             StubReceiver {
-                collected: Vec::new(),
+                collected: Rc::new(RefCell::new(vec![])),
             }
         }
     }
 
     impl WipeEventHandler for StubReceiver {
-        fn handle(&mut self, _task: &WipeTask, state: &WipeState, event: WipeEvent) -> () {
+        fn handle(&mut self, _state: &WipeSessionState, event: WipeEvent) -> () {
             println!("{:?}", event);
-            self.collected.push((state.clone(), event));
+            self.collected.borrow_mut().push(event);
         }
     }
 

@@ -1,19 +1,21 @@
 use crate::actions::verification::*;
 use crate::actions::{WipeEventHandler, WipeSession};
 use crate::sanitization::scheme::Scheme;
-use crate::sanitization::stream::Stream;
-use crate::storage::{StorageDevice, StorageRef};
+use crate::storage::StorageAccess;
 use anyhow::Result;
 use std::ops::Range;
 
+pub type StreamId = usize;
+
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum Step {
-    Write(usize),
-    Verify(usize),
+    Write(StreamId),
+    Verify(StreamId),
 }
 
+#[derive(Clone)]
 pub struct WipePlan {
     pub scheme: Scheme,
-    pub streams: Vec<Stream>,
     pub steps: Vec<Step>,
     pub range: Range<u64>,
     pub block_size: usize,
@@ -34,12 +36,10 @@ impl WipePlan {
         let corrected_offset = (range.start / block_size as u64) * block_size as u64;
         let range = corrected_offset..range.end;
 
-        let mut streams = vec!();
         let mut steps = vec!();
         let total_stages = scheme.stages.len();
 
         for (i, s) in scheme.stages.iter().enumerate() {
-            streams.push(Stream::from(s, range.end, block_size));
             steps.push(Step::Write(i));
 
             match verification {
@@ -50,15 +50,11 @@ impl WipePlan {
             };
         }
 
-        Ok(WipePlan{ scheme, streams, steps, range, block_size, verification })
+        Ok(WipePlan{ scheme, steps, range, block_size, verification })
     }
 
-    pub fn execute(self, storage_ref: &StorageRef, event_handler: Box<dyn WipeEventHandler>, retries: u32) -> Result<()> {
-        let device_access = storage_ref.access()?;
-
-        let mut task = WipeSession::new(self, device_access, event_handler, retries);
-
-        task.run()
+    pub fn execute(self, storage: Box<dyn StorageAccess>, event_handler: Box<dyn WipeEventHandler>, retries: u32) -> Result<()> {
+        WipeSession::new(self, storage, event_handler, retries).run()
     }
 
     pub fn total_bytes(&self) -> u64 {

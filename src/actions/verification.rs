@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::cmp::max;
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Percent {
     v: f32,
 }
@@ -24,7 +24,7 @@ impl Percent {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Verification {
     No,
     Last(Percent),

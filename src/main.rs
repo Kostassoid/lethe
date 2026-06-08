@@ -230,7 +230,9 @@ fn main() -> Result<()> {
 
             let session = frontend.wipe_session(&device.id, cmd.get_flag("yes"));
 
-            plan.execute(&device, Box::new(session), *retries)?;
+            let device_access = device.access()?;
+
+            plan.execute(device_access, Box::new(session), *retries)?;
         }
         _ => {
             app.print_help()?;
