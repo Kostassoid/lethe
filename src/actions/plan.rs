@@ -13,7 +13,7 @@ pub enum Step {
     Verify(StreamId),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WipePlan {
     pub scheme: Scheme,
     pub steps: Vec<Step>,

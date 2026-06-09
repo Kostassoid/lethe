@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 
-use crate::actions::{Step, WipeEvent, WipeEventHandler, WipeSession, WipeSessionState};
+use crate::actions::{Step, WipeEvent, WipeEventHandler, WipePlan, WipeSessionState};
 use crate::sanitization::scheme::{Scheme, SchemeRepo};
 use crate::scheme::Stage;
 use prettytable::format::FormatBuilder;
@@ -67,7 +67,7 @@ pub struct ConsoleEventHandler {
 }
 
 impl WipeEventHandler for ConsoleEventHandler {
-    fn handle(&mut self, state: &WipeSessionState, event: WipeEvent) -> () {
+    fn handle(&mut self, plan: &WipePlan, state: &WipeSessionState, event: WipeEvent) -> () {
         match event {
             WipeEvent::Created => {
                 let mut t = Table::new();
@@ -76,15 +76,10 @@ impl WipeEventHandler for ConsoleEventHandler {
                 t.add_row(row!["Device", self.device_id]);
                 t.add_row(row![
                     "Size",
-                    format!(
-                        "{} ({} bytes)",
-                        HumanBytes(state.plan.range.end),
-                        state.plan.range.end
-                    )
+                    format!("{} ({} bytes)", HumanBytes(plan.range.end), plan.range.end)
                 ]);
 
-                let steps = state
-                    .plan
+                let steps = plan
                     .steps
                     .iter()
                     .map(|s| match s {
@@ -95,24 +90,24 @@ impl WipeEventHandler for ConsoleEventHandler {
                     .join(", ");
 
                 t.add_row(row!["Steps", steps]);
-                t.add_row(row!["Block size", HumanBytes(state.plan.block_size as u64)]);
+                t.add_row(row!["Block size", HumanBytes(plan.block_size as u64)]);
                 t.add_row(row![
                     "Starting offset",
                     format!(
                         "{} ({} bytes)",
-                        HumanBytes(state.plan.range.start),
-                        state.plan.range.start
+                        HumanBytes(plan.range.start),
+                        plan.range.start
                     )
                 ]);
                 t.add_row(row![
                     "Total area size",
                     format!(
                         "{} ({} bytes)",
-                        HumanBytes(state.plan.total_bytes()),
-                        state.plan.total_bytes()
+                        HumanBytes(plan.total_bytes()),
+                        plan.total_bytes()
                     )
                 ]);
-                t.add_row(row!["Verification", state.plan.verification]);
+                t.add_row(row!["Verification", plan.verification]);
                 print!("Wiping:\n{}", t);
 
                 if !self.auto_confirm && !ask_for_confirmation() {
@@ -123,12 +118,12 @@ impl WipeEventHandler for ConsoleEventHandler {
             WipeEvent::Started => {
                 self.session_started = Some(Instant::now());
             }
-            WipeEvent::StepStarted => {
-                let step_description = format!("Step {}/{}", state.step + 1, state.plan.steps.len());
+            WipeEvent::StepStarted(..) => {
+                let step_description = format!("Step {}/{}", state.step + 1, plan.steps.len());
 
-                let (stage, at_verification) = match state.plan.steps[state.step] {
-                    Step::Verify(i) => (&state.plan.scheme.stages[i], true),
-                    Step::Write(i) => (&state.plan.scheme.stages[i], false),
+                let (stage, at_verification) = match plan.steps[state.step] {
+                    Step::Verify(i) => (&plan.scheme.stages[i], true),
+                    Step::Write(i) => (&plan.scheme.stages[i], false),
                 };
 
                 let stage_description = match stage {
@@ -139,13 +134,19 @@ impl WipeEventHandler for ConsoleEventHandler {
                     }
                 };
 
-                let pb = create_progress_bar(state.plan.total_bytes());
+                let pb = create_progress_bar(plan.total_bytes());
 
                 if !at_verification {
-                    pb.println(format!("\n{}: Performing {}", step_description, stage_description));
+                    pb.println(format!(
+                        "\n{}: Performing {}",
+                        step_description, stage_description
+                    ));
                     pb.set_message("Writing");
                 } else {
-                    pb.println(format!("\n{}: Verifying {}", step_description, stage_description));
+                    pb.println(format!(
+                        "\n{}: Verifying {}",
+                        step_description, stage_description
+                    ));
                     pb.set_message("Checking");
                 }
 
@@ -167,74 +168,72 @@ impl WipeEventHandler for ConsoleEventHandler {
                     pb.println(format!("Unable to access block at {}. Skipping.", block));
                 }
             }
-            WipeEvent::StepCompleted(result) => {
+            WipeEvent::StepCompleted(_step) => {
                 if let Some(pb) = &self.pb {
-                    match result {
-                        None => {
-                            if let Some(s) = self.stage_started {
-                                let elapsed = HumanDuration(s.elapsed());
-                                pb.println(format!("✔ Completed in {}", elapsed));
-                            } else {
-                                pb.println("✔ Completed");
-                            }
-                        }
-                        Some(err) => {
-                            pb.println(format!("❌ FAILED! {:#}", err));
-                        }
+                    if let Some(s) = self.stage_started {
+                        let elapsed = HumanDuration(s.elapsed());
+                        pb.println(format!("✔ Completed in {}", elapsed));
+                    } else {
+                        pb.println("✔ Completed");
                     }
                     pb.finish_and_clear();
                 }
             }
-            WipeEvent::Retrying => {
+            WipeEvent::StepFailed(_step, err) => {
+                if let Some(pb) = &self.pb {
+                    pb.println(format!("❌ FAILED! {:#}", err));
+                    pb.finish_and_clear();
+                }
+            }
+            WipeEvent::Retrying(_step, ..) => {
                 eprintln!(
                     "Retrying previous stage at {} in {} seconds.",
                     state.position, RETRY_BACKOFF_SECONDS
                 );
                 sleep(std::time::Duration::from_secs(RETRY_BACKOFF_SECONDS as u64));
             }
-            WipeEvent::Completed(result) => match result {
-                None => {
-                    if let Some(s) = self.session_started {
-                        let elapsed = HumanDuration(s.elapsed());
-                        println!("✔ Total time: {}", elapsed);
-                    }
-                    let total_blocks = state.plan.total_bytes() / state.plan.block_size as u64;
-                    let bad_blocks = state.bad_blocks.total_marked();
-
-                    let mut t = Table::new();
-                    let indent_table_format = FormatBuilder::new().padding(4, 1).build();
-                    t.set_format(indent_table_format);
-                    t.add_row(row![
-                        "Total covered area",
-                        format!(
-                            "{} - {} ({})",
-                            HumanBytes(state.plan.range.start),
-                            HumanBytes(state.plan.range.end),
-                            HumanBytes(state.plan.total_bytes())
-                        )
-                    ]);
-                    t.add_row(row!["Total blocks", total_blocks]);
-                    t.add_row(row![
-                        "Skipped blocks",
-                        format!(
-                            "{} ({}%)",
-                            bad_blocks,
-                            bad_blocks * 100 / total_blocks as u32
-                        )
-                    ]);
-
-                    print!("{}", t);
+            WipeEvent::Completed => {
+                if let Some(s) = self.session_started {
+                    let elapsed = HumanDuration(s.elapsed());
+                    println!("✔ Total time: {}", elapsed);
                 }
-                Some(e) => {
-                    eprintln!("❌ Unexpected error: {:#}", e);
+                let total_blocks = plan.total_bytes() / plan.block_size as u64;
+                let bad_blocks = state.bad_blocks.total_marked();
 
-                    if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
-                        if ioe.kind() == ErrorKind::Other && ioe.raw_os_error() == Some(16) {
-                            eprintln!("Make sure the drive is not mounted.")
-                        }
-                    };
-                }
-            },
+                let mut t = Table::new();
+                let indent_table_format = FormatBuilder::new().padding(4, 1).build();
+                t.set_format(indent_table_format);
+                t.add_row(row![
+                    "Total covered area",
+                    format!(
+                        "{} - {} ({})",
+                        HumanBytes(plan.range.start),
+                        HumanBytes(plan.range.end),
+                        HumanBytes(plan.total_bytes())
+                    )
+                ]);
+                t.add_row(row!["Total blocks", total_blocks]);
+                t.add_row(row![
+                    "Skipped blocks",
+                    format!(
+                        "{} ({}%)",
+                        bad_blocks,
+                        bad_blocks * 100 / total_blocks as u32
+                    )
+                ]);
+
+                print!("{}", t);
+            }
+            WipeEvent::Failed(err) => {
+                eprintln!("❌ Unexpected error: {:#}", err);
+
+                // todo: this
+                //if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
+                //    if ioe.kind() == ErrorKind::Other && ioe.raw_os_error() == Some(16) {
+                //eprintln!("Make sure the drive is not mounted.")
+                //    }
+                //};
+            }
             WipeEvent::Fatal(err) => {
                 eprintln!("❌ Fatal: {:#}", err);
             }
