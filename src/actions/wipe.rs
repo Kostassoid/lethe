@@ -1,7 +1,7 @@
 use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
 use crate::actions::plan::WipePlan;
 use crate::actions::verification::*;
-use crate::actions::{Step, StreamId};
+use crate::actions::Step;
 use crate::sanitization::mem::*;
 use crate::sanitization::stream::Stream;
 use crate::storage::{StorageAccess, StorageError};
@@ -79,88 +79,8 @@ impl WipeSession {
         }
     }
 
-    fn publish(&mut self, event: WipeEvent) {
-        self.event_handler.handle(&self.state, event)
-    }
-
-    fn advance(&mut self, bytes: usize) {
-        self.state.position += bytes as u64;
-        if self.state.position > self.plan.range.end {
-            self.state.position = self.plan.range.end
-        }
-        self.publish(WipeEvent::Progress(self.state.position));
-    }
-
-    fn at_the_end(&self) -> bool {
-        self.state.position >= self.plan.range.end
-    }
-
-    fn current_block_number(&self) -> u32 {
-        (self.state.position / self.plan.block_size as u64) as u32
-    }
-
-    fn is_at_bad_block(&self) -> bool {
-        self.state.bad_blocks.is_marked(self.current_block_number())
-    }
-
-    fn mark_bad_block(&mut self) -> () {
-        self.state.bad_blocks.mark(self.current_block_number());
-        self.publish(WipeEvent::MarkedBlockAsBad(self.state.position));
-    }
-
-    fn try_seek(&mut self) -> Result<bool> {
-        if self.is_at_bad_block() {
-            return Ok(false);
-        }
-
-        if let Err(err) = self.storage.seek(self.state.position) {
-            return match underlying_storage_error(&err) {
-                Some(StorageError::BadBlock) => {
-                    self.mark_bad_block();
-                    Ok(false)
-                }
-                _ => Err(err),
-            };
-        }
-
-        Ok(true)
-    }
-
-    fn try_write(&mut self, chunk: &[u8]) -> Result<bool> {
-        if self.is_at_bad_block() {
-            return Ok(false);
-        }
-
-        if let Err(err) = self.storage.write(chunk) {
-            return match underlying_storage_error(&err) {
-                Some(StorageError::BadBlock) => {
-                    self.mark_bad_block();
-                    Ok(false)
-                }
-                _ => Err(err),
-            };
-        }
-        Ok(true)
-    }
-
-    fn seek_to_the_next_safe_position(&mut self) -> Result<()> {
-        loop {
-            if self.at_the_end() {
-                break;
-            }
-
-            if self.is_at_bad_block() || !self.try_seek()? {
-                self.advance(self.plan.block_size);
-                continue;
-            }
-
-            break;
-        }
-        Ok(())
-    }
-
     pub(crate) fn run(mut self) -> Result<()> {
-        self.publish(WipeEvent::Started);
+        publish(&mut *self.event_handler, &self.state, WipeEvent::Started);
 
         self.state.step = 0;
         self.state.position = self.plan.range.start;
@@ -172,20 +92,17 @@ impl WipeSession {
 
             let step = self.plan.steps[self.state.step].clone();
 
-            self.publish(WipeEvent::StepStarted(self.state.step));
+            publish(&mut *self.event_handler, &self.state, WipeEvent::StepStarted(self.state.step));
 
             match step {
                 Step::Write(stream_id) => {
-                    let stream = &mut self.streams[stream_id];
-                    stream.seek(self.state.position);
-
-                    if let Err(err) = self.fill(stream) {
+                    if let Err(err) = self.fill(stream_id) {
                         let err_message = err.to_string();
-                        self.publish(WipeEvent::StepFailed(self.state.step, err_message));
+                        publish(&mut *self.event_handler, &self.state, WipeEvent::StepFailed(self.state.step, err_message));
 
                         if self.state.retries_left > 0 {
                             self.state.retries_left -= 1;
-                            self.publish(WipeEvent::Retrying(self.state.step, self.state.position));
+                            publish(&mut *self.event_handler, &self.state, WipeEvent::Retrying(self.state.step, self.state.position));
                             continue;
                         }
 
@@ -196,16 +113,14 @@ impl WipeSession {
                     self.state.position = self.plan.range.start;
                 }
                 Step::Verify(stream_id) => {
-                    let stream = &mut self.streams[stream_id];
-                    stream.seek(self.state.position);
-                    if let Err(err) = self.verify(stream) {
+                    if let Err(err) = self.verify(stream_id) {
                         let err_message = err.to_string();
-                        self.publish(WipeEvent::StepFailed(self.state.step, err_message));
+                        publish(&mut *self.event_handler, &self.state, WipeEvent::StepFailed(self.state.step, err_message));
 
                         if self.state.retries_left > 0 {
                             self.state.retries_left -= 1;
                             self.state.step -= 1;
-                            self.publish(WipeEvent::Retrying(self.state.step, self.state.position));
+                            publish(&mut *self.event_handler, &self.state, WipeEvent::Retrying(self.state.step, self.state.position));
                             continue;
                         }
 
@@ -217,36 +132,39 @@ impl WipeSession {
                 }
             }
 
-            self.publish(WipeEvent::StepCompleted(self.state.step));
+            publish(&mut *self.event_handler, &self.state, WipeEvent::StepCompleted(self.state.step));
         };
 
         match &result {
-            Ok(_) =>self.publish(WipeEvent::Completed),
-            Err(err) =>self.publish(WipeEvent::Failed(err.to_string())),
+            Ok(_) => publish(&mut *self.event_handler, &self.state, WipeEvent::Completed),
+            Err(err) => publish(&mut *self.event_handler, &self.state, WipeEvent::Failed(err.to_string())),
         }
 
         result
     }
 
-    fn fill(&mut self, stream: &mut Stream) -> Result<()> {
-        self.publish(WipeEvent::Progress(stream.position));
+    fn fill(&mut self, stream_id: usize) -> Result<()> {
+        self.streams[stream_id].seek(self.state.position);
+        let stream = &mut self.streams[stream_id];
 
-        self.seek_to_the_next_safe_position()?;
+        publish(&mut *self.event_handler, &self.state, WipeEvent::Progress(stream.position));
 
-        if self.at_the_end() {
+        seek_to_next_safe(&mut *self.storage, &mut self.state, &mut *self.event_handler, &self.plan)?;
+
+        if at_the_end(&self.state, &self.plan) {
             return Ok(());
         }
 
         let mut skip_next = false;
 
         while let Some(chunk) = stream.next() {
-            if skip_next || !self.try_write(chunk)? {
-                self.advance(chunk.len());
-                skip_next = !self.try_seek()?;
+            if skip_next || !try_write(chunk, &mut *self.storage, &mut self.state, &mut *self.event_handler, &self.plan)? {
+                advance(&mut self.state, &mut *self.event_handler, &self.plan, chunk.len());
+                skip_next = !try_seek(&mut *self.storage, &mut self.state, &mut *self.event_handler, &self.plan)?;
                 continue;
             }
 
-            self.advance(chunk.len());
+            advance(&mut self.state, &mut *self.event_handler, &self.plan, chunk.len());
         }
 
         self.storage.flush()?;
@@ -254,21 +172,24 @@ impl WipeSession {
         Ok(())
     }
 
-    fn verify(&mut self, stream: &mut Stream) -> Result<()> {
-        self.publish(WipeEvent::Progress(stream.position));
+    fn verify(&mut self, stream_id: usize) -> Result<()> {
+        self.streams[stream_id].seek(self.state.position);
+        let stream = &mut self.streams[stream_id];
 
-        self.seek_to_the_next_safe_position()?;
+        publish(&mut *self.event_handler, &self.state, WipeEvent::Progress(stream.position));
 
-        if self.at_the_end() {
+        seek_to_next_safe(&mut *self.storage, &mut self.state, &mut *self.event_handler, &self.plan)?;
+
+        if at_the_end(&self.state, &self.plan) {
             return Ok(());
         }
 
         let buf = AlignedBuffer::new(self.plan.block_size, self.plan.block_size);
 
         while let Some(chunk) = stream.next() {
-            if self.is_at_bad_block() {
-                self.advance(chunk.len());
-                self.try_seek()?;
+            if is_at_bad_block(&self.state, &self.plan) {
+                advance(&mut self.state, &mut *self.event_handler, &self.plan, chunk.len());
+                try_seek(&mut *self.storage, &mut self.state, &mut *self.event_handler, &self.plan)?;
                 continue;
             }
 
@@ -284,11 +205,107 @@ impl WipeSession {
                 Err(anyhow!("Verification failed!"))?;
             }
 
-            self.advance(chunk.len());
+            advance(&mut self.state, &mut *self.event_handler, &self.plan, chunk.len());
         }
 
         Ok(())
     }
+}
+
+fn publish(event_handler: &mut dyn WipeEventHandler, state: &WipeSessionState, event: WipeEvent) {
+    event_handler.handle(state, event);
+}
+
+fn advance(state: &mut WipeSessionState, event_handler: &mut dyn WipeEventHandler, plan: &WipePlan, bytes: usize) {
+    state.position += bytes as u64;
+    if state.position > plan.range.end {
+        state.position = plan.range.end;
+    }
+    publish(event_handler, state, WipeEvent::Progress(state.position));
+}
+
+fn at_the_end(state: &WipeSessionState, plan: &WipePlan) -> bool {
+    state.position >= plan.range.end
+}
+
+fn current_block_number(state: &WipeSessionState, plan: &WipePlan) -> u32 {
+    (state.position / plan.block_size as u64) as u32
+}
+
+fn is_at_bad_block(state: &WipeSessionState, plan: &WipePlan) -> bool {
+    state.bad_blocks.is_marked(current_block_number(state, plan))
+}
+
+fn mark_bad_block(state: &mut WipeSessionState, event_handler: &mut dyn WipeEventHandler, plan: &WipePlan) {
+    state.bad_blocks.mark(current_block_number(state, plan));
+    publish(event_handler, state, WipeEvent::MarkedBlockAsBad(state.position));
+}
+
+fn try_seek(
+    storage: &mut dyn StorageAccess,
+    state: &mut WipeSessionState,
+    event_handler: &mut dyn WipeEventHandler,
+    plan: &WipePlan,
+) -> Result<bool> {
+    if is_at_bad_block(state, plan) {
+        return Ok(false);
+    }
+
+    if let Err(err) = storage.seek(state.position) {
+        return match underlying_storage_error(&err) {
+            Some(StorageError::BadBlock) => {
+                mark_bad_block(state, event_handler, plan);
+                Ok(false)
+            }
+            _ => Err(err),
+        };
+    }
+
+    Ok(true)
+}
+
+fn try_write(
+    chunk: &[u8],
+    storage: &mut dyn StorageAccess,
+    state: &mut WipeSessionState,
+    event_handler: &mut dyn WipeEventHandler,
+    plan: &WipePlan,
+) -> Result<bool> {
+    if is_at_bad_block(state, plan) {
+        return Ok(false);
+    }
+
+    if let Err(err) = storage.write(chunk) {
+        return match underlying_storage_error(&err) {
+            Some(StorageError::BadBlock) => {
+                mark_bad_block(state, event_handler, plan);
+                Ok(false)
+            }
+            _ => Err(err),
+        };
+    }
+    Ok(true)
+}
+
+fn seek_to_next_safe(
+    storage: &mut dyn StorageAccess,
+    state: &mut WipeSessionState,
+    event_handler: &mut dyn WipeEventHandler,
+    plan: &WipePlan,
+) -> Result<()> {
+    loop {
+        if at_the_end(state, plan) {
+            break;
+        }
+
+        if is_at_bad_block(state, plan) || !try_seek(storage, state, event_handler, plan)? {
+            advance(state, event_handler, plan, plan.block_size);
+            continue;
+        }
+
+        break;
+    }
+    Ok(())
 }
 
 // taken directly from https://docs.rs/anyhow/1.0.9/anyhow/struct.Error.html#example
