@@ -8,6 +8,14 @@ use crate::storage::{StorageAccess, StorageError};
 use anyhow::Result;
 use streaming_iterator::StreamingIterator;
 
+macro_rules! publish {
+    ($session:expr, $event:expr) => {
+        $session
+            .event_handler
+            .handle(&$session.plan, &$session.state, $event)
+    };
+}
+
 pub struct WipeSession {
     pub event_handler: Box<dyn WipeEventHandler>,
     pub storage: Box<dyn StorageAccess>,
@@ -83,12 +91,7 @@ impl WipeSession {
     }
 
     pub(crate) fn run(mut self) -> Result<()> {
-        publish(
-            &mut *self.event_handler,
-            &self.plan,
-            &self.state,
-            WipeEvent::Started,
-        );
+        publish!(self, WipeEvent::Started);
 
         self.state.step = 0;
         self.state.position = self.plan.range.start;
@@ -100,31 +103,19 @@ impl WipeSession {
 
             let step = self.plan.steps[self.state.step].clone();
 
-            publish(
-                &mut *self.event_handler,
-                &self.plan,
-                &self.state,
-                WipeEvent::StepStarted(self.state.step),
-            );
+            publish!(self, WipeEvent::StepStarted(self.state.step));
 
             match step {
                 Step::Write(stream_id) => {
                     if let Err(err) = self.fill(stream_id) {
                         let err_message = err.to_string();
-                        publish(
-                            &mut *self.event_handler,
-                            &self.plan,
-                            &self.state,
-                            WipeEvent::StepFailed(self.state.step, err_message),
-                        );
+                        publish!(self, WipeEvent::StepFailed(self.state.step, err_message));
 
                         if self.state.retries_left > 0 {
                             self.state.retries_left -= 1;
-                            publish(
-                                &mut *self.event_handler,
-                                &self.plan,
-                                &self.state,
-                                WipeEvent::Retrying(self.state.step, self.state.position),
+                            publish!(
+                                self,
+                                WipeEvent::Retrying(self.state.step, self.state.position)
                             );
                             continue;
                         }
@@ -138,21 +129,14 @@ impl WipeSession {
                 Step::Verify(stream_id) => {
                     if let Err(err) = self.verify(stream_id) {
                         let err_message = err.to_string();
-                        publish(
-                            &mut *self.event_handler,
-                            &self.plan,
-                            &self.state,
-                            WipeEvent::StepFailed(self.state.step, err_message),
-                        );
+                        publish!(self, WipeEvent::StepFailed(self.state.step, err_message));
 
                         if self.state.retries_left > 0 {
                             self.state.retries_left -= 1;
                             self.state.step -= 1;
-                            publish(
-                                &mut *self.event_handler,
-                                &self.plan,
-                                &self.state,
-                                WipeEvent::Retrying(self.state.step, self.state.position),
+                            publish!(
+                                self,
+                                WipeEvent::Retrying(self.state.step, self.state.position)
                             );
                             continue;
                         }
@@ -165,27 +149,12 @@ impl WipeSession {
                 }
             }
 
-            publish(
-                &mut *self.event_handler,
-                &self.plan,
-                &self.state,
-                WipeEvent::StepCompleted(self.state.step),
-            );
+            publish!(self, WipeEvent::StepCompleted(self.state.step));
         };
 
         match &result {
-            Ok(_) => publish(
-                &mut *self.event_handler,
-                &self.plan,
-                &self.state,
-                WipeEvent::Completed,
-            ),
-            Err(err) => publish(
-                &mut *self.event_handler,
-                &self.plan,
-                &self.state,
-                WipeEvent::Failed(err.to_string()),
-            ),
+            Ok(_) => publish!(self, WipeEvent::Completed),
+            Err(err) => publish!(self, WipeEvent::Failed(err.to_string())),
         }
 
         result
@@ -195,12 +164,7 @@ impl WipeSession {
         self.streams[stream_id].seek(self.state.position);
         let stream = &mut self.streams[stream_id];
 
-        publish(
-            &mut *self.event_handler,
-            &self.plan,
-            &self.state,
-            WipeEvent::Progress(stream.position),
-        );
+        publish!(self, WipeEvent::Progress(stream.position));
 
         seek_to_next_safe(
             &mut *self.storage,
@@ -257,12 +221,7 @@ impl WipeSession {
         self.streams[stream_id].seek(self.state.position);
         let stream = &mut self.streams[stream_id];
 
-        publish(
-            &mut *self.event_handler,
-            &self.plan,
-            &self.state,
-            WipeEvent::Progress(stream.position),
-        );
+        publish!(self, WipeEvent::Progress(stream.position));
 
         seek_to_next_safe(
             &mut *self.storage,
