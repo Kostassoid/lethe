@@ -158,14 +158,14 @@ impl WipeEventHandler for ConsoleEventHandler {
                     pb.set_position(position);
                 }
             }
-            WipeEvent::SkippedTo(position) => {
+            WipeEvent::SkippedBadBlock(position) => {
                 if let Some(pb) = &self.pb {
-                    pb.set_position(position);
+                    pb.println(format!("Skipping bad block at {}.", position));
                 }
             }
-            WipeEvent::MarkedBlockAsBad(block) => {
+            WipeEvent::MarkedBlockAsBad(position) => {
                 if let Some(pb) = &self.pb {
-                    pb.println(format!("Unable to access block at {}. Skipping.", block));
+                    pb.println(format!("Unable to access block at {}. Skipping.", position));
                 }
             }
             WipeEvent::StepCompleted(_step) => {

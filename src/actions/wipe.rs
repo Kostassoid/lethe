@@ -33,8 +33,8 @@ pub enum WipeEvent {
     Started,
     StepStarted(StepIndex),
     Progress(BytePosition),
-    SkippedTo(BytePosition),
     MarkedBlockAsBad(BytePosition),
+    SkippedBadBlock(BytePosition),
     StepCompleted(StepIndex),
     StepFailed(StepIndex, String),
     Retrying(StepIndex, BytePosition),
@@ -238,6 +238,7 @@ impl WipeSession {
 
         while let Some(chunk) = stream.next() {
             if is_at_bad_block(&self.state, &self.plan) {
+                publish!(self, WipeEvent::SkippedBadBlock(self.state.position));
                 advance(
                     &mut self.state,
                     &mut *self.event_handler,
@@ -390,6 +391,13 @@ fn seek_to_next_safe_block(
         }
 
         if is_at_bad_block(state, plan) || !try_seek(storage, state, event_handler, plan)? {
+            publish(
+                event_handler,
+                &plan,
+                state,
+                WipeEvent::SkippedBadBlock(state.position),
+            );
+
             advance(state, event_handler, plan, plan.block_size);
             continue;
         }
@@ -639,6 +647,7 @@ mod test {
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
+        assert_matches!(e.next(), Some(SkippedBadBlock(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
@@ -683,7 +692,9 @@ mod test {
         assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
+        assert_matches!(e.next(), Some(SkippedBadBlock(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
+        assert_matches!(e.next(), Some(SkippedBadBlock(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
@@ -729,6 +740,7 @@ mod test {
         assert_matches!(e.next(), Some(Progress(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
+        assert_matches!(e.next(), Some(SkippedBadBlock(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
         assert_matches!(e.next(), Some(StepCompleted(1)));
         assert_matches!(e.next(), Some(Completed));
@@ -775,9 +787,13 @@ mod test {
         assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
+        assert_matches!(e.next(), Some(SkippedBadBlock(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
+        assert_matches!(e.next(), Some(SkippedBadBlock(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
+        assert_matches!(e.next(), Some(SkippedBadBlock(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
+        assert_matches!(e.next(), Some(SkippedBadBlock(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
         assert_matches!(e.next(), Some(StepCompleted(1)));
         assert_matches!(e.next(), Some(Completed));
