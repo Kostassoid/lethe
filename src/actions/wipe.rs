@@ -107,7 +107,7 @@ impl WipeSession {
 
             match step {
                 Step::Write(stream_id) => {
-                    if let Err(err) = self.fill(stream_id) {
+                    if let Err(err) = self.write(stream_id) {
                         let err_message = err.to_string();
                         publish!(self, WipeEvent::StepFailed(self.state.step, err_message));
 
@@ -122,9 +122,6 @@ impl WipeSession {
 
                         break Err(err.context("Failed to fill stream"));
                     }
-
-                    self.state.step += 1;
-                    self.state.position = self.plan.range.start;
                 }
                 Step::Verify(stream_id) => {
                     if let Err(err) = self.verify(stream_id) {
@@ -143,13 +140,13 @@ impl WipeSession {
 
                         break Err(err.context("Failed to verify stream"));
                     }
-
-                    self.state.step += 1;
-                    self.state.position = self.plan.range.start;
                 }
             }
 
             publish!(self, WipeEvent::StepCompleted(self.state.step));
+
+            self.state.step += 1;
+            self.state.position = self.plan.range.start;
         };
 
         match &result {
@@ -160,13 +157,13 @@ impl WipeSession {
         result
     }
 
-    fn fill(&mut self, stream_id: usize) -> Result<()> {
-        self.streams[stream_id].seek(self.state.position);
+    fn write(&mut self, stream_id: usize) -> Result<()> {
         let stream = &mut self.streams[stream_id];
 
-        publish!(self, WipeEvent::Progress(stream.position));
 
-        seek_to_next_safe(
+        publish!(self, WipeEvent::Progress(self.state.position));
+
+        seek_to_next_safe_block(
             &mut *self.storage,
             &mut self.state,
             &mut *self.event_handler,
@@ -176,6 +173,8 @@ impl WipeSession {
         if at_the_end(&self.state, &self.plan) {
             return Ok(());
         }
+
+        stream.seek(self.state.position);
 
         let mut skip_next = false;
 
@@ -218,12 +217,11 @@ impl WipeSession {
     }
 
     fn verify(&mut self, stream_id: usize) -> Result<()> {
-        self.streams[stream_id].seek(self.state.position);
         let stream = &mut self.streams[stream_id];
 
-        publish!(self, WipeEvent::Progress(stream.position));
+        publish!(self, WipeEvent::Progress(self.state.position));
 
-        seek_to_next_safe(
+        seek_to_next_safe_block(
             &mut *self.storage,
             &mut self.state,
             &mut *self.event_handler,
@@ -233,6 +231,8 @@ impl WipeSession {
         if at_the_end(&self.state, &self.plan) {
             return Ok(());
         }
+
+        stream.seek(self.state.position);
 
         let buf = AlignedBuffer::new(self.plan.block_size, self.plan.block_size);
 
@@ -378,7 +378,7 @@ fn try_write(
     Ok(true)
 }
 
-fn seek_to_next_safe(
+fn seek_to_next_safe_block(
     storage: &mut dyn StorageAccess,
     state: &mut WipeSessionState,
     event_handler: &mut dyn WipeEventHandler,
@@ -460,14 +460,14 @@ mod test {
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(2)));
+        assert_matches!(e.next(), Some(StepCompleted(1)));
         assert_matches!(e.next(), Some(Completed));
     }
 
@@ -500,22 +500,22 @@ mod test {
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(2)));
+        assert_matches!(e.next(), Some(StepCompleted(1)));
         assert_matches!(e.next(), Some(StepStarted(2)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(3)));
+        assert_matches!(e.next(), Some(StepCompleted(2)));
         assert_matches!(e.next(), Some(StepStarted(3)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(4)));
+        assert_matches!(e.next(), Some(StepCompleted(3)));
         assert_matches!(e.next(), Some(Completed));
     }
 
@@ -582,24 +582,24 @@ mod test {
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
         assert_matches!(e.next(), Some(StepFailed(1, _)));
-        assert_matches!(e.next(), Some(Retrying(0, _)));
+        assert_matches!(e.next(), Some(Retrying(0, 32768)));
         assert_matches!(e.next(), Some(StepStarted(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(2)));
+        assert_matches!(e.next(), Some(StepCompleted(1)));
         assert_matches!(e.next(), Some(Completed));
     }
 
@@ -635,14 +635,14 @@ mod test {
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(2)));
+        assert_matches!(e.next(), Some(StepCompleted(1)));
         assert_matches!(e.next(), Some(Completed));
     }
 
@@ -680,14 +680,14 @@ mod test {
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(2)));
+        assert_matches!(e.next(), Some(StepCompleted(1)));
         assert_matches!(e.next(), Some(Completed));
     }
 
@@ -723,14 +723,14 @@ mod test {
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(MarkedBlockAsBad(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(2)));
+        assert_matches!(e.next(), Some(StepCompleted(1)));
         assert_matches!(e.next(), Some(Completed));
     }
 
@@ -772,14 +772,14 @@ mod test {
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(MarkedBlockAsBad(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(2)));
+        assert_matches!(e.next(), Some(StepCompleted(1)));
         assert_matches!(e.next(), Some(Completed));
     }
 
@@ -815,7 +815,7 @@ mod test {
         assert_matches!(e.next(), Some(Progress(65536)));
         assert_matches!(e.next(), Some(Progress(98304)));
         assert_matches!(e.next(), Some(Progress(100000)));
-        assert_matches!(e.next(), Some(StepCompleted(1)));
+        assert_matches!(e.next(), Some(StepCompleted(0)));
         assert_matches!(e.next(), Some(StepStarted(1)));
         assert_matches!(e.next(), Some(Progress(0)));
         assert_matches!(e.next(), Some(Progress(32768)));
