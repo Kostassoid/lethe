@@ -21,6 +21,7 @@ or non-cross-platform, which was a requirement for me. So I wrote this applicati
 - Uses fast cryptographic random generator
 - Allows to override OS recommended block size for possibly faster operations
 - Tracks & skips bad blocks and other localized errors automatically (Experimental)
+- [Samples Shannon entropy and selectively wipes mid-entropy regions](#entropy-sampling-and-selective-wiping)
 
 ## Limitations
 
@@ -66,6 +67,32 @@ lethe help wipe
 ```
 
 Note that `lethe` operates on a low level and will require a root/administrator access (e.g. `sudo`) to work with any real drives.
+
+## Entropy sampling and selective wiping
+
+```
+lethe sample <device>
+```
+
+`sample` reads the device without writing and displays a spatial Shannon-entropy graph.
+
+```
+lethe sample <device> --blocksize 16m --sample-size 4k --samples-per-block 1
+```
+
+With `wipe --low-entropy`, Lethe displays the same graph and candidate regions, then asks before wiping:
+
+```
+lethe wipe /dev/sda --low-entropy --sample-blocksize 256m
+```
+
+Only sampled blocks with entropy from **1.0 to 7.0 bits per byte** are selected. Very-low-entropy fills and high-entropy blocks are skipped. Nothing is wiped until you confirm; `--yes` skips the prompt.
+
+Defaults: 16 MiB analysis blocks, one random 4 KiB sample per block. Tune with `--blocksize` for `sample`, or `--sample-blocksize` for `wipe`; larger blocks mean fewer reads but coarser regions. `--sample-size`, `--samples-per-block` (1–64), and `--offset` are also configurable. Wipe `--blocksize` controls write size and must divide `--sample-blocksize`.
+
+At the defaults, a 4 TB drive takes about 262,000 sample reads.
+
+Entropy is a heuristic, not filesystem-aware. ext4 journaling and Btrfs copy-on-write or compression can leave other copies or high-entropy data outside the selected regions. This mode does not guarantee complete sanitization; use a full-device wipe to overwrite every addressable block.
 
 ## Benchmarks
 

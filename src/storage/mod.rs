@@ -28,6 +28,7 @@ pub struct StorageRef {
 
 pub trait StorageDevice {
     fn access(&self) -> Result<Box<dyn StorageAccess>>;
+    fn access_readonly(&self) -> Result<Box<dyn StorageAccess>>;
 }
 
 pub trait StorageAccess {

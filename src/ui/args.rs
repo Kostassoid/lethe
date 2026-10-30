@@ -26,6 +26,9 @@ pub fn parse_bytes(s: &str) -> Result<u64> {
 
 pub fn parse_block_size(s: &str) -> Result<usize> {
     parse_bytes(s).and_then(|bytes| {
+        if bytes == 0 {
+            return Err(anyhow!("Should be greater than zero."));
+        }
         if bytes & (bytes - 1) == 0 {
             Ok(bytes as usize)
         } else {
@@ -70,6 +73,7 @@ mod test {
 
     #[test]
     fn test_block_size_parser_bad() {
+        assert_matches!(parse_block_size("0"), Err(_));
         assert_matches!(parse_block_size("4095"), Err(_));
         assert_matches!(parse_block_size("13M"), Err(_));
     }

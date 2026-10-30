@@ -49,6 +49,47 @@ fn main() -> Result<()> {
         .arg_required_else_help(true)
         .subcommand(SubCommand::with_name("list").about("list available storage devices"))
         .subcommand(
+            SubCommand::with_name("sample")
+                .about("Sample storage entropy and display a Shannon graph")
+                .arg(
+                    Arg::with_name("device")
+                        .required(true)
+                        .takes_value(true)
+                        .index(1)
+                        .help("Storage device ID"),
+                )
+                .arg(
+                    Arg::with_name("blocksize")
+                        .long("blocksize")
+                        .short('b')
+                        .takes_value(true)
+                        .default_value("16m")
+                        .help("Entropy analysis block size"),
+                )
+                .arg(
+                    Arg::with_name("offset")
+                        .long("offset")
+                        .short('o')
+                        .takes_value(true)
+                        .default_value("0")
+                        .help("Starting offset (in bytes)"),
+                )
+                .arg(
+                    Arg::with_name("sample-size")
+                        .long("sample-size")
+                        .takes_value(true)
+                        .default_value("4k")
+                        .help("Bytes read per sample"),
+                )
+                .arg(
+                    Arg::with_name("samples-per-block")
+                        .long("samples-per-block")
+                        .takes_value(true)
+                        .default_value("1")
+                        .help("Random sample positions per analysis block (1-64)"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("wipe")
                 .about("Wipe storage device")
                 .after_help(schemes_explanation.as_str())
@@ -106,6 +147,32 @@ fn main() -> Result<()> {
                         .long("yes")
                         .short('y')
                         .help("Automatically confirm"),
+                )
+                .arg(
+                    Arg::with_name("low-entropy")
+                        .long("low-entropy")
+                        .help("Preview entropy and wipe only mid-entropy regions"),
+                )
+                .arg(
+                    Arg::with_name("sample-blocksize")
+                        .long("sample-blocksize")
+                        .takes_value(true)
+                        .default_value("16m")
+                        .help("Entropy analysis block size for --low-entropy"),
+                )
+                .arg(
+                    Arg::with_name("sample-size")
+                        .long("sample-size")
+                        .takes_value(true)
+                        .default_value("4k")
+                        .help("Bytes read per random entropy sample"),
+                )
+                .arg(
+                    Arg::with_name("samples-per-block")
+                        .long("samples-per-block")
+                        .takes_value(true)
+                        .default_value("1")
+                        .help("Random sample positions per analysis block (1-64)"),
                 ),
         );
 
@@ -166,6 +233,40 @@ fn main() -> Result<()> {
             }
             t.printstd();
         }
+        Some(("sample", cmd)) => {
+            let device_id = cmd.value_of("device").ok_or(anyhow!("Invalid device ID"))?;
+            let device = storage_repo
+                .find_by_id(device_id)
+                .ok_or(anyhow!("Unknown device {}", device_id))?;
+            let block_size = ui::args::parse_block_size(cmd.value_of("blocksize").unwrap())
+                .context("Invalid entropy analysis block size")?;
+            let sample_size = ui::args::parse_block_size(cmd.value_of("sample-size").unwrap())
+                .context("Invalid sample size")?;
+            let samples_per_block =
+                parse_samples_per_block(cmd.value_of("samples-per-block").unwrap())?;
+            let offset = ui::args::parse_bytes(cmd.value_of("offset").unwrap())
+                .context("Invalid offset value")?;
+            if offset >= device.details.size {
+                return Err(anyhow!("Starting offset is greater than the storage size"));
+            }
+            let offset = (offset / block_size as u64) * block_size as u64;
+
+            let mut access = device.access_readonly()?;
+            let progress = cli::ConsoleFrontend::sampling_progress(device.details.size - offset);
+            let scan_result = sample_entropy_with_progress(
+                access.as_mut(),
+                device.details.size,
+                block_size,
+                offset,
+                device.details.block_size,
+                sample_size,
+                samples_per_block,
+                |position, _total| progress.set_position(position),
+            );
+            progress.finish_and_clear();
+            let scan = scan_result?;
+            cli::ConsoleFrontend::print_entropy_scan(&scan);
+        }
         Some(("wipe", cmd)) => {
             let device_id = cmd.value_of("device").ok_or(anyhow!("Invalid device ID"))?;
             let scheme_id = cmd.value_of("scheme").unwrap();
@@ -196,7 +297,7 @@ fn main() -> Result<()> {
                 .parse()
                 .context("Invalid retries number value")?;
 
-            let task = WipeTask::new(
+            let mut task = WipeTask::new(
                 scheme.clone(),
                 verification,
                 device.details.size,
@@ -207,18 +308,70 @@ fn main() -> Result<()> {
             let mut state = WipeState::default();
             state.retries_left = retries;
 
-            let mut session = frontend.wipe_session(&device.id, cmd.is_present("yes"));
-            session.handle(&task, &state, WipeEvent::Created);
+            if cmd.is_present("low-entropy") {
+                let analysis_block_size =
+                    ui::args::parse_block_size(cmd.value_of("sample-blocksize").unwrap())
+                        .context("Invalid entropy analysis block size")?;
+                if analysis_block_size < block_size || analysis_block_size % block_size != 0 {
+                    return Err(anyhow!(
+                        "Sample block size must be at least the wipe block size and a multiple of it."
+                    ));
+                }
 
-            match device.access() {
-                Ok(mut access) => {
-                    if !task.run(access.as_mut(), &mut state, &mut session) {
+                let sample_size = ui::args::parse_block_size(cmd.value_of("sample-size").unwrap())
+                    .context("Invalid sample size")?;
+                let samples_per_block =
+                    parse_samples_per_block(cmd.value_of("samples-per-block").unwrap())?;
+                let mut access = device.access()?;
+                let progress =
+                    cli::ConsoleFrontend::sampling_progress(device.details.size - task.offset);
+                let scan_result = sample_entropy_with_progress(
+                    access.as_mut(),
+                    device.details.size,
+                    analysis_block_size,
+                    task.offset,
+                    device.details.block_size,
+                    sample_size,
+                    samples_per_block,
+                    |position, _total| progress.set_position(position),
+                );
+                progress.finish_and_clear();
+                let scan = scan_result?;
+                cli::ConsoleFrontend::print_entropy_scan(&scan);
+
+                if scan.candidate_blocks == 0 {
+                    return Ok(());
+                }
+
+                let prompt = format!(
+                    "Wipe {} mid-entropy region(s) ({} bytes)? Type 'yes' to confirm: ",
+                    scan.region_count, scan.candidate_bytes
+                );
+                if !cmd.is_present("yes") && !cli::ask_for_confirmation(&prompt) {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+
+                task.set_entropy_selection(scan.selection);
+                let mut session = frontend.wipe_session(&device.id, true);
+                session.handle(&task, &state, WipeEvent::Created);
+                if !task.run(access.as_mut(), &mut state, &mut session) {
+                    std::process::exit(1);
+                }
+            } else {
+                let mut session = frontend.wipe_session(&device.id, cmd.is_present("yes"));
+                session.handle(&task, &state, WipeEvent::Created);
+
+                match device.access() {
+                    Ok(mut access) => {
+                        if !task.run(access.as_mut(), &mut state, &mut session) {
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(err) => {
+                        session.handle(&task, &state, WipeEvent::Fatal(err));
                         std::process::exit(1);
                     }
-                }
-                Err(err) => {
-                    session.handle(&task, &state, WipeEvent::Fatal(err));
-                    std::process::exit(1);
                 }
             }
         }
@@ -230,4 +383,14 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_samples_per_block(value: &str) -> Result<usize> {
+    let samples = value
+        .parse::<usize>()
+        .context("Invalid samples-per-block value")?;
+    if !(1..=64).contains(&samples) {
+        return Err(anyhow!("Samples per block must be between 1 and 64."));
+    }
+    Ok(samples)
 }

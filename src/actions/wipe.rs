@@ -1,3 +1,4 @@
+use crate::actions::entropy::EntropySelection;
 use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
 use crate::sanitization::mem::*;
 use crate::sanitization::*;
@@ -31,6 +32,7 @@ pub struct WipeTask {
     pub total_size: u64,
     pub block_size: usize,
     pub offset: u64,
+    selected_regions: Option<EntropySelection>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +71,9 @@ impl WipeTask {
         block_size: usize,
         offset: u64,
     ) -> Result<Self> {
+        if block_size == 0 {
+            return Err(anyhow!("Block size must be greater than zero."));
+        }
         if total_size / block_size as u64 > 1 << 32 {
             Err(anyhow!(
                 "Number of blocks in this device is more than 2^32. Try using a bigger block size."
@@ -85,6 +90,23 @@ impl WipeTask {
             total_size,
             block_size,
             offset: corrected_offset,
+            selected_regions: None,
+        })
+    }
+
+    pub fn set_entropy_selection(&mut self, selection: EntropySelection) {
+        self.selected_regions = Some(selection);
+    }
+
+    pub fn selected_block_count(&self) -> Option<u64> {
+        self.selected_regions.as_ref().map(|selection| {
+            let bytes = selection.selected_bytes();
+            bytes / self.block_size as u64
+                + if bytes % self.block_size as u64 != 0 {
+                    1
+                } else {
+                    0
+                }
         })
     }
 }
@@ -159,6 +181,13 @@ impl WipeRun<'_> {
             .is_marked(self.current_block_number())
     }
 
+    fn is_at_selected_region(&self) -> bool {
+        match &self.task.selected_regions {
+            None => true,
+            Some(selection) => selection.is_selected(self.state.position),
+        }
+    }
+
     fn mark_bad_block(&mut self) -> () {
         self.state
             .bad_blocks
@@ -208,7 +237,7 @@ impl WipeRun<'_> {
                 break;
             }
 
-            if self.is_at_bad_block() || !self.try_seek()? {
+            if !self.is_at_selected_region() || self.is_at_bad_block() || !self.try_seek()? {
                 self.advance(self.task.block_size);
                 continue;
             }
@@ -301,12 +330,32 @@ impl WipeRun<'_> {
         }
 
         let mut stream = self.build_stream(stage);
-        let mut skip_next = false;
+        let mut needs_seek = false;
 
         while let Some(chunk) = stream.next() {
-            if skip_next || !self.try_write(chunk)? {
+            if self.is_at_bad_block() {
                 self.advance(chunk.len());
-                skip_next = !self.try_seek()?;
+                needs_seek = true;
+                continue;
+            }
+
+            if !self.is_at_selected_region() {
+                self.advance(chunk.len());
+                needs_seek = true;
+                continue;
+            }
+
+            if needs_seek {
+                if !self.try_seek()? {
+                    self.advance(chunk.len());
+                    continue;
+                }
+                needs_seek = false;
+            }
+
+            if !self.try_write(chunk)? {
+                self.advance(chunk.len());
+                needs_seek = true;
                 continue;
             }
 
@@ -330,12 +379,27 @@ impl WipeRun<'_> {
         let mut stream = self.build_stream(stage);
 
         let buf = AlignedBuffer::new(self.task.block_size, self.task.block_size);
+        let mut needs_seek = false;
 
         while let Some(chunk) = stream.next() {
             if self.is_at_bad_block() {
                 self.advance(chunk.len());
-                self.try_seek()?;
+                needs_seek = true;
                 continue;
+            }
+
+            if !self.is_at_selected_region() {
+                self.advance(chunk.len());
+                needs_seek = true;
+                continue;
+            }
+
+            if needs_seek {
+                if !self.try_seek()? {
+                    self.advance(chunk.len());
+                    continue;
+                }
+                needs_seek = false;
             }
 
             let b = &mut buf.as_mut_slice()[..chunk.len()];
@@ -425,6 +489,43 @@ mod test {
             storage.file.get_ref().iter().filter(|x| **x != 0u8).count(),
             0
         );
+    }
+
+    #[test]
+    fn test_wiping_only_selected_regions() {
+        let schemes = SchemeRepo::default();
+        let scheme = schemes.find("zero").unwrap();
+        let mut storage = InMemoryStorage::new(100000);
+        let block_size = 32768;
+        let mut receiver = StubReceiver::new();
+
+        let mut task = WipeTask::new(
+            scheme.clone(),
+            Verify::Last,
+            storage.size as u64,
+            block_size,
+            0,
+        )
+        .unwrap();
+        task.set_entropy_selection(EntropySelection::new(
+            0,
+            block_size,
+            vec![false, true, false, false],
+            block_size as u64,
+        ));
+        let mut state = WipeState::default();
+        let result = task.run(&mut storage, &mut state, &mut receiver);
+
+        assert!(result);
+        assert!(storage.file.get_ref()[..32768]
+            .iter()
+            .all(|byte| *byte == 0xff));
+        assert!(storage.file.get_ref()[32768..65536]
+            .iter()
+            .all(|byte| *byte == 0));
+        assert!(storage.file.get_ref()[65536..]
+            .iter()
+            .all(|byte| *byte == 0xff));
     }
 
     #[test]

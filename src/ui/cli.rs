@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 
-use crate::actions::{WipeEvent, WipeEventReceiver, WipeState, WipeTask};
+use crate::actions::{EntropyScan, WipeEvent, WipeEventReceiver, WipeState, WipeTask};
 use crate::sanitization::{Scheme, SchemeRepo};
 use crate::stage::Stage;
 use prettytable::format::FormatBuilder;
@@ -36,7 +36,70 @@ impl ConsoleFrontend {
         for (k, v) in schemes.all().iter() {
             t.add_row(row![k, Self::describe_scheme(v)]);
         }
+
         format!("Data sanitization schemes:\n{}", t)
+    }
+
+    pub fn sampling_progress(size: u64) -> ProgressBar {
+        let progress = create_progress_bar(size);
+        progress.set_message("Sampling");
+        progress
+    }
+
+    pub fn print_entropy_scan(scan: &EntropyScan) {
+        println!(
+            "Sampled {} blocks ({} bytes each; {} sample(s) of {} bytes per block).",
+            scan.blocks_scanned, scan.block_size, scan.samples_per_block, scan.sample_size
+        );
+        println!("Starting offset: {} bytes.", scan.offset);
+        println!(
+            "Shannon entropy by offset (bits/byte; mid-entropy candidates: {:.1} to {:.1}):",
+            crate::actions::MID_ENTROPY_MIN,
+            crate::actions::MID_ENTROPY_MAX
+        );
+
+        for level in (1..=8).rev() {
+            print!("{:>2} |", level);
+            for entropy in &scan.graph {
+                match entropy {
+                    Some(value) if *value >= level as f64 => print!("#"),
+                    Some(_) | None => print!(" "),
+                }
+            }
+            println!();
+        }
+        println!(" 0 +{}", "-".repeat(scan.graph.len()));
+        println!(
+            "     start{}end",
+            " ".repeat(scan.graph.len().saturating_sub(8))
+        );
+
+        println!(
+            "{} of {} sampled blocks fall in the mid-entropy band.",
+            scan.candidate_blocks, scan.blocks_scanned
+        );
+        if scan.region_count == 0 {
+            println!("No mid-entropy regions found.");
+        } else {
+            println!(
+                "Candidate regions (showing up to {}; start..end byte offsets):",
+                scan.regions.len()
+            );
+            for region in &scan.regions {
+                println!(
+                    "  {}..{} ({} bytes)",
+                    region.start,
+                    region.end,
+                    HumanBytes(region.end - region.start)
+                );
+            }
+            if scan.region_count > scan.regions.len() as u64 {
+                println!(
+                    "  ... {} additional regions omitted.",
+                    scan.region_count - scan.regions.len() as u64
+                );
+            }
+        }
     }
 
     fn describe_scheme(scheme: &Scheme) -> String {
@@ -94,7 +157,9 @@ impl WipeEventReceiver for ConsoleWipeSession {
                 t.add_row(row!["Verification", task.verify]);
                 print!("Wiping:\n{}", t);
 
-                if !self.auto_confirm && !ask_for_confirmation() {
+                if !self.auto_confirm
+                    && !ask_for_confirmation("Are you sure? (type 'yes' to confirm): ")
+                {
                     println!("Aborted.");
                     std::process::exit(0);
                 }
@@ -178,7 +243,14 @@ impl WipeEventReceiver for ConsoleWipeSession {
                     t.set_format(indent_table_format);
                     t.add_row(row!["Total device size", HumanBytes(task.total_size)]);
                     t.add_row(row!["Total device blocks", total_blocks]);
-                    t.add_row(row!["Total blocks wiped", wiped_blocks]);
+                    match task.selected_block_count() {
+                        Some(blocks) => {
+                            t.add_row(row!["Blocks selected by entropy", blocks]);
+                        }
+                        None => {
+                            t.add_row(row!["Total blocks wiped", wiped_blocks]);
+                        }
+                    }
                     t.add_row(row![
                         "Skipped blocks",
                         format!(
@@ -207,10 +279,10 @@ impl WipeEventReceiver for ConsoleWipeSession {
     }
 }
 
-fn ask_for_confirmation() -> bool {
+pub fn ask_for_confirmation(prompt: &str) -> bool {
     use std::io::prelude::*;
 
-    print!("Are you sure? (type 'yes' to confirm): ");
+    print!("{}", prompt);
     std::io::stdout().flush().unwrap();
 
     let mut confirm = String::new();

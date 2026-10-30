@@ -36,6 +36,10 @@ impl StorageDevice for StorageRef {
     fn access(&self) -> Result<Box<dyn StorageAccess>> {
         CompositeStorageAccess::open(self).map(|a| Box::new(a) as Box<dyn StorageAccess>)
     }
+
+    fn access_readonly(&self) -> Result<Box<dyn StorageAccess>> {
+        DeviceFile::open(&self.id, false).map(|a| Box::new(a) as Box<dyn StorageAccess>)
+    }
 }
 
 /// On Windows, to work with a low level PhysicalDrive, we have to acquire locks to all partitions/volumes

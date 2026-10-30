@@ -35,8 +35,8 @@ pub struct FileAccess {
 }
 
 impl FileAccess {
-    pub fn new<P: AsRef<Path>>(file_path: P) -> Result<FileAccess> {
-        let file = os::open_file_direct(file_path, true)?;
+    pub fn new<P: AsRef<Path>>(file_path: P, write_access: bool) -> Result<FileAccess> {
+        let file = os::open_file_direct(file_path, write_access)?;
         Ok(FileAccess { file })
     }
 }
@@ -92,6 +92,10 @@ impl StorageDevice for StorageRef {
             _ => (),
         };
 
-        FileAccess::new(&self.id).map(|a| Box::new(a) as Box<dyn StorageAccess>)
+        FileAccess::new(&self.id, true).map(|a| Box::new(a) as Box<dyn StorageAccess>)
+    }
+
+    fn access_readonly(&self) -> Result<Box<dyn StorageAccess>> {
+        FileAccess::new(&self.id, false).map(|a| Box::new(a) as Box<dyn StorageAccess>)
     }
 }
