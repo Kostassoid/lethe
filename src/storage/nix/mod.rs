@@ -80,17 +80,19 @@ impl StorageAccess for FileAccess {
 
 impl StorageDevice for StorageRef {
     fn access(&self) -> Result<Box<dyn StorageAccess>> {
-        self.children
-            .iter()
-            .flat_map(|c| &c.details.mount_point)
-            .for_each(|c| {
-                let _ = os::unmount(c.as_str());
-            });
+        for child in &self.children {
+            if let StorageReadiness::Ready(details) = &child.readiness {
+                if let Some(mount_point) = &details.mount_point {
+                    let _ = os::unmount(mount_point.as_str());
+                }
+            }
+        }
 
-        match &self.details.mount_point {
-            Some(c) => os::unmount(c.as_str())?,
-            _ => (),
-        };
+        if let StorageReadiness::Ready(details) = &self.readiness {
+            if let Some(mount_point) = &details.mount_point {
+                os::unmount(mount_point.as_str())?;
+            }
+        }
 
         FileAccess::new(&self.id).map(|a| Box::new(a) as Box<dyn StorageAccess>)
     }

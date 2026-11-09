@@ -17,7 +17,7 @@ or non-cross-platform, which was a requirement for me. So I wrote this applicati
 
 ## Features
 
-- Supports Windows (but not WSL), macOS and Linux.
+- Supports Windows (x86-64 and ARM64; but not WSL), macOS (Apple Silicon) and Linux (x86-64 and ARM64).
 - Validates the data (reads back) to make sure all write commands were successful
 - Uses fast cryptographic random generator
 - Allows to override OS recommended block size for possibly faster operations
@@ -44,12 +44,14 @@ I would love to learn about other people's experience with the application. Let 
 
 Current release: **v0.8.2** [Changelog](CHANGELOG.md)
 
-Download and unzip binaries for your OS:
+Download and unzip binaries for your platform from the
+[releases page](https://github.com/Kostassoid/lethe/releases/latest):
 
-- [Windows x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.8.2/lethe-v0.8.2-x86_64-pc-windows-gnu.zip)
-- [macOS Intel](https://github.com/Kostassoid/lethe/releases/download/v0.8.2/lethe-v0.8.2-x86_64-apple-darwin.tar.gz)
-- [macOS Apple](https://github.com/Kostassoid/lethe/releases/download/v0.8.2/lethe-v0.8.2-aarch64-apple-darwin.tar.gz)
-- [Linux x86-64](https://github.com/Kostassoid/lethe/releases/download/v0.8.2/lethe-v0.8.2-x86_64-unknown-linux-musl.tar.gz)
+- Windows x86-64
+- Windows ARM64
+- macOS Apple Silicon
+- Linux x86-64
+- Linux ARM64
 
 Or install `lethe` from sources using the latest [Rust toolchain](https://www.rust-lang.org/tools/install):
 

@@ -118,7 +118,7 @@ fn build_device_info(d: &Block) -> Option<StorageRef> {
 
     Some(StorageRef {
         id: device_path,
-        details,
+        readiness: StorageReadiness::Ready(details),
         children,
     })
 }

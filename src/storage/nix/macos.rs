@@ -165,7 +165,9 @@ impl StorageDeviceEnumerator for DiskUtilCli {
                     .map(|p| {
                         Ok(StorageRef {
                             id: format!("/dev/r{}", p.device_identifier),
-                            details: self.get_storage_details(&p.device_identifier)?,
+                            readiness: StorageReadiness::Ready(
+                                self.get_storage_details(&p.device_identifier)?,
+                            ),
                             children: vec![],
                         })
                     })
@@ -173,7 +175,9 @@ impl StorageDeviceEnumerator for DiskUtilCli {
 
                 Ok(StorageRef {
                     id: format!("/dev/r{}", d.device_identifier),
-                    details: self.get_storage_details(&d.device_identifier)?,
+                    readiness: StorageReadiness::Ready(
+                        self.get_storage_details(&d.device_identifier)?,
+                    ),
                     children: children?,
                 })
             })

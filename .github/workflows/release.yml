@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish (for example, v0.8.3)
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --locked --all-targets
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-2025
+            archive: zip
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            archive: zip
+          - target: aarch64-apple-darwin
+            os: macos-26
+            archive: tar.gz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Resolve package metadata
+        id: meta
+        shell: bash
+        run: |
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          echo "name=$(jq -r '.packages[0].name' <<< "$metadata")" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r '.packages[0].version' <<< "$metadata")" >> "$GITHUB_OUTPUT"
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="${{ steps.meta.outputs.name }}"
+          version="${{ steps.meta.outputs.version }}"
+          target="${{ matrix.target }}"
+          package="${name}-v${version}-${target}"
+          staging="dist/${package}"
+
+          mkdir -p "$staging"
+
+          exe=""
+          case "$target" in
+            *-pc-windows-*) exe=".exe" ;;
+          esac
+
+          cp "target/${target}/release/${name}${exe}" "$staging/"
+          cp README.md LICENSE CHANGELOG.md "$staging/"
+
+          case "${{ matrix.archive }}" in
+            zip)
+              (cd dist && 7z a "${package}.zip" "$package")
+              ;;
+            *)
+              tar -czf "dist/${package}.tar.gz" -C dist "$package"
+              ;;
+          esac
+
+          rm -rf "$staging"
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
