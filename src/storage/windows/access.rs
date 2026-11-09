@@ -21,6 +21,8 @@ use winapi::um::winnt::{
     LARGE_INTEGER,
 };
 
+const QUERY_ONLY_ACCESS: DWORD = 0;
+
 pub struct DeviceFile {
     is_locked: bool,
     pub handle: HANDLE,
@@ -37,7 +39,7 @@ impl DeviceFile {
         let access = if write_access {
             GENERIC_READ | GENERIC_WRITE
         } else {
-            GENERIC_READ
+            QUERY_ONLY_ACCESS
         };
 
         unsafe {
