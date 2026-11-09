@@ -77,6 +77,10 @@ impl CoverageFilter {
         }
     }
 
+    pub fn covered_size(&self) -> u64 {
+        self.low + (self.max - self.high)
+    }
+
     fn should_verify(&self, at: u64) -> bool {
         at < self.low || (at >= self.high && at < self.max)
     }

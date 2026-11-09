@@ -96,6 +96,8 @@ impl WipeSession {
         self.state.step = 0;
         self.state.position = self.plan.range.start;
 
+        let mut retry_position: Option<u64> = None;
+
         let result = loop {
             if self.state.step >= self.plan.steps.len() {
                 break Ok(());
@@ -130,6 +132,7 @@ impl WipeSession {
 
                         if self.state.retries_left > 0 {
                             self.state.retries_left -= 1;
+                            retry_position = Some(self.state.position);
                             self.state.step -= 1;
                             publish!(
                                 self,
@@ -146,7 +149,7 @@ impl WipeSession {
             publish!(self, WipeEvent::StepCompleted(self.state.step));
 
             self.state.step += 1;
-            self.state.position = self.plan.range.start;
+            self.state.position = retry_position.take().unwrap_or(self.plan.range.start);
         };
 
         match &result {
@@ -236,6 +239,54 @@ impl WipeSession {
 
         let buf = AlignedBuffer::new(self.plan.block_size, self.plan.block_size);
 
+        let coverage_size = self.state.coverage.covered_size();
+        if self.plan.range.start + coverage_size < self.plan.range.end {
+            let block_size = self.plan.block_size as u64;
+            let verify_end = (self.plan.range.start
+                + (coverage_size + block_size - 1) / block_size * block_size)
+                .min(self.plan.range.end);
+
+            while let Some(chunk) = stream.next() {
+                if self.state.position >= verify_end {
+                    break;
+                }
+
+                if is_at_bad_block(&self.state, &self.plan) {
+                    publish!(self, WipeEvent::SkippedBadBlock(self.state.position));
+                    advance(
+                        &mut self.state,
+                        &mut *self.event_handler,
+                        &self.plan,
+                        chunk.len(),
+                    );
+                    try_seek(
+                        &mut *self.storage,
+                        &mut self.state,
+                        &mut *self.event_handler,
+                        &self.plan,
+                    )?;
+                    continue;
+                }
+
+                let b = &mut buf.as_mut_slice()[..chunk.len()];
+
+                self.storage.read(b)?;
+
+                if b != chunk {
+                    Err(anyhow!("Verification failed!"))?;
+                }
+
+                self.state.position += chunk.len() as u64;
+                if self.state.position > verify_end {
+                    self.state.position = verify_end;
+                }
+            }
+
+            publish!(self, WipeEvent::Progress(self.state.position));
+
+            return Ok(());
+        }
+
         while let Some(chunk) = stream.next() {
             if is_at_bad_block(&self.state, &self.plan) {
                 publish!(self, WipeEvent::SkippedBadBlock(self.state.position));
@@ -253,10 +304,6 @@ impl WipeSession {
                 )?;
                 continue;
             }
-
-            // if !self.coverage.in_range(self.position) {
-            //     let next_position = self.coverage.next();
-            // }
 
             let b = &mut buf.as_mut_slice()[..chunk.len()];
 
