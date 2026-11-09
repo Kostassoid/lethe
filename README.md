@@ -40,22 +40,27 @@ designed to do. Didn't have to deal with forensics experts yet though.
 I still make some additions/changes occasionally, but there's no exact roadmap.
 I would love to learn about other people's experience with the application. Let me know if you have any issues!
 
-## Download
+## Installation
 
 Current release: **v0.8.2** [Changelog](CHANGELOG.md)
 
-Download and unzip binaries for your platform from the
-[releases page](https://github.com/Kostassoid/lethe/releases/latest):
+### Bash (Linux, macOS)
 
-- Windows x86-64
-- Windows ARM64
-- macOS Apple Silicon
-- Linux x86-64
-- Linux ARM64
-
-Or install `lethe` from sources using the latest [Rust toolchain](https://www.rust-lang.org/tools/install):
-
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Kostassoid/lethe/releases/latest/download/lethe-installer.sh | sh
 ```
+
+### PowerShell (Windows)
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/Kostassoid/lethe/releases/latest/download/lethe-installer.ps1 | iex"
+```
+
+### From source
+
+Install `lethe` using the latest [Rust toolchain](https://www.rust-lang.org/tools/install):
+
+```sh
 cargo install lethe
 ```
 

@@ -54,6 +54,14 @@ devices:
 wipe device scheme="zero" verify="no" blocksize="128k" *args:
     cargo run --locked -- wipe --scheme {{scheme}} --verify {{verify}} --blocksize {{blocksize}} {{args}} {{device}}
 
+# Verify cargo-dist configuration is up to date
+dist-check:
+    dist generate --check
+
+# Preview the cargo-dist release plan for a tag
+dist-plan tag:
+    dist plan --tag={{tag}}
+
 # Build API documentation
 doc:
     cargo doc --locked --no-deps
@@ -78,7 +86,7 @@ info:
     @cargo clippy --version
 
 # Run the full CI check suite
-ci: fmt-check clippy test release
+ci: fmt-check clippy test dist-check release
 
 # Run CI checks without the release build
-ci-quick: fmt-check clippy test
+ci-quick: fmt-check clippy test dist-check

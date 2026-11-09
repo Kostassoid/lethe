@@ -36,6 +36,12 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-dist
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.34.0/cargo-dist-installer.sh | sh
+
+      - name: Check cargo-dist configuration
+        run: dist generate --check
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

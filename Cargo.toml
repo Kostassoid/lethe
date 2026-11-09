@@ -62,6 +62,10 @@ flate2 = "1.1"
 lto = "fat"
 codegen-units = 1
 
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 
