@@ -53,8 +53,43 @@ impl WipeSession {
     pub fn new(
         plan: WipePlan,
         storage: Box<dyn StorageAccess>,
+        event_handler: Box<dyn WipeEventHandler>,
+        retries: u32,
+    ) -> Self {
+        let streams = plan
+            .scheme
+            .stages
+            .iter()
+            .map(|stage| Stream::new(stage, plan.range.clone(), plan.block_size))
+            .collect();
+
+        Self::with_streams(plan, storage, event_handler, retries, streams)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_seed(
+        plan: WipePlan,
+        storage: Box<dyn StorageAccess>,
+        event_handler: Box<dyn WipeEventHandler>,
+        retries: u32,
+        seed: [u8; crate::sanitization::stream::RANDOM_SEED_SIZE],
+    ) -> Self {
+        let streams = plan
+            .scheme
+            .stages
+            .iter()
+            .map(|stage| Stream::with_seed(stage, plan.range.clone(), plan.block_size, seed))
+            .collect();
+
+        Self::with_streams(plan, storage, event_handler, retries, streams)
+    }
+
+    fn with_streams(
+        plan: WipePlan,
+        storage: Box<dyn StorageAccess>,
         mut event_handler: Box<dyn WipeEventHandler>,
         retries: u32,
+        streams: Vec<Stream>,
     ) -> Self {
         let state = WipeSessionState {
             position: 0,
@@ -62,13 +97,6 @@ impl WipeSession {
             step: 0,
             bad_blocks: BadBlocks::default(),
         };
-
-        let streams = plan
-            .scheme
-            .stages
-            .iter()
-            .map(|stage| Stream::new(stage, plan.range.clone(), plan.block_size))
-            .collect();
 
         event_handler.handle(&plan, &state, WipeEvent::Created);
 
@@ -405,12 +433,12 @@ fn underlying_storage_error(error: &anyhow::Error) -> Option<&StorageError> {
 mod test {
     use super::*;
     use crate::actions::verification::{Percent, Verification};
+    use crate::sanitization::stream::RANDOM_SEED_SIZE;
     use crate::sanitization::{Scheme, SchemeRepo, Stage};
     use WipeEvent::*;
-    use anyhow::{Context, Result};
+    use anyhow::Result;
     use assert_matches::*;
     use std::cell::RefCell;
-    use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use std::rc::Rc;
 
     #[test]
@@ -879,6 +907,129 @@ mod test {
         assert_matches!(e.next(), Some(Completed));
     }
 
+    #[test]
+    fn test_random_wipe_with_bad_blocks_uses_correct_stream_positions() {
+        let stage = Stage::random();
+        let scheme = Scheme {
+            description: "random".to_string(),
+            stages: vec![stage.clone()],
+        };
+        let block_size = 8192;
+        let size = 100_000;
+        let seed = [0x5a; RANDOM_SEED_SIZE];
+        let (mut storage, data) = InMemoryStorage::shared(size);
+
+        // Two consecutive bad blocks at the very start (exercising the initial
+        // skip and re-seek), one in the verified prefix/suffix and one in the
+        // unverified gap.
+        storage.fail_at(0);
+        storage.fail_at(8192);
+        storage.fail_at(49152);
+        storage.fail_at(90112);
+
+        let plan = WipePlan::new(
+            scheme,
+            Verification::Last(Percent::new(30.0).unwrap()),
+            0..size as u64,
+            block_size,
+        )
+        .unwrap();
+
+        let reference = fill_reference(&stage, plan.range.clone(), block_size, seed);
+        let receiver = StubReceiver::new();
+
+        let result =
+            WipeSession::new_with_seed(plan, Box::new(storage), Box::new(receiver), 8, seed).run();
+        assert!(result.is_ok());
+
+        let data = data.borrow();
+        for start in (0..size).step_by(block_size) {
+            let end = (start + block_size).min(size);
+            let actual = &data[start..end];
+
+            if matches!(start, 0 | 8192 | 49152 | 90112) {
+                assert!(
+                    actual.iter().all(|byte| *byte == 0xff),
+                    "bad block at {start} was modified"
+                );
+            } else {
+                assert_eq!(
+                    actual,
+                    &reference[start..end],
+                    "block at {start} does not match the reference stream"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_random_wipe_retry_rewrites_correct_stream_positions() {
+        let stage = Stage::random();
+        let scheme = Scheme {
+            description: "random".to_string(),
+            stages: vec![stage.clone()],
+        };
+        let block_size = 8192;
+        let size = 100_000;
+        let seed = [0x33; RANDOM_SEED_SIZE];
+        let (mut storage, data) = InMemoryStorage::shared(size);
+
+        // Cross this threshold during verification of the fourth chunk, forcing
+        // a verification failure followed by a rewrite from that position.
+        storage.fail_after_any(size + 3 * block_size + 1);
+
+        let plan = WipePlan::new(
+            scheme,
+            Verification::All(Percent::new(100.0).unwrap()),
+            0..size as u64,
+            block_size,
+        )
+        .unwrap();
+
+        let reference = fill_reference(&stage, plan.range.clone(), block_size, seed);
+        let receiver = StubReceiver::new();
+
+        let result = WipeSession::new_with_seed(
+            plan,
+            Box::new(storage),
+            Box::new(receiver.clone()),
+            8,
+            seed,
+        )
+        .run();
+        assert!(result.is_ok());
+
+        assert_eq!(&data.borrow()[..], reference.as_slice());
+
+        let collected = receiver.collected.borrow();
+        assert!(
+            collected
+                .iter()
+                .any(|event| matches!(event, WipeEvent::Retrying(0, 24_576))),
+            "expected the verification to fail and resume the write at 24576"
+        );
+    }
+
+    fn fill_reference(
+        stage: &Stage,
+        range: std::ops::Range<u64>,
+        block_size: usize,
+        seed: [u8; RANDOM_SEED_SIZE],
+    ) -> Vec<u8> {
+        let size = usize::try_from(range.end - range.start).expect("test area is addressable");
+        let mut reference = vec![0u8; size];
+        let mut stream = Stream::with_seed(stage, range, block_size, seed);
+        let mut position = 0;
+
+        while let Some(chunk) = stream.next() {
+            reference[position..position + chunk.len()].copy_from_slice(chunk);
+            position += chunk.len();
+        }
+
+        assert_eq!(position, size);
+        reference
+    }
+
     #[derive(Clone)]
     struct StubReceiver {
         collected: Rc<RefCell<Vec<WipeEvent>>>,
@@ -899,7 +1050,8 @@ mod test {
     }
 
     struct InMemoryStorage {
-        file: Cursor<Vec<u8>>,
+        data: Rc<RefCell<Vec<u8>>>,
+        position: u64,
         size: usize,
         total_written: usize,
         total_read: usize,
@@ -909,14 +1061,25 @@ mod test {
 
     impl InMemoryStorage {
         fn new(size: usize) -> Self {
-            InMemoryStorage {
-                file: Cursor::new(vec![0xff; size]),
+            Self::shared(size).0
+        }
+
+        /// Returns the storage and a handle to its underlying bytes, so tests can
+        /// inspect the final device contents after a session consumes the storage.
+        fn shared(size: usize) -> (Self, Rc<RefCell<Vec<u8>>>) {
+            let data = Rc::new(RefCell::new(vec![0xff; size]));
+
+            let storage = InMemoryStorage {
+                data: Rc::clone(&data),
+                position: 0,
                 size,
                 total_written: 0,
                 total_read: 0,
                 failures: Vec::new(),
                 bad_blocks: Vec::new(),
-            }
+            };
+
+            (storage, data)
         }
 
         fn fail_after_any(&mut self, amount: usize) {
@@ -929,14 +1092,17 @@ mod test {
             self.bad_blocks.sort_unstable();
         }
 
+        fn byte_position(&self) -> usize {
+            usize::try_from(self.position).expect("position does not fit into memory")
+        }
+
         fn check_for_traps(&mut self, read_bytes: usize, write_bytes: usize) -> Result<()> {
-            let block_start = self.file.position();
+            let block_start = self.position;
             let block_end = block_start + write_bytes as u64;
             let is_bad_block = self
                 .bad_blocks
                 .iter()
-                .find(|b| block_start <= **b && block_end > **b)
-                .is_some();
+                .any(|b| block_start <= *b && block_end > *b);
 
             if is_bad_block {
                 return Err(StorageError::BadBlock.into());
@@ -958,19 +1124,37 @@ mod test {
 
     impl StorageAccess for InMemoryStorage {
         fn seek(&mut self, position: u64) -> Result<u64> {
-            self.file
-                .seek(SeekFrom::Start(position))
-                .context("unexpected")
+            self.position = position;
+            Ok(position)
         }
 
         fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
             self.check_for_traps(buffer.len(), 0)?;
-            self.file.read(buffer).context("unexpected")
+
+            let start = self.byte_position();
+            let data = self.data.borrow();
+            if start >= data.len() {
+                return Ok(0);
+            }
+
+            let count = (data.len() - start).min(buffer.len());
+            buffer[..count].copy_from_slice(&data[start..start + count]);
+            self.position += count as u64;
+            Ok(count)
         }
 
         fn write(&mut self, data: &[u8]) -> Result<()> {
             self.check_for_traps(0, data.len())?;
-            self.file.write_all(data).context("unexpected")
+
+            let start = self.byte_position();
+            let end = start + data.len();
+            let mut target = self.data.borrow_mut();
+            if target.len() < end {
+                target.resize(end, 0);
+            }
+            target[start..end].copy_from_slice(data);
+            self.position = end as u64;
+            Ok(())
         }
 
         fn flush(&mut self) -> Result<()> {

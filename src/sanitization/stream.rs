@@ -6,7 +6,7 @@ use streaming_iterator::StreamingIterator;
 use crate::sanitization::mem::AlignedBuffer;
 use crate::sanitization::scheme::Stage;
 
-const RANDOM_SEED_SIZE: usize = 32;
+pub(crate) const RANDOM_SEED_SIZE: usize = 32;
 /// Extra bytes generated per chunk so that random data can be reproduced starting at any
 /// byte position, even a non-word-aligned one.
 const RANDOM_ALIGN_SLACK: usize = 3;
@@ -47,6 +47,18 @@ enum StreamGenerator {
 
 impl Stream {
     pub fn new(stage: &Stage, area: Range<u64>, block_size: usize) -> Self {
+        let mut seed = [0u8; RANDOM_SEED_SIZE];
+        rand::rng().fill_bytes(&mut seed);
+        Self::with_seed(stage, area, block_size, seed)
+    }
+
+    /// Builds a stream with an explicit random seed.
+    pub(crate) fn with_seed(
+        stage: &Stage,
+        area: Range<u64>,
+        block_size: usize,
+        seed: [u8; RANDOM_SEED_SIZE],
+    ) -> Self {
         let mut buf = AlignedBuffer::new(block_size + RANDOM_ALIGN_SLACK, block_size);
 
         let generator = match stage {
@@ -54,13 +66,9 @@ impl Stream {
                 buf.fill(*value);
                 StreamGenerator::Fill
             }
-            Stage::Random => {
-                let mut seed = [0u8; RANDOM_SEED_SIZE];
-                rand::rng().fill_bytes(&mut seed);
-                StreamGenerator::Random {
-                    rng: RandomGenerator::from_seed(seed),
-                }
-            }
+            Stage::Random => StreamGenerator::Random {
+                rng: RandomGenerator::from_seed(seed),
+            },
             Stage::Incremental { step } => StreamGenerator::Incremental { step: *step },
         };
 
@@ -203,6 +211,105 @@ mod test {
 
         assert_eq!(position, TEST_SIZE as usize);
         assert_eq!(&from_middle[offset..], &from_start[offset..]);
+    }
+
+    #[test]
+    fn test_stage_random_matches_sequential_reference_from_any_offset() {
+        let stage = Stage::random();
+        let mut stream = Stream::new(&stage, 0..TEST_SIZE, TEST_BLOCK);
+
+        let mut reference = create_test_vec();
+        let mut position = 0;
+        while let Some(chunk) = stream.next() {
+            reference[position..position + chunk.len()].copy_from_slice(chunk);
+            position += chunk.len();
+        }
+        assert_eq!(position, TEST_SIZE as usize);
+
+        let offsets = [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            TEST_BLOCK as u64 - 1,
+            TEST_BLOCK as u64,
+            TEST_BLOCK as u64 + 1,
+            2 * TEST_BLOCK as u64 + 3,
+            TEST_SIZE / 2,
+            TEST_SIZE - 3,
+            TEST_SIZE - 2,
+            TEST_SIZE - 1,
+            TEST_SIZE,
+        ];
+
+        for offset in offsets {
+            stream.seek(offset);
+
+            let mut actual = vec![0u8; (TEST_SIZE - offset) as usize];
+            let mut position = 0;
+            while let Some(chunk) = stream.next() {
+                actual[position..position + chunk.len()].copy_from_slice(chunk);
+                position += chunk.len();
+            }
+
+            assert_eq!(position, actual.len());
+            assert_eq!(
+                actual,
+                reference[offset as usize..],
+                "stream mismatch after seeking to {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stage_random_single_chunk_matches_reference_at_arbitrary_offsets() {
+        let stage = Stage::random();
+        let mut stream = Stream::new(&stage, 0..TEST_SIZE, TEST_BLOCK);
+
+        let mut reference = create_test_vec();
+        let mut position = 0;
+        while let Some(chunk) = stream.next() {
+            reference[position..position + chunk.len()].copy_from_slice(chunk);
+            position += chunk.len();
+        }
+
+        // Jump back and forth; each jump must regenerate exactly the bytes that
+        // sequential generation produced at that absolute position.
+        for offset in [
+            TEST_SIZE / 3,
+            7,
+            TEST_SIZE - 5,
+            TEST_SIZE / 2 + 1,
+            3,
+            TEST_BLOCK as u64 + 2,
+            0,
+            TEST_SIZE - 1,
+        ] {
+            stream.seek(offset);
+
+            let Some(chunk) = stream.next() else {
+                continue;
+            };
+
+            assert_eq!(
+                chunk,
+                &reference[offset as usize..offset as usize + chunk.len()],
+                "chunk mismatch after seeking to {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stage_random_clamps_seek_past_the_end() {
+        let mut stream = Stream::new(&Stage::random(), 100..TEST_SIZE, TEST_BLOCK);
+
+        stream.seek(TEST_SIZE + 100);
+        assert!(stream.next().is_none());
+
+        stream.seek(TEST_SIZE);
+        assert!(stream.next().is_none());
     }
 
     #[test]
