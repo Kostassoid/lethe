@@ -1,7 +1,7 @@
+use crate::actions::Step;
 use crate::actions::marker::{BlockMarker, RoaringBlockMarker};
 use crate::actions::plan::WipePlan;
 use crate::actions::verification::*;
-use crate::actions::Step;
 use crate::sanitization::mem::*;
 use crate::sanitization::stream::Stream;
 use crate::storage::{StorageAccess, StorageError};
@@ -163,7 +163,6 @@ impl WipeSession {
     fn write(&mut self, stream_id: usize) -> Result<()> {
         let stream = &mut self.streams[stream_id];
 
-
         publish!(self, WipeEvent::Progress(self.state.position));
 
         seek_to_next_safe_block(
@@ -237,7 +236,7 @@ impl WipeSession {
 
         stream.seek(self.state.position);
 
-        let buf = AlignedBuffer::new(self.plan.block_size, self.plan.block_size);
+        let mut buf = AlignedBuffer::new(self.plan.block_size, self.plan.block_size);
 
         let coverage_size = self.state.coverage.covered_size();
         if self.plan.range.start + coverage_size < self.plan.range.end {
@@ -468,12 +467,12 @@ pub fn underlying_storage_error(error: &anyhow::Error) -> Option<&StorageError> 
 mod test {
     use super::*;
     use crate::sanitization::{Scheme, SchemeRepo, Stage};
+    use WipeEvent::*;
     use anyhow::{Context, Result};
     use assert_matches::*;
     use std::cell::RefCell;
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use std::rc::Rc;
-    use WipeEvent::*;
 
     #[test]
     fn test_wipe_task_validation() {

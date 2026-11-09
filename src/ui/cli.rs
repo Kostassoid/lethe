@@ -6,8 +6,8 @@ use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 use crate::actions::{Step, WipeEvent, WipeEventHandler, WipePlan, WipeSessionState};
 use crate::sanitization::scheme::{Scheme, SchemeRepo};
 use crate::scheme::Stage;
-use prettytable::format::FormatBuilder;
 use prettytable::Table;
+use prettytable::format::FormatBuilder;
 use std::thread::sleep;
 
 const RETRY_BACKOFF_SECONDS: u32 = 3;

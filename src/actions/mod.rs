@@ -1,8 +1,8 @@
 mod marker;
+mod plan;
 mod verification;
 mod wipe;
-mod plan;
 
+pub use plan::*;
 pub use verification::*;
 pub use wipe::*;
-pub use plan::*;

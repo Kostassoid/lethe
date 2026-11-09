@@ -4,8 +4,8 @@ use crate::storage::*;
 use ::nix::*;
 use anyhow::{Context, Result};
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::SeekFrom;
+use std::io::prelude::*;
 use std::path::Path;
 
 #[cfg(target_os = "linux")]

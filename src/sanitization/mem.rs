@@ -1,4 +1,4 @@
-use std::ptr::slice_from_raw_parts_mut;
+use std::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
 
 pub(crate) struct AlignedBuffer {
     ptr: *mut u8,
@@ -21,7 +21,11 @@ impl AlignedBuffer {
         unsafe { self.ptr.write_bytes(value, self.layout.size()) }
     }
 
-    pub(crate) fn as_mut_slice(&self) -> &mut [u8] {
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        unsafe { &*slice_from_raw_parts(self.ptr, self.layout.size()) }
+    }
+
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { &mut *slice_from_raw_parts_mut(self.ptr, self.layout.size()) }
     }
 
@@ -47,7 +51,7 @@ mod test {
 
         let buf = AlignedBuffer::new(size, align);
 
-        assert_eq!(buf.as_mut_slice().len(), size);
+        assert_eq!(buf.as_slice().len(), size);
         assert_eq!(buf.ptr as usize % align, 0);
     }
 

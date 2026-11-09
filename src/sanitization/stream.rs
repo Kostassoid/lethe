@@ -1,4 +1,4 @@
-use rand::RngCore;
+use rand::Rng;
 use rand::SeedableRng;
 pub use streaming_iterator::StreamingIterator;
 
@@ -11,7 +11,7 @@ type RandomGenerator = rand_chacha::ChaCha8Rng;
 #[derive(Debug)]
 enum StreamGenerator {
     Fill,
-    Random { gen: RandomGenerator },
+    Random { rng: RandomGenerator },
     Incremental { step: usize, position: u64 },
 }
 
@@ -34,10 +34,10 @@ impl Stream {
             }
             Stage::Random => {
                 let mut seed: [u8; RANDOM_SEED_SIZE] = [0; RANDOM_SEED_SIZE];
-                rand::thread_rng().fill_bytes(&mut seed[..]);
-                let mut gen = RandomGenerator::from_seed(seed);
-                gen.set_word_pos(0);
-                StreamGenerator::Random { gen }
+                rand::rng().fill_bytes(&mut seed[..]);
+                let mut rng = RandomGenerator::from_seed(seed);
+                rng.set_word_pos(0);
+                StreamGenerator::Random { rng }
             }
             Stage::Incremental { step } => StreamGenerator::Incremental {
                 step: *step,
@@ -68,7 +68,7 @@ impl Stream {
 
         match &mut self.generator {
             StreamGenerator::Fill => (),
-            StreamGenerator::Random { gen } => gen.set_word_pos((position >> 2) as u128),
+            StreamGenerator::Random { rng } => rng.set_word_pos((position >> 2) as u128),
             StreamGenerator::Incremental {
                 step: _step,
                 position: gen_position,
@@ -87,7 +87,7 @@ impl StreamingIterator for Stream {
 
         match &mut self.generator {
             StreamGenerator::Fill => (),
-            StreamGenerator::Random { gen } => gen.fill_bytes(self.buf.as_mut_slice()),
+            StreamGenerator::Random { rng } => rng.fill_bytes(self.buf.as_mut_slice()),
             StreamGenerator::Incremental { step, position } => {
                 self.buf.fill(((*position / *step as u64) % 256) as u8);
                 *position = *position + *step as u64;
@@ -107,7 +107,7 @@ impl StreamingIterator for Stream {
             None
         } else {
             let chunk_size = self.position - self.last_position;
-            Some(&self.buf.as_mut_slice()[..chunk_size as usize])
+            Some(&self.buf.as_slice()[..chunk_size as usize])
         }
     }
 }
@@ -125,7 +125,7 @@ mod test {
         let mut stream = Stream::from(&Stage::constant(0x33), TEST_SIZE, TEST_BLOCK);
 
         fill(&mut data1, &mut stream);
-        
+
         assert!(data1.iter().find(|x| **x != 0x33).is_none());
 
         let mut data2 = create_test_vec();
@@ -137,7 +137,7 @@ mod test {
     #[test]
     fn test_stage_random_behaves() {
         let mut data1 = create_test_vec();
-        let mut stream =  Stream::from(&Stage::random(), TEST_SIZE, TEST_BLOCK);
+        let mut stream = Stream::from(&Stage::random(), TEST_SIZE, TEST_BLOCK);
 
         fill(&mut data1, &mut stream);
 
@@ -184,12 +184,14 @@ mod test {
         fill(&mut data1, &mut stream);
 
         for block in 0..TEST_SIZE / TEST_BLOCK as u64 {
-            assert!(data1
-                .iter()
-                .skip(block as usize * TEST_BLOCK)
-                .take(TEST_BLOCK)
-                .find(|x| **x != (block % 256) as u8)
-                .is_none());
+            assert!(
+                data1
+                    .iter()
+                    .skip(block as usize * TEST_BLOCK)
+                    .take(TEST_BLOCK)
+                    .find(|x| **x != (block % 256) as u8)
+                    .is_none()
+            );
         }
 
         let mut data2 = create_test_vec();
@@ -214,7 +216,7 @@ mod test {
     }
 
     fn calculate_entropy(v: &[u8]) -> f64 {
-        use flate2::{write::ZlibEncoder, Compression};
+        use flate2::{Compression, write::ZlibEncoder};
         use std::io::Write;
 
         let mut e = ZlibEncoder::new(Vec::new(), Compression::best());

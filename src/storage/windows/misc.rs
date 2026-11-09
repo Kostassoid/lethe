@@ -5,10 +5,10 @@ use winapi::um::handleapi::CloseHandle;
 use winapi::um::processthreadsapi::GetCurrentProcess;
 use winapi::um::processthreadsapi::OpenProcessToken;
 use winapi::um::securitybaseapi::GetTokenInformation;
-use winapi::um::winnt::TokenElevation;
 use winapi::um::winnt::HANDLE;
 use winapi::um::winnt::TOKEN_ELEVATION;
 use winapi::um::winnt::TOKEN_QUERY;
+use winapi::um::winnt::TokenElevation;
 
 pub fn is_elevated() -> bool {
     let mut result = false;

@@ -13,8 +13,8 @@ use winapi::um::winioctl::GUID_DEVINTERFACE_DISK;
 use winapi::um::winnt::{PVOID, WCHAR};
 use winapi::um::{fileapi, ioapiset, winioctl};
 
-use windows::access::*;
 use crate::storage::*;
+use windows::access::*;
 
 #[repr(align(64))]
 #[derive(Debug, Clone, Copy)]
@@ -196,16 +196,16 @@ impl Iterator for DiskDeviceEnumerator {
             )
         };
 
-        Some(DeviceFile::open(interface_details.path().as_str(), false)
-            .and_then(|d| get_device_number(&d))
-            .and_then(PhysicalDrive::from_device_number)
-            .and_then(|p| p.describe(&self.volumes))
-            .unwrap_or(
-                StorageRef {
+        Some(
+            DeviceFile::open(interface_details.path().as_str(), false)
+                .and_then(|d| get_device_number(&d))
+                .and_then(PhysicalDrive::from_device_number)
+                .and_then(|p| p.describe(&self.volumes))
+                .unwrap_or(StorageRef {
                     id: interface_details.path().to_string(),
                     readiness: StorageReadiness::Locked,
                     children: vec![],
-                })
+                }),
         )
     }
 }
@@ -335,8 +335,7 @@ fn get_drive_layout(device: &DeviceFile) -> Result<Layout> {
 }
 
 fn get_volume_extents(device: &DeviceFile) -> Result<Vec<VolumeExtent>> {
-    const EXTENTS_BUFFER_SIZE: usize =
-        16 + size_of::<winioctl::VOLUME_DISK_EXTENTS>() * 32;
+    const EXTENTS_BUFFER_SIZE: usize = 16 + size_of::<winioctl::VOLUME_DISK_EXTENTS>() * 32;
     let mut extents_buffer = FixedAlignedBuffer::<EXTENTS_BUFFER_SIZE>([0u8; EXTENTS_BUFFER_SIZE]);
     let mut bytes: DWORD = 0;
     unsafe {
@@ -354,8 +353,7 @@ fn get_volume_extents(device: &DeviceFile) -> Result<Vec<VolumeExtent>> {
             return Err(io::Error::last_os_error()).context("Unable to get volume extents.");
         }
 
-        let extents: &winioctl::VOLUME_DISK_EXTENTS =
-            mem::transmute(&extents_buffer as *const _);
+        let extents: &winioctl::VOLUME_DISK_EXTENTS = mem::transmute(&extents_buffer as *const _);
 
         let mut r: Vec<VolumeExtent> = Vec::new();
         let ex = slice::from_raw_parts(

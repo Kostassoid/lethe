@@ -5,15 +5,11 @@ extern crate anyhow;
 use anyhow::{Context, Result};
 
 extern crate clap;
-use clap::{value_parser, Arg, ArgAction, Command};
+use clap::{Arg, ArgAction, Command, value_parser};
 
 #[macro_use]
 extern crate prettytable;
-use prettytable::{format, Table};
-
-#[cfg(target_os = "macos")]
-#[macro_use]
-extern crate serde_derive;
+use prettytable::{Table, format};
 
 #[cfg(target_os = "macos")]
 extern crate plist;
@@ -153,8 +149,7 @@ fn main() -> Result<()> {
 
             let format_device = |tt: &mut Table, x: &StorageRef, level: usize| {
                 match x.readiness {
-                    StorageReadiness::Ready(ref details) =>
-                        tt.add_row(row![
+                    StorageReadiness::Ready(ref details) => tt.add_row(row![
                         style(format!("{}{}", " ".repeat(level * 2), &x.id)).bold(),
                         style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
                         HumanBytes(details.size),
@@ -162,8 +157,7 @@ fn main() -> Result<()> {
                         (&details.label).as_ref().unwrap_or(&"".to_string()),
                         (&details.mount_point).as_ref().unwrap_or(&"".to_string()),
                     ]),
-                    StorageReadiness::Locked =>
-                        tt.add_row(row![
+                    StorageReadiness::Locked => tt.add_row(row![
                         style(format!("{}{}", " ".repeat(level * 2), &x.id)).bold(),
                         style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
                         HumanBytes(0),
@@ -176,7 +170,9 @@ fn main() -> Result<()> {
 
             let devices = storage_repo.devices();
             if devices.is_empty() {
-                eprintln!("No devices found! Are you running the application with root/administrator permissions?");
+                eprintln!(
+                    "No devices found! Are you running the application with root/administrator permissions?"
+                );
                 std::process::exit(1);
             }
 
@@ -196,8 +192,9 @@ fn main() -> Result<()> {
                 .find_by_id(device_id)
                 .ok_or(anyhow!("Unknown device {}", device_id))?;
 
-            let StorageReadiness::Ready(device_details) = &device.readiness
-            else { Err(anyhow!("Device {} is locked.", device_id))? };
+            let StorageReadiness::Ready(device_details) = &device.readiness else {
+                Err(anyhow!("Device {} is locked.", device_id))?
+            };
 
             let scheme_id = cmd.get_one::<String>("scheme").unwrap();
             let scheme = schemes
@@ -226,7 +223,12 @@ fn main() -> Result<()> {
                 .get_one::<u32>("retries")
                 .ok_or(anyhow!("Invalid retries number value"))?;
 
-            let plan = WipePlan::from(scheme.clone(), verification, offset..device_details.size, block_size)?;
+            let plan = WipePlan::from(
+                scheme.clone(),
+                verification,
+                offset..device_details.size,
+                block_size,
+            )?;
 
             let session = frontend.wipe_session(&device.id, cmd.get_flag("yes"));
 

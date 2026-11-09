@@ -23,7 +23,12 @@ pub struct WipePlan {
 }
 
 impl WipePlan {
-    pub fn from(scheme: Scheme, verification: Verification, range: Range<u64>, block_size: usize) -> Result<WipePlan> {
+    pub fn from(
+        scheme: Scheme,
+        verification: Verification,
+        range: Range<u64>,
+        block_size: usize,
+    ) -> Result<WipePlan> {
         if range.end / block_size as u64 > 1 << 32 {
             Err(anyhow!(
                 "Number of blocks in this device is more than 2^32. Try using a bigger block size."
@@ -36,24 +41,35 @@ impl WipePlan {
         let corrected_offset = (range.start / block_size as u64) * block_size as u64;
         let range = corrected_offset..range.end;
 
-        let mut steps = vec!();
+        let mut steps = vec![];
         let total_stages = scheme.stages.len();
 
         for (i, s) in scheme.stages.iter().enumerate() {
             steps.push(Step::Write(i));
 
             match verification {
-                Verification::No => {},
+                Verification::No => {}
                 Verification::Last(_) if i + 1 == total_stages => steps.push(Step::Verify(i)),
                 Verification::All(_) => steps.push(Step::Verify(i)),
                 _ => panic!("unknown verification {}", verification),
             };
         }
 
-        Ok(WipePlan{ scheme, steps, range, block_size, verification })
+        Ok(WipePlan {
+            scheme,
+            steps,
+            range,
+            block_size,
+            verification,
+        })
     }
 
-    pub fn execute(self, storage: Box<dyn StorageAccess>, event_handler: Box<dyn WipeEventHandler>, retries: u32) -> Result<()> {
+    pub fn execute(
+        self,
+        storage: Box<dyn StorageAccess>,
+        event_handler: Box<dyn WipeEventHandler>,
+        retries: u32,
+    ) -> Result<()> {
         WipeSession::new(self, storage, event_handler, retries).run()
     }
 
@@ -74,6 +90,6 @@ mod test {
             stages: vec![Stage::zero()],
         };
 
-        assert!(WipePlan::from(scheme, Verification::No, 0..1<<40, 4).is_err());
+        assert!(WipePlan::from(scheme, Verification::No, 0..1 << 40, 4).is_err());
     }
 }

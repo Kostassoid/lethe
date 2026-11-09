@@ -1,6 +1,7 @@
 use ::nix::*;
 use anyhow::{Context, Result};
 use plist;
+use serde::Deserialize;
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::*;
 use std::path::{Path, PathBuf};
