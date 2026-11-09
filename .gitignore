@@ -3,5 +3,7 @@
 /.idea
 *.iml
 /.vagrant
+/testing/.cache/
 /testing/*.vdi
+/testing/*.qcow2
 *.log

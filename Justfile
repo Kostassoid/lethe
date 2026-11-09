@@ -54,6 +54,46 @@ devices:
 wipe device scheme="zero" verify="no" blocksize="128k" *args:
     cargo run --locked -- wipe --scheme {{scheme}} --verify {{verify}} --blocksize {{blocksize}} {{args}} {{device}}
 
+# Install the Vagrant QEMU provider plugin (run once)
+vm-setup:
+    vagrant plugin install vagrant-qemu
+
+# Show the state of the test VMs
+vm-status:
+    vagrant status
+
+# Start a test VM: linux-x64, linux-arm64, windows-x64 or windows-arm64
+vm-up platform="linux-x64":
+    vagrant up {{platform}} --provider=qemu
+
+# Open a shell in a test VM
+vm-ssh platform="linux-x64":
+    vagrant ssh {{platform}}
+
+# Run the integration tests inside a Linux test VM
+vm-test-linux platform="linux-x64":
+    vagrant ssh {{platform}} -c "cd ~/lethe && bash testing/run-tests.sh"
+
+# Run the integration tests inside a Windows test VM
+vm-test-windows platform="windows-x64":
+    vagrant ssh {{platform}} -c "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/vagrant/lethe/testing/run-tests.ps1"
+
+# Stop and delete one test VM
+vm-destroy platform="linux-x64":
+    vagrant destroy -f {{platform}}
+
+# Stop and delete all test VMs
+vm-destroy-all:
+    vagrant destroy -f
+
+# Run integration tests on a macOS/Linux host (set LETHE_TEST_DEVICE)
+test-integration:
+    bash testing/run-tests.sh
+
+# Run integration tests on a Windows host (set LETHE_TEST_DEVICE)
+test-integration-win:
+    powershell -NoProfile -ExecutionPolicy Bypass -File testing/run-tests.ps1
+
 # Verify cargo-dist configuration is up to date
 dist-check:
     dist generate --check

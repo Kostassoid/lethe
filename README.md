@@ -81,6 +81,45 @@ lethe help wipe
 Note that `lethe` operates on a low level and will require a root/administrator access (e.g. `sudo`) to work with any
 real drives.
 
+## Integration testing
+
+The `Vagrantfile` provisions disposable QEMU VMs with an extra 1 GiB scratch disk (`lethe_test`) that the integration
+tests wipe. The host needs [Vagrant](https://developer.hashicorp.com/vagrant), [QEMU](https://www.qemu.org/) and the
+[`vagrant-qemu`](https://github.com/ppggff/vagrant-qemu) plugin:
+
+```sh
+vagrant plugin install vagrant-qemu
+```
+
+Supported machines:
+
+| Machine        | Guest                     | Notes                                                        |
+|----------------|---------------------------|--------------------------------------------------------------|
+| `linux-x64`    | Ubuntu 24.04 x86-64       | Native KVM/WHV/HVF acceleration where available              |
+| `linux-arm64`  | Ubuntu 24.04 ARM64        | TCG emulation on non-ARM hosts                               |
+| `windows-x64`  | Windows Server 2025 x86-64| Builds with the Rust GNU toolchain inside the VM             |
+| `windows-arm64`| Windows ARM64             | Requires `LETHE_WINDOWS_ARM64_BOX`; no public QEMU box exists|
+
+macOS cannot be run as a QEMU guest: Apple only allows macOS virtualization on Apple hardware, and no QEMU/libvirt
+Vagrant box is published. Run the integration tests natively on a Mac instead.
+
+Typical workflow:
+
+```sh
+just vm-up linux-x64
+just vm-test-linux linux-x64
+just vm-destroy linux-x64
+```
+
+Use `just vm-test-windows <machine>` for Windows guests. The tests build the current working tree inside the VM, wipe
+the scratch disk with the `zero` scheme using full verification, check the result independently, then repeat with the
+`random` scheme. `testing/run-tests.sh` and
+`testing/run-tests.ps1` can also be run directly on a macOS/Windows host when `LETHE_TEST_DEVICE` points at a dedicated
+scratch disk. Auto-detection of the scratch disk is only enabled inside the provisioned test VMs.
+
+The source archive sent to the VMs is generated from the working tree (excluding `.git`, `target`, `.vagrant` and
+`testing/.cache`). Set `LETHE_SKIP_SOURCE_ARCHIVE=1` to reuse the existing archive.
+
 ## Benchmarks
 
 ### macOS
