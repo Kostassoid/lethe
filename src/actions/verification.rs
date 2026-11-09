@@ -1,29 +1,43 @@
-use anyhow::Result;
-use std::cmp::max;
-use std::fmt::{Display, Formatter};
+use std::fmt::{self, Display, Formatter};
+use std::ops::Range;
 
+use anyhow::{Result, anyhow};
+
+/// A percentage in the inclusive range `0..=100`.
 #[derive(Debug, Clone)]
-pub struct Percent {
-    v: f32,
-}
+pub struct Percent(f32);
 
 impl Percent {
     pub fn new(value: f32) -> Result<Percent> {
-        if !(0f32..=100f32).contains(&value) {
-            Err(anyhow!(
-                "Percent value {} is outside of range 0..100",
-                value
-            ))
+        if (0f32..=100f32).contains(&value) {
+            Ok(Percent(value))
         } else {
-            Ok(Percent { v: value })
+            Err(anyhow!("Percent value {value} is outside of range 0..100"))
         }
     }
 
+    /// Returns `value` scaled down to this percentage, rounded down.
+    ///
+    /// Multiplying before dividing keeps common round percentages exact in floating
+    /// point; the result never exceeds `value`, and storage sizes are far below the
+    /// range where `f64` loses integer precision.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     pub fn apply_to(&self, value: u64) -> u64 {
-        ((value as f32) * (self.v * 0.01)).floor() as u64
+        (value as f64 * f64::from(self.0) / 100.0).floor() as u64
     }
 }
 
+impl Display for Percent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// When the written data should be verified, and how much of it.
 #[derive(Debug, Clone)]
 pub enum Verification {
     No,
@@ -32,65 +46,71 @@ pub enum Verification {
 }
 
 impl Display for Verification {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Verification::No => f.write_str("No"),
-            Verification::Last(c) => f.write_str(&format!("Last stage only ({}% coverage)", c.v)),
-            Verification::All(c) => f.write_str(&format!("After each stage ({}% coverage)", c.v)),
+            Verification::Last(c) => write!(f, "Last stage only ({c}% coverage)"),
+            Verification::All(c) => write!(f, "After each stage ({c}% coverage)"),
         }
     }
 }
 
 impl Verification {
-    pub fn build_map(&self, total: u64) -> CoverageFilter {
+    /// Returns the areas of the storage that a verification pass has to cover.
+    pub fn coverage(&self, range: &Range<u64>, block_size: usize) -> Coverage {
         match self {
-            Verification::No => CoverageFilter::empty(),
-            Verification::Last(c) => CoverageFilter::from(total, c),
-            Verification::All(c) => CoverageFilter::from(total, c),
+            Verification::No => Coverage::none(),
+            Verification::Last(percent) | Verification::All(percent) => {
+                Coverage::from_percent(range, block_size, percent)
+            }
         }
     }
 }
 
+/// The areas of a storage device that a verification pass covers, as absolute byte ranges.
+///
+/// With partial coverage the beginning and the end of the wiped area are sampled, since
+/// those regions are the most likely to reveal an incomplete wipe. Sampled areas are
+/// rounded outward to whole blocks, as verification always operates on full blocks.
 #[derive(Debug, Clone)]
-pub struct CoverageFilter {
-    low: u64,
-    high: u64,
-    max: u64,
+pub struct Coverage {
+    spans: Vec<Range<u64>>,
 }
 
-impl CoverageFilter {
-    pub fn empty() -> CoverageFilter {
-        CoverageFilter {
-            low: 0,
-            high: 0,
-            max: 0,
-        }
+impl Coverage {
+    fn none() -> Coverage {
+        Coverage { spans: Vec::new() }
     }
 
-    fn from(total: u64, ratio: &Percent) -> CoverageFilter {
-        let coverage_total = max(ratio.apply_to(total), 2);
+    fn from_percent(range: &Range<u64>, block_size: usize, percent: &Percent) -> Coverage {
+        let block = block_size as u64;
+        let total = range.end - range.start;
 
-        CoverageFilter {
-            low: coverage_total / 2,
-            high: (total - coverage_total / 2),
-            max: total,
-        }
-    }
+        // Always sample at least the first and the last byte, even with 0% coverage.
+        let covered = percent.apply_to(total).max(2);
+        let half = covered / 2;
 
-    pub fn covered_size(&self) -> u64 {
-        self.low + (self.max - self.high)
-    }
-
-    fn should_verify(&self, at: u64) -> bool {
-        at < self.low || (at >= self.high && at < self.max)
-    }
-
-    fn next_verifiable(&self, starting_at: u64) -> Option<u64> {
-        if self.should_verify(starting_at) {
-            return Some(starting_at);
+        if covered >= total {
+            return Coverage {
+                spans: vec![range.clone()],
+            };
         }
 
-        Some(self.high).filter(|h| starting_at < *h)
+        let prefix_end = ((range.start + half).div_ceil(block) * block).min(range.end);
+        let suffix_start = (range.end - half) / block * block;
+
+        let spans = if prefix_end >= suffix_start {
+            // The sampled regions touch or overlap - verify everything.
+            vec![range.clone()]
+        } else {
+            vec![range.start..prefix_end, suffix_start..range.end]
+        };
+
+        Coverage { spans }
+    }
+
+    pub fn spans(&self) -> &[Range<u64>] {
+        &self.spans
     }
 }
 
@@ -119,40 +139,53 @@ mod test {
     }
 
     #[test]
-    fn test_coverage_distribution_from_percents() {
-        let c = CoverageFilter::from(8192, &Percent::new(20f32).unwrap());
-        assert_eq!(819, c.low);
-        assert_eq!(7373, c.high);
-        assert_eq!(8192, c.max);
+    fn test_full_coverage() {
+        let range = 0..100_000u64;
+        let c = Coverage::from_percent(&range, 8192, &Percent::new(100.0).unwrap());
 
-        assert!(c.should_verify(0u64));
-        assert!(c.should_verify(256u64));
-        assert!(!c.should_verify(4096u64));
-        assert!(c.should_verify(7900u64));
-        assert!(c.should_verify(8191u64));
-        assert!(!c.should_verify(8192u64));
-        assert!(!c.should_verify(8193u64));
+        assert_eq!(c.spans(), &[range]);
     }
 
     #[test]
-    fn test_coverage_distribution_from_0() {
-        let c = CoverageFilter::from(8192, &Percent::new(0f32).unwrap());
-        assert_eq!(1, c.low);
-        assert_eq!(8191, c.high);
-        assert_eq!(8192, c.max);
+    fn test_partial_coverage_samples_both_ends() {
+        let range = 0..100_000u64;
+        let c = Coverage::from_percent(&range, 8192, &Percent::new(30.0).unwrap());
 
-        assert!(c.should_verify(0u64));
-        assert!(!c.should_verify(1u64));
-        assert!(!c.should_verify(8190u64));
-        assert!(c.should_verify(8191u64));
-        assert!(!c.should_verify(8192u64));
-        assert!(!c.should_verify(8193u64));
+        // 30% of 100000 is 30000; 15000 bytes from each end, rounded outward to blocks.
+        assert_eq!(c.spans(), &[0..16_384u64, 81_920u64..100_000u64]);
     }
+
     #[test]
-    fn test_coverage_distribution_from_empty() {
-        let c = CoverageFilter::empty();
-        assert!(!c.should_verify(0u64));
-        assert!(!c.should_verify(1u64));
-        assert!(!c.should_verify(1024u64));
+    fn test_partial_coverage_with_offset_range() {
+        let range = 65_536u64..1_000_000;
+        let c = Coverage::from_percent(&range, 32768, &Percent::new(30.0).unwrap());
+
+        // 30% of 934464 is 280339; ~140169 bytes from each end, rounded outward to blocks.
+        assert_eq!(
+            c.spans(),
+            &[65_536u64..229_376u64, 851_968u64..1_000_000u64]
+        );
+    }
+
+    #[test]
+    fn test_zero_coverage_still_samples_first_and_last_blocks() {
+        let range = 0..100_000u64;
+        let c = Coverage::from_percent(&range, 8192, &Percent::new(0.0).unwrap());
+
+        assert_eq!(c.spans(), &[0..8192u64, 98_304u64..100_000u64]);
+    }
+
+    #[test]
+    fn test_sampling_regions_overlap_on_small_areas() {
+        let range = 0..8192u64;
+        let c = Coverage::from_percent(&range, 8192, &Percent::new(0.0).unwrap());
+
+        assert_eq!(c.spans(), &[range]);
+    }
+
+    #[test]
+    fn test_no_verification_has_no_coverage() {
+        let v = Verification::No;
+        assert_eq!(v.coverage(&(0..100u64), 512).spans().len(), 0);
     }
 }

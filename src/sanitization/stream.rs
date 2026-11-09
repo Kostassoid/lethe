@@ -1,31 +1,53 @@
-use rand::Rng;
-use rand::SeedableRng;
-pub use streaming_iterator::StreamingIterator;
+use std::ops::Range;
 
-use crate::sanitization::mem::*;
+use rand::{Rng, SeedableRng};
+use streaming_iterator::StreamingIterator;
+
+use crate::sanitization::mem::AlignedBuffer;
 use crate::sanitization::scheme::Stage;
 
 const RANDOM_SEED_SIZE: usize = 32;
+/// Extra bytes generated per chunk so that random data can be reproduced starting at any
+/// byte position, even a non-word-aligned one.
+const RANDOM_ALIGN_SLACK: usize = 3;
 type RandomGenerator = rand_chacha::ChaCha8Rng;
 
-#[derive(Debug)]
-enum StreamGenerator {
-    Fill,
-    Random { rng: RandomGenerator },
-    Incremental { step: usize, position: u64 },
-}
-
+/// Produces the sanitization pattern of a single [`Stage`], chunk by chunk, over a fixed
+/// area of the storage.
+///
+/// The stream is deterministic: for any given seed, the bytes generated for a device
+/// position never change, regardless of where iteration started. This is what makes
+/// verification of random passes possible.
+///
+/// Chunks are aligned to the absolute block grid of the device; the final chunk of the
+/// area may be shorter than the block size.
 pub struct Stream {
     generator: StreamGenerator,
-    total_size: u64,
-    pub position: u64,
-    last_position: u64,
     buf: AlignedBuffer,
+    /// Absolute device position where the stream stops (exclusive).
+    end: u64,
+    /// Absolute device position of the next chunk to generate.
+    next: u64,
+    /// Absolute device positions covered by the current chunk in `buf`.
+    chunk: Range<u64>,
+}
+
+#[derive(Debug)]
+#[expect(clippy::large_enum_variant)] // a single generator per stream; the RNG dominates
+enum StreamGenerator {
+    /// Buffer is filled once with a constant and never changes.
+    Fill,
+    Random {
+        rng: RandomGenerator,
+    },
+    Incremental {
+        step: usize,
+    },
 }
 
 impl Stream {
-    pub fn from(stage: &Stage, total_size: u64, block_size: usize) -> Self {
-        let mut buf = AlignedBuffer::new(block_size, block_size);
+    pub fn new(stage: &Stage, area: Range<u64>, block_size: usize) -> Self {
+        let mut buf = AlignedBuffer::new(block_size + RANDOM_ALIGN_SLACK, block_size);
 
         let generator = match stage {
             Stage::Fill { value } => {
@@ -33,47 +55,51 @@ impl Stream {
                 StreamGenerator::Fill
             }
             Stage::Random => {
-                let mut seed: [u8; RANDOM_SEED_SIZE] = [0; RANDOM_SEED_SIZE];
-                rand::rng().fill_bytes(&mut seed[..]);
-                let mut rng = RandomGenerator::from_seed(seed);
-                rng.set_word_pos(0);
-                StreamGenerator::Random { rng }
+                let mut seed = [0u8; RANDOM_SEED_SIZE];
+                rand::rng().fill_bytes(&mut seed);
+                StreamGenerator::Random {
+                    rng: RandomGenerator::from_seed(seed),
+                }
             }
-            Stage::Incremental { step } => StreamGenerator::Incremental {
-                step: *step,
-                position: 0,
-            },
+            Stage::Incremental { step } => StreamGenerator::Incremental { step: *step },
         };
 
         Stream {
             generator,
-            total_size,
-            position: 0,
-            last_position: 0,
             buf,
+            end: area.end,
+            next: area.start,
+            chunk: area.start..area.start,
         }
     }
 
-    pub fn eof(&self) -> bool {
-        self.position >= self.total_size && self.position == self.last_position
-    }
-
+    /// Repositions the stream so that the next chunk starts at `position`.
     pub fn seek(&mut self, position: u64) {
-        self.position = position;
-        if self.position > self.total_size {
-            self.position = self.total_size;
-        }
+        let position = position.min(self.end);
+        self.next = position;
+        self.chunk = position..position;
+    }
 
-        self.last_position = self.position;
-
+    fn generate(&mut self) {
         match &mut self.generator {
-            StreamGenerator::Fill => (),
-            StreamGenerator::Random { rng } => rng.set_word_pos((position >> 2) as u128),
-            StreamGenerator::Incremental {
-                step: _step,
-                position: gen_position,
-            } => *gen_position = position,
-        };
+            StreamGenerator::Fill => {}
+            StreamGenerator::Random { rng } => {
+                // ChaCha word positions address 4-byte words; regenerate from the word
+                // containing the chunk start, in case it is not word-aligned.
+                rng.set_word_pos(u128::from(self.chunk.start / 4));
+                rng.fill_bytes(self.buf.as_mut_slice());
+            }
+            StreamGenerator::Incremental { step } => {
+                let block_number = self.chunk.start / *step as u64;
+                let value = u8::try_from(block_number % 256).expect("value is modulo 256");
+                self.buf.fill(value);
+            }
+        }
+    }
+
+    /// Offset of the chunk data within the buffer.
+    fn chunk_offset(&self) -> usize {
+        (self.chunk.start % 4) as usize
     }
 }
 
@@ -81,39 +107,35 @@ impl StreamingIterator for Stream {
     type Item = [u8];
 
     fn advance(&mut self) {
-        if self.eof() {
+        if self.next >= self.end {
+            self.chunk = self.end..self.end;
             return;
         }
 
-        match &mut self.generator {
-            StreamGenerator::Fill => (),
-            StreamGenerator::Random { rng } => rng.fill_bytes(self.buf.as_mut_slice()),
-            StreamGenerator::Incremental { step, position } => {
-                self.buf.fill(((*position / *step as u64) % 256) as u8);
-                *position = *position + *step as u64;
-            }
-        };
+        let len = (self.end - self.next).min(self.buf.len() as u64 - RANDOM_ALIGN_SLACK as u64);
+        self.chunk = self.next..self.next + len;
+        self.next = self.chunk.end;
 
-        self.last_position = self.position;
-
-        self.position += self.buf.len() as u64;
-        if self.position > self.total_size {
-            self.position = self.total_size;
-        }
+        self.generate();
     }
 
     fn get(&self) -> Option<&Self::Item> {
-        if self.eof() {
+        if self.chunk.is_empty() {
             None
         } else {
-            let chunk_size = self.position - self.last_position;
-            Some(&self.buf.as_slice()[..chunk_size as usize])
+            let offset = self.chunk_offset();
+            let len = usize::try_from(self.chunk.end - self.chunk.start)
+                .expect("chunk length exceeds addressable size");
+            Some(&self.buf.as_slice()[offset..offset + len])
         }
     }
 }
 
 #[cfg(test)]
 mod test {
+    // Test sizes are tiny, so the narrowing casts below are always lossless.
+    #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
     use super::*;
 
     const TEST_SIZE: u64 = 10245;
@@ -122,7 +144,7 @@ mod test {
     #[test]
     fn test_stage_fill_behaves() {
         let mut data1 = create_test_vec();
-        let mut stream = Stream::from(&Stage::constant(0x33), TEST_SIZE, TEST_BLOCK);
+        let mut stream = Stream::new(&Stage::constant(0x33), 0..TEST_SIZE, TEST_BLOCK);
 
         fill(&mut data1, &mut stream);
 
@@ -137,7 +159,7 @@ mod test {
     #[test]
     fn test_stage_random_behaves() {
         let mut data1 = create_test_vec();
-        let mut stream = Stream::from(&Stage::random(), TEST_SIZE, TEST_BLOCK);
+        let mut stream = Stream::new(&Stage::random(), 0..TEST_SIZE, TEST_BLOCK);
 
         fill(&mut data1, &mut stream);
 
@@ -156,7 +178,7 @@ mod test {
 
         assert_eq!(data1, data2);
 
-        let mut stream3 = Stream::from(&Stage::random(), TEST_SIZE, TEST_BLOCK);
+        let mut stream3 = Stream::new(&Stage::random(), 0..TEST_SIZE, TEST_BLOCK);
         let mut data3 = create_test_vec();
         fill(&mut data3, &mut stream3);
 
@@ -164,9 +186,29 @@ mod test {
     }
 
     #[test]
+    fn test_stage_random_is_seekable() {
+        let mut stream = Stream::new(&Stage::random(), 0..TEST_SIZE, TEST_BLOCK);
+        let mut from_start = create_test_vec();
+        fill(&mut from_start, &mut stream);
+
+        let mut from_middle = create_test_vec();
+        stream.seek(TEST_SIZE / 2);
+        let offset = TEST_SIZE as usize / 2;
+        let mut position = offset;
+        while let Some(chunk) = stream.next() {
+            let chunk_size = chunk.len();
+            from_middle[position..position + chunk_size].clone_from_slice(chunk);
+            position += chunk_size;
+        }
+
+        assert_eq!(position, TEST_SIZE as usize);
+        assert_eq!(&from_middle[offset..], &from_start[offset..]);
+    }
+
+    #[test]
     fn test_stage_random_entropy() {
         let mut data = create_test_vec();
-        let mut stage = Stream::from(&Stage::random(), TEST_SIZE, TEST_BLOCK);
+        let mut stage = Stream::new(&Stage::random(), 0..TEST_SIZE, TEST_BLOCK);
         fill(&mut data, &mut stage);
 
         let source_entropy = calculate_entropy(create_test_vec().as_ref());
@@ -179,7 +221,7 @@ mod test {
     #[test]
     fn test_stage_incremental_behaves() {
         let mut data1 = create_test_vec();
-        let mut stream = Stream::from(&Stage::incremental(TEST_BLOCK), TEST_SIZE, TEST_BLOCK);
+        let mut stream = Stream::new(&Stage::incremental(TEST_BLOCK), 0..TEST_SIZE, TEST_BLOCK);
 
         fill(&mut data1, &mut stream);
 
@@ -204,7 +246,7 @@ mod test {
         (0..TEST_SIZE).map(|x| (x % 256) as u8).collect()
     }
 
-    fn fill(v: &mut Vec<u8>, stream: &mut Stream) -> () {
+    fn fill(v: &mut [u8], stream: &mut Stream) {
         let mut position = 0;
         stream.seek(0);
 

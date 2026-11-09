@@ -1,32 +1,43 @@
-use std::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use std::ptr::NonNull;
 
+/// A heap-allocated byte buffer aligned to a chosen boundary.
+///
+/// Alignment beyond what `Vec<u8>` guarantees is required for direct (unbuffered) I/O:
+/// the kernel rejects transfers through buffers whose addresses are not aligned to the
+/// storage device's logical block size.
 pub(crate) struct AlignedBuffer {
-    ptr: *mut u8,
-    layout: std::alloc::Layout,
+    ptr: NonNull<u8>,
+    layout: Layout,
 }
 
 impl AlignedBuffer {
     pub(crate) fn new(size: usize, align: usize) -> Self {
-        unsafe {
-            let buf_layout = std::alloc::Layout::from_size_align_unchecked(size, align);
-            let buf_ptr = std::alloc::alloc(buf_layout);
-            AlignedBuffer {
-                ptr: buf_ptr,
-                layout: buf_layout,
-            }
-        }
+        assert!(size > 0, "buffer size must be non-zero");
+        let layout = Layout::from_size_align(size, align).expect("invalid buffer layout");
+
+        // SAFETY: `layout` was produced by the checked constructor, so it has a non-zero
+        // size and a valid (power-of-two) alignment.
+        let ptr = unsafe { alloc(layout) };
+        let ptr = NonNull::new(ptr).unwrap_or_else(|| handle_alloc_error(layout));
+
+        AlignedBuffer { ptr, layout }
     }
 
-    pub(crate) fn fill(&mut self, value: u8) -> () {
-        unsafe { self.ptr.write_bytes(value, self.layout.size()) }
+    pub(crate) fn fill(&mut self, value: u8) {
+        self.as_mut_slice().fill(value);
     }
 
     pub(crate) fn as_slice(&self) -> &[u8] {
-        unsafe { &*slice_from_raw_parts(self.ptr, self.layout.size()) }
+        // SAFETY: `ptr` is valid for reads of `layout.size()` bytes for the lifetime of
+        // `self`, and `layout.size()` bytes were allocated.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.layout.size()) }
     }
 
     pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { &mut *slice_from_raw_parts_mut(self.ptr, self.layout.size()) }
+        // SAFETY: `ptr` is valid for reads and writes of `layout.size()` bytes for the
+        // lifetime of `self`, and `layout.size()` bytes were allocated.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.layout.size()) }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -36,7 +47,8 @@ impl AlignedBuffer {
 
 impl Drop for AlignedBuffer {
     fn drop(&mut self) {
-        unsafe { std::alloc::dealloc(self.ptr, self.layout) }
+        // SAFETY: `ptr` was allocated with exactly `layout`.
+        unsafe { dealloc(self.ptr.as_ptr(), self.layout) }
     }
 }
 
@@ -52,7 +64,7 @@ mod test {
         let buf = AlignedBuffer::new(size, align);
 
         assert_eq!(buf.as_slice().len(), size);
-        assert_eq!(buf.ptr as usize % align, 0);
+        assert_eq!(buf.ptr.as_ptr() as usize % align, 0);
     }
 
     #[test]

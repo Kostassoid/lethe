@@ -1,14 +1,13 @@
-use ::nix::*;
-use anyhow::{Context, Result};
-use plist;
+use anyhow::{Context, Result, anyhow};
+use nix::ioctl_read;
 use serde::Deserialize;
+use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::storage::*;
-use std::ffi::CString;
+use crate::storage::{StorageDetails, StorageReadiness, StorageRef, StorageType, System};
 
 impl System {
     pub fn enumerate_storage_devices() -> Result<Vec<StorageRef>> {
@@ -27,7 +26,7 @@ pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> Res
 
     unsafe {
         let fd = file.as_raw_fd();
-        nix::libc::fcntl(fd, nix::libc::F_NOCACHE, 1);
+        libc::fcntl(fd, libc::F_NOCACHE, 1);
     }
 
     Ok(file)

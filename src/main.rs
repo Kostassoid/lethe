@@ -1,141 +1,28 @@
 #![recursion_limit = "256"]
 
-#[macro_use]
-extern crate anyhow;
-use anyhow::{Context, Result};
-
-extern crate clap;
-use clap::{Arg, ArgAction, Command, value_parser};
-
-#[macro_use]
-extern crate prettytable;
-use prettytable::{Table, format};
-
-#[cfg(target_os = "macos")]
-extern crate plist;
-
-use ::console::style;
+use anyhow::{Context, Result, anyhow};
+use console::style;
 use indicatif::HumanBytes;
-
-mod storage;
-use storage::*;
-
-mod sanitization;
-use sanitization::*;
+use prettytable::{Table, format, row};
 
 mod actions;
-use actions::*;
-
+mod sanitization;
+mod storage;
 mod ui;
-use ui::*;
 
-const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+use actions::{Percent, Verification, WipePlan};
+use sanitization::SchemeRepo;
+use storage::{StorageDevice, StorageReadiness, StorageRef, System};
+use ui::{args, cli, storage_repo};
 
 fn main() -> Result<()> {
     let schemes = SchemeRepo::default();
-    let scheme_keys: Vec<_> = schemes.all().keys().cloned().collect();
-    let schemes_explanation = cli::ConsoleFrontend::explain_schemes(&schemes);
-
-    let mut app = Command::new("Lethe")
-        .version(VERSION)
-        .author("https://github.com/Kostassoid/lethe")
-        .about("Secure disk wipe")
-        .subcommand_required(true)
-        .arg_required_else_help(true)
-        .subcommand(Command::new("list").about("list available storage devices"))
-        .subcommand(
-            Command::new("wipe")
-                .about("Wipe storage device")
-                .after_help(schemes_explanation)
-                .arg(
-                    Arg::new("device")
-                        .required(true)
-                        .num_args(1)
-                        .index(1)
-                        .help("Storage device ID"),
-                )
-                .arg(
-                    Arg::new("scheme")
-                        .long("scheme")
-                        .short('s')
-                        .num_args(1)
-                        .value_parser(scheme_keys)
-                        .default_value("random2x")
-                        .help("Data sanitization scheme"),
-                )
-                .arg(
-                    Arg::new("verify")
-                        .long("verify")
-                        .short('v')
-                        .num_args(1)
-                        .value_parser(["no", "last", "all"])
-                        .default_value("last")
-                        .help("Verify after completion"),
-                )
-                .arg(
-                    Arg::new("coverage")
-                        .long("coverage")
-                        .short('c')
-                        .help("Verification coverage (in percents)")
-                        .num_args(1)
-                        .value_parser(value_parser!(f32))
-                        .default_value("100.0"),
-                )
-                .arg(
-                    Arg::new("blocksize")
-                        .long("blocksize")
-                        .short('b')
-                        .num_args(1)
-                        .default_value("1m")
-                        .help("Block size"),
-                )
-                .arg(
-                    Arg::new("offset")
-                        .long("offset")
-                        .short('o')
-                        .num_args(1)
-                        .default_value("0")
-                        .help("Starting offset (in bytes)"),
-                )
-                .arg(
-                    Arg::new("retries")
-                        .long("retries")
-                        .short('r')
-                        .num_args(1)
-                        .value_parser(value_parser!(u32))
-                        .default_value("8")
-                        .help("Maximum number of retries"),
-                )
-                .arg(
-                    Arg::new("yes")
-                        .long("yes")
-                        .short('y')
-                        .help("Automatically confirm")
-                        .action(ArgAction::SetTrue),
-                ),
-        );
-
-    let storage_devices = System::enumerate_storage_devices().unwrap_or_else(|err| {
-        eprintln!("Unable to enumerate storage devices. {:#}", err);
-
-        if cfg!(target_os = "linux") {
-            let is_wsl = std::fs::read_to_string("/proc/version")
-                .map(|v| v.contains("Microsoft"))
-                .unwrap_or(false);
-
-            if is_wsl {
-                eprintln!("WSL is not supported.");
-            }
-        }
-
-        std::process::exit(1);
-    });
-    let storage_repo = storage_repo::StorageRepo::from(storage_devices);
-
-    let frontend = cli::ConsoleFrontend::new();
+    let mut app = args::build_command(&schemes);
 
     match app.get_matches_mut().subcommand() {
         Some(("list", _)) => {
+            let storage_repo = enumerate_storage_repo();
+
             let mut t = Table::new();
             t.set_format(*format::consts::FORMAT_CLEAN);
             t.set_titles(row![
@@ -148,18 +35,20 @@ fn main() -> Result<()> {
             ]);
 
             let format_device = |tt: &mut Table, x: &StorageRef, level: usize| {
-                match x.readiness {
-                    StorageReadiness::Ready(ref details) => tt.add_row(row![
-                        style(format!("{}{}", " ".repeat(level * 2), &x.id)).bold(),
-                        style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
+                let short_id = storage_repo.get_short_id(&x.id).map_or("", String::as_str);
+
+                match &x.readiness {
+                    StorageReadiness::Ready(details) => tt.add_row(row![
+                        style(format!("{}{}", " ".repeat(level * 2), x.id)).bold(),
+                        style(short_id).bold(),
                         HumanBytes(details.size),
                         &details.storage_type,
-                        (&details.label).as_ref().unwrap_or(&"".to_string()),
-                        (&details.mount_point).as_ref().unwrap_or(&"".to_string()),
+                        details.label.as_deref().unwrap_or(""),
+                        details.mount_point.as_deref().unwrap_or(""),
                     ]),
                     StorageReadiness::Locked => tt.add_row(row![
-                        style(format!("{}{}", " ".repeat(level * 2), &x.id)).bold(),
-                        style(storage_repo.get_short_id(&x.id).unwrap_or(&"".to_owned())).bold(),
+                        style(format!("{}{}", " ".repeat(level * 2), x.id)).bold(),
+                        style(short_id).bold(),
                         HumanBytes(0),
                         "locked",
                         "locked",
@@ -185,52 +74,53 @@ fn main() -> Result<()> {
             t.printstd();
         }
         Some(("wipe", cmd)) => {
+            let storage_repo = enumerate_storage_repo();
+
             let device_id = cmd
                 .get_one::<String>("device")
-                .ok_or(anyhow!("Invalid device ID"))?;
+                .ok_or_else(|| anyhow!("Invalid device ID"))?;
             let device = storage_repo
                 .find_by_id(device_id)
-                .ok_or(anyhow!("Unknown device {}", device_id))?;
+                .ok_or_else(|| anyhow!("Unknown device {device_id}"))?;
 
             let StorageReadiness::Ready(device_details) = &device.readiness else {
-                Err(anyhow!("Device {} is locked.", device_id))?
+                Err(anyhow!("Device {device_id} is locked."))?
             };
 
             let scheme_id = cmd.get_one::<String>("scheme").unwrap();
             let scheme = schemes
                 .find(scheme_id)
-                .ok_or(anyhow!("Unknown scheme {}", scheme_id))?;
+                .ok_or_else(|| anyhow!("Unknown scheme {scheme_id}"))?;
 
             let coverage_value = cmd.get_one::<f32>("coverage").unwrap();
             let coverage = Percent::new(*coverage_value).context("Invalid coverage argument")?;
 
             let verification = match cmd.get_one::<String>("verify").unwrap().as_str() {
                 "no" => Verification::No,
-                "last" => Verification::Last(coverage),
                 "all" => Verification::All(coverage),
                 _ => Verification::Last(coverage),
             };
 
             let block_size_arg = cmd.get_one::<String>("blocksize").unwrap();
             let block_size = args::parse_block_size(block_size_arg)
-                .context(format!("Invalid blocksize value: {}", block_size_arg))?;
+                .with_context(|| format!("Invalid blocksize value: {block_size_arg}"))?;
 
             let offset_arg = cmd.get_one::<String>("offset").unwrap();
             let offset: u64 = args::parse_bytes(offset_arg)
-                .context(format!("Invalid offset value: {}", offset_arg))?;
+                .with_context(|| format!("Invalid offset value: {offset_arg}"))?;
 
             let retries = cmd
                 .get_one::<u32>("retries")
-                .ok_or(anyhow!("Invalid retries number value"))?;
+                .ok_or_else(|| anyhow!("Invalid retries number value"))?;
 
-            let plan = WipePlan::from(
+            let plan = WipePlan::new(
                 scheme.clone(),
                 verification,
                 offset..device_details.size,
                 block_size,
             )?;
 
-            let session = frontend.wipe_session(&device.id, cmd.get_flag("yes"));
+            let session = cli::wipe_session(&device.id, cmd.get_flag("yes"));
 
             let device_access = device.access()?;
 
@@ -243,4 +133,25 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Discovers storage devices, or exits with a user-facing explanation. Device discovery
+/// requires elevated privileges on most platforms.
+fn enumerate_storage_repo() -> storage_repo::StorageRepo {
+    let storage_devices = System::enumerate_storage_devices().unwrap_or_else(|err| {
+        eprintln!("Unable to enumerate storage devices. {err:#}");
+
+        if cfg!(target_os = "linux") {
+            let is_wsl =
+                std::fs::read_to_string("/proc/version").is_ok_and(|v| v.contains("Microsoft"));
+
+            if is_wsl {
+                eprintln!("WSL is not supported.");
+            }
+        }
+
+        std::process::exit(1);
+    });
+
+    storage_repo::StorageRepo::from(storage_devices)
 }

@@ -1,19 +1,25 @@
 use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::{self, Display, Formatter};
 
 #[derive(Debug, Clone)]
 pub enum Stage {
-    Fill { value: u8 },
+    Fill {
+        value: u8,
+    },
     Random,
-    Incremental { step: usize },
+    /// Fills each `step`-byte block with its own sequential number.
+    #[allow(dead_code)] // part of the stage vocabulary, not used by built-in schemes yet
+    Incremental {
+        step: usize,
+    },
 }
 
 impl Display for Stage {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Stage::Fill { value } => f.write_str(&format!("fill with {:#04X}", value)),
+            Stage::Fill { value } => write!(f, "fill with {value:#04X}"),
             Stage::Random => f.write_str("random fill"),
-            Stage::Incremental { step: _block_size } => f.write_str("incremental fill"),
+            Stage::Incremental { .. } => f.write_str("incremental fill"),
         }
     }
 }
@@ -35,6 +41,7 @@ impl Stage {
         Stage::Random
     }
 
+    #[allow(dead_code)] // part of the stage vocabulary, not used by built-in schemes yet
     pub fn incremental(block_size: usize) -> Stage {
         Stage::Incremental { step: block_size }
     }
@@ -46,16 +53,23 @@ pub struct Scheme {
     pub stages: Vec<Stage>,
 }
 
+/// A catalogue of named sanitization schemes.
 pub struct SchemeRepo {
     schemes: BTreeMap<&'static str, Scheme>,
 }
 
 impl SchemeRepo {
-    pub fn new(schemes: BTreeMap<&'static str, Scheme>) -> SchemeRepo {
-        SchemeRepo { schemes }
+    pub fn all(&self) -> &BTreeMap<&'static str, Scheme> {
+        &self.schemes
     }
 
-    pub fn default() -> SchemeRepo {
+    pub fn find(&self, name: &str) -> Option<&Scheme> {
+        self.schemes.get(name)
+    }
+}
+
+impl Default for SchemeRepo {
+    fn default() -> SchemeRepo {
         let mut schemes = BTreeMap::new();
 
         schemes.insert(
@@ -127,15 +141,7 @@ impl SchemeRepo {
             },
         );
 
-        Self::new(schemes)
-    }
-
-    pub fn all(&self) -> &BTreeMap<&'static str, Scheme> {
-        &self.schemes
-    }
-
-    pub fn find(&self, name: &str) -> Option<&Scheme> {
-        self.schemes.get(name)
+        SchemeRepo { schemes }
     }
 }
 

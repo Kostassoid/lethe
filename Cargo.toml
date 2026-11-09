@@ -18,19 +18,21 @@ clap = "4.6"
 console = "0.16"
 indicatif = "0.18"
 libc = "0.2"
-plist = "1"
 prettytable-rs = "0.10"
 rand = "0.10"
 rand_chacha = "0.10"
 regex = "1"
 roaring = "0.12"
-serde = { version = "1", features = ["derive"] }
 streaming-iterator = "0.1"
 thiserror = "2"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["ioctl"] }
 sysfs-class = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
+serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 widestring = "1"

@@ -1,13 +1,12 @@
-use crate::storage::*;
-use ::nix::*;
 use anyhow::{Context, Result};
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
-use std::io::BufRead;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::os::unix::io::*;
 use std::path::Path;
 use sysfs_class::{Block, SysClass};
+
+use crate::storage::{StorageDetails, StorageReadiness, StorageRef, StorageType, System};
 
 const SYSFS_BLOCK_SIZE: u64 = 512;
 

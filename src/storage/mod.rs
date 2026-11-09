@@ -1,7 +1,5 @@
 #[cfg(unix)]
 mod nix;
-#[cfg(unix)]
-pub use crate::storage::nix::*;
 
 #[cfg(windows)]
 mod windows;
@@ -20,6 +18,9 @@ pub enum StorageError {
 #[derive(Debug)]
 pub enum StorageReadiness {
     Ready(StorageDetails),
+    /// A device that cannot be accessed, e.g. because it is held by another process.
+    /// Only Windows reports this state currently.
+    #[allow(dead_code)] // not constructed on unix platforms
     Locked,
 }
 
@@ -34,17 +35,19 @@ pub trait StorageDevice {
     fn access(&self) -> Result<Box<dyn StorageAccess>>;
 }
 
+/// Random-access I/O over a storage device.
 pub trait StorageAccess {
-    fn position(&mut self) -> Result<u64>;
     fn seek(&mut self, position: u64) -> Result<u64>;
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize>;
     fn write(&mut self, data: &[u8]) -> Result<()>;
     fn flush(&mut self) -> Result<()>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 #[allow(dead_code)]
+#[expect(clippy::upper_case_acronyms)] // `CD`, `RAID` are storage industry terms
 pub enum StorageType {
+    #[default]
     Unknown,
     File,
     Partition,
@@ -58,29 +61,21 @@ pub enum StorageType {
 
 impl std::fmt::Display for StorageType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StorageDetails {
     pub size: u64,
+    /// Logical block size of the device, as reported by the platform. Reserved for
+    /// aligning direct I/O transfers; not consumed by the wipe logic yet.
+    #[allow(dead_code)]
     pub block_size: usize,
     pub storage_type: StorageType,
     pub mount_point: Option<String>,
     pub label: Option<String>,
 }
 
-impl Default for StorageDetails {
-    fn default() -> Self {
-        StorageDetails {
-            size: 0,
-            block_size: 0,
-            storage_type: StorageType::Unknown,
-            mount_point: None,
-            label: None,
-        }
-    }
-}
-
-pub struct System {}
+/// Entry point for platform-specific storage device discovery.
+pub struct System;

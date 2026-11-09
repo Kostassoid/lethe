@@ -1,8 +1,98 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
+use clap::{Arg, ArgAction, Command, value_parser};
 use regex::Regex;
 
+use crate::sanitization::SchemeRepo;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Builds the command-line interface of the application.
+pub fn build_command(schemes: &SchemeRepo) -> Command {
+    let scheme_keys: Vec<_> = schemes.all().keys().copied().collect();
+    let schemes_explanation = crate::ui::cli::explain_schemes(schemes);
+
+    Command::new("Lethe")
+        .version(VERSION)
+        .author("https://github.com/Kostassoid/lethe")
+        .about("Secure disk wipe")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(Command::new("list").about("list available storage devices"))
+        .subcommand(
+            Command::new("wipe")
+                .about("Wipe storage device")
+                .after_help(schemes_explanation)
+                .arg(
+                    Arg::new("device")
+                        .required(true)
+                        .num_args(1)
+                        .index(1)
+                        .help("Storage device ID"),
+                )
+                .arg(
+                    Arg::new("scheme")
+                        .long("scheme")
+                        .short('s')
+                        .num_args(1)
+                        .value_parser(scheme_keys)
+                        .default_value("random2x")
+                        .help("Data sanitization scheme"),
+                )
+                .arg(
+                    Arg::new("verify")
+                        .long("verify")
+                        .short('v')
+                        .num_args(1)
+                        .value_parser(["no", "last", "all"])
+                        .default_value("last")
+                        .help("Verify after completion"),
+                )
+                .arg(
+                    Arg::new("coverage")
+                        .long("coverage")
+                        .short('c')
+                        .help("Verification coverage (in percents)")
+                        .num_args(1)
+                        .value_parser(value_parser!(f32))
+                        .default_value("100.0"),
+                )
+                .arg(
+                    Arg::new("blocksize")
+                        .long("blocksize")
+                        .short('b')
+                        .num_args(1)
+                        .default_value("1m")
+                        .help("Block size"),
+                )
+                .arg(
+                    Arg::new("offset")
+                        .long("offset")
+                        .short('o')
+                        .num_args(1)
+                        .default_value("0")
+                        .help("Starting offset (in bytes)"),
+                )
+                .arg(
+                    Arg::new("retries")
+                        .long("retries")
+                        .short('r')
+                        .num_args(1)
+                        .value_parser(value_parser!(u32))
+                        .default_value("8")
+                        .help("Maximum number of retries"),
+                )
+                .arg(
+                    Arg::new("yes")
+                        .long("yes")
+                        .short('y')
+                        .help("Automatically confirm")
+                        .action(ArgAction::SetTrue),
+                ),
+        )
+}
+
 pub fn parse_bytes(s: &str) -> Result<u64> {
-    let bytes_regex = Regex::new(r"^(?i)(\d+) *(([kmgt])b?)?$").unwrap();
+    let bytes_regex = Regex::new(r"^(?i)(\d+) *(([kmgt])b?)?$")?;
     let captures = bytes_regex.captures(s);
 
     match captures {
@@ -25,13 +115,11 @@ pub fn parse_bytes(s: &str) -> Result<u64> {
 }
 
 pub fn parse_block_size(s: &str) -> Result<usize> {
-    parse_bytes(s).and_then(|bytes| {
-        if bytes & (bytes - 1) == 0 {
-            Ok(bytes as usize)
-        } else {
-            Err(anyhow!("Should be a power of two."))
-        }
-    })
+    let bytes = parse_bytes(s)?;
+    if !bytes.is_power_of_two() {
+        return Err(anyhow!("Should be a power of two."));
+    }
+    usize::try_from(bytes).context("Block size does not fit into addressable memory.")
 }
 
 #[cfg(test)]

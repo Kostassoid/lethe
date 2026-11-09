@@ -12,8 +12,8 @@ use winapi::um::fileapi::*;
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::ioapiset::DeviceIoControl;
 use winapi::um::winbase::{
-    FILE_BEGIN, FILE_CURRENT, FILE_FLAG_NO_BUFFERING, FILE_FLAG_RANDOM_ACCESS,
-    FILE_FLAG_SEQUENTIAL_SCAN, FILE_FLAG_WRITE_THROUGH,
+    FILE_BEGIN, FILE_FLAG_NO_BUFFERING, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
+    FILE_FLAG_WRITE_THROUGH,
 };
 use winapi::um::winioctl;
 use winapi::um::winnt::{
@@ -103,7 +103,9 @@ impl DeviceFile {
 }
 
 impl StorageError {
-    fn from(err: std::io::Error) -> StorageError {
+    /// Maps an I/O error to [`StorageError::BadBlock`] for the error codes that
+    /// indicate an inaccessible region of the device, [`StorageError::Other`] otherwise.
+    fn from_io(err: std::io::Error) -> StorageError {
         match err.raw_os_error() {
             Some(c)
                 if c == ERROR_CRC as i32
@@ -148,18 +150,6 @@ impl Drop for DeviceFile {
 }
 
 impl StorageAccess for DeviceFile {
-    fn position(&mut self) -> Result<u64> {
-        unsafe {
-            let distance = mem::zeroed();
-            let mut current: LARGE_INTEGER = mem::zeroed();
-            if SetFilePointerEx(self.handle, distance, &mut current, FILE_CURRENT) == 0 {
-                return Err(StorageError::from(io::Error::last_os_error()))
-                    .context("Unable to get device position.");
-            };
-            Ok(*current.QuadPart() as u64)
-        }
-    }
-
     fn seek(&mut self, position: u64) -> Result<u64> {
         unsafe {
             let mut distance: LARGE_INTEGER = mem::zeroed();
@@ -167,7 +157,7 @@ impl StorageAccess for DeviceFile {
 
             let mut new_position: LARGE_INTEGER = mem::zeroed();
             if SetFilePointerEx(self.handle, distance, &mut new_position, FILE_BEGIN) == 0 {
-                return Err(StorageError::from(io::Error::last_os_error()))
+                return Err(StorageError::from_io(io::Error::last_os_error()))
                     .context("Unable to set device position.");
             };
             Ok(*new_position.QuadPart() as u64)
@@ -185,7 +175,7 @@ impl StorageAccess for DeviceFile {
                 ptr::null_mut(),
             ) == 0
             {
-                return Err(StorageError::from(io::Error::last_os_error()))
+                return Err(StorageError::from_io(io::Error::last_os_error()))
                     .context("Unable to read from the device.");
             };
             Ok(read as usize)
@@ -203,7 +193,7 @@ impl StorageAccess for DeviceFile {
                 ptr::null_mut(),
             ) == 0
             {
-                return Err(StorageError::from(io::Error::last_os_error()))
+                return Err(StorageError::from_io(io::Error::last_os_error()))
                     .context("Unable to write to the device.");
             };
             Ok(())
@@ -213,7 +203,7 @@ impl StorageAccess for DeviceFile {
     fn flush(&mut self) -> Result<()> {
         unsafe {
             if FlushFileBuffers(self.handle) == 0 {
-                return Err(StorageError::from(io::Error::last_os_error()))
+                return Err(StorageError::from_io(io::Error::last_os_error()))
                     .context("Unable to flush device write buffers.");
             }
             Ok(())

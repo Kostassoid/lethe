@@ -1,12 +1,12 @@
 #![cfg(unix)]
 
-use crate::storage::*;
-use ::nix::*;
 use anyhow::{Context, Result};
 use std::fs::File;
 use std::io::SeekFrom;
 use std::io::prelude::*;
 use std::path::Path;
+
+use crate::storage::{StorageAccess, StorageDevice, StorageError, StorageReadiness, StorageRef};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -21,7 +21,9 @@ mod macos;
 use macos as os;
 
 impl StorageError {
-    fn from(err: std::io::Error) -> StorageError {
+    /// Maps an I/O error to [`StorageError::BadBlock`] for the errno values that
+    /// indicate an inaccessible region of the device, [`StorageError::Other`] otherwise.
+    fn from_io(err: std::io::Error) -> StorageError {
         match err.raw_os_error() {
             Some(c) if c == libc::EIO || c == libc::ESPIPE => StorageError::BadBlock,
             _ => StorageError::Other(err),
@@ -42,38 +44,31 @@ impl FileAccess {
 }
 
 impl StorageAccess for FileAccess {
-    fn position(&mut self) -> Result<u64> {
-        self.file
-            .seek(SeekFrom::Current(0))
-            .map_err(|e| StorageError::from(e))
-            .context("Seek failed or not supported for the storage")
-    }
-
     fn seek(&mut self, position: u64) -> Result<u64> {
         self.file
             .seek(SeekFrom::Start(position))
-            .map_err(|e| StorageError::from(e))
+            .map_err(StorageError::from_io)
             .context("Seek failed or not supported for the storage")
     }
 
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         self.file
             .read(buffer)
-            .map_err(|e| StorageError::from(e))
+            .map_err(StorageError::from_io)
             .context("Can't read from the storage")
     }
 
     fn write(&mut self, data: &[u8]) -> Result<()> {
         self.file
             .write_all(data)
-            .map_err(|e| StorageError::from(e))
+            .map_err(StorageError::from_io)
             .context("Writing to storage failed")
     }
 
     fn flush(&mut self) -> Result<()> {
         self.file
             .flush()
-            .map_err(|e| StorageError::from(e))
+            .map_err(StorageError::from_io)
             .context("Unable to flush data to the storage")
     }
 }

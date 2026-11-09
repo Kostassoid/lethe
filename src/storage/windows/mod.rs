@@ -3,9 +3,6 @@ extern crate winapi;
 
 use crate::storage::*;
 
-#[macro_use]
-mod helpers;
-
 mod meta;
 use super::windows::meta::*;
 
@@ -65,10 +62,6 @@ impl CompositeStorageAccess {
 }
 
 impl StorageAccess for CompositeStorageAccess {
-    fn position(&mut self) -> Result<u64> {
-        self.device.position()
-    }
-
     fn seek(&mut self, position: u64) -> Result<u64> {
         self.device.seek(position)
     }
