@@ -1,214 +1,249 @@
-#![cfg(windows)]
-use crate::storage::{StorageAccess, StorageError};
+use std::ffi::c_void;
+use std::io;
+use std::mem::size_of_val;
+
 use anyhow::{Context, Result};
-use std::{io, mem, ptr};
-use widestring::WideCString;
-use winapi::_core::ptr::null_mut;
-use winapi::shared::minwindef::{DWORD, LPVOID};
-use winapi::shared::winerror::{
-    ERROR_CRC, ERROR_READ_FAULT, ERROR_SECTOR_NOT_FOUND, ERROR_SEEK, ERROR_WRITE_FAULT,
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_CRC, ERROR_READ_FAULT, ERROR_SECTOR_NOT_FOUND, ERROR_SEEK,
+    ERROR_WRITE_FAULT, GENERIC_READ, GENERIC_WRITE, HANDLE,
 };
-use winapi::um::fileapi::*;
-use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-use winapi::um::ioapiset::DeviceIoControl;
-use winapi::um::winbase::{
-    FILE_BEGIN, FILE_FLAG_NO_BUFFERING, FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN,
-    FILE_FLAG_WRITE_THROUGH,
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_FLAG_NO_BUFFERING,
+    FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN, FILE_FLAG_WRITE_THROUGH, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FlushFileBuffers, OPEN_EXISTING, ReadFile, SetFilePointerEx, WriteFile,
 };
-use winapi::um::winioctl;
-use winapi::um::winnt::{
-    FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE, HANDLE,
-    LARGE_INTEGER,
+use windows::Win32::System::IO::DeviceIoControl;
+use windows::Win32::System::Ioctl::{
+    FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME,
 };
+use windows::core::{Error as WindowsError, HSTRING};
 
-const QUERY_ONLY_ACCESS: DWORD = 0;
+use crate::storage::{StorageAccess, StorageError};
 
-pub struct DeviceFile {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeviceAccess {
+    Query,
+    Wipe,
+}
+
+pub(super) struct DeviceFile {
     is_locked: bool,
-    pub handle: HANDLE,
+    handle: HANDLE,
 }
 
 impl DeviceFile {
-    pub fn open(path: &str, write_access: bool) -> Result<Self> {
+    pub(super) fn open(path: &str, access: DeviceAccess) -> Result<Self> {
         let mut file_path = path.to_string();
         if !path.starts_with("\\\\") {
-            // assuming NT device name like \Harddisk1\Partition1
-            file_path.insert_str(0, "\\\\.\\GLOBALROOT"); //todo: check minimal Windows version
+            file_path.insert_str(0, "\\\\.\\GLOBALROOT");
         }
 
-        let access = if write_access {
-            GENERIC_READ | GENERIC_WRITE
-        } else {
-            QUERY_ONLY_ACCESS
+        let desired_access = match access {
+            DeviceAccess::Query => 0,
+            DeviceAccess::Wipe => GENERIC_READ.0 | GENERIC_WRITE.0,
         };
 
-        unsafe {
-            let handle = CreateFileW(
-                WideCString::from_str(file_path.clone()).unwrap().as_ptr(),
-                access,
+        let name = HSTRING::from(file_path.as_str());
+        let handle = unsafe {
+            CreateFileW(
+                &name,
+                desired_access,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
-                null_mut(),
+                None,
                 OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL
                     | FILE_FLAG_NO_BUFFERING
                     | FILE_FLAG_WRITE_THROUGH
                     | FILE_FLAG_SEQUENTIAL_SCAN
                     | FILE_FLAG_RANDOM_ACCESS,
-                null_mut(),
-            );
-
-            if handle == INVALID_HANDLE_VALUE {
-                return Err(io::Error::last_os_error())
-                    .context(format!("Cannot open device {}.", path));
-            }
-
-            let mut is_locked = false;
-
-            if write_access {
-                let mut returned: DWORD = 0;
-
-                if DeviceIoControl(
-                    handle,
-                    winioctl::FSCTL_LOCK_VOLUME,
-                    null_mut(),
-                    0,
-                    null_mut(),
-                    0,
-                    &mut returned,
-                    null_mut(),
-                ) == 0
-                {
-                    return Err(io::Error::last_os_error())
-                        .context(format!("Cannot lock device {}. Make sure to close other applications accessing the storage.", path));
-                }
-
-                if DeviceIoControl(
-                    handle,
-                    winioctl::FSCTL_DISMOUNT_VOLUME,
-                    null_mut(),
-                    0,
-                    null_mut(),
-                    0,
-                    &mut returned,
-                    null_mut(),
-                ) == 0
-                {
-                    return Err(io::Error::last_os_error())
-                        .context(format!("Cannot dismount volume {}.", path));
-                }
-                is_locked = true;
-            }
-
-            Ok(DeviceFile { handle, is_locked })
+                None,
+            )
         }
+        .with_context(|| format!("Cannot open device {path}."))?;
+
+        let mut device = DeviceFile {
+            is_locked: false,
+            handle,
+        };
+
+        if access == DeviceAccess::Wipe {
+            let mut returned = 0u32;
+
+            unsafe {
+                DeviceIoControl(
+                    handle,
+                    FSCTL_LOCK_VOLUME,
+                    None,
+                    0,
+                    None,
+                    0,
+                    Some(&raw mut returned),
+                    None,
+                )
+            }
+            .with_context(|| {
+                format!(
+                    "Cannot lock device {path}. Make sure to close other applications accessing the storage."
+                )
+            })?;
+
+            unsafe {
+                DeviceIoControl(
+                    handle,
+                    FSCTL_DISMOUNT_VOLUME,
+                    None,
+                    0,
+                    None,
+                    0,
+                    Some(&raw mut returned),
+                    None,
+                )
+            }
+            .with_context(|| format!("Cannot dismount volume {path}."))?;
+
+            device.is_locked = true;
+        }
+
+        Ok(device)
     }
-}
 
-impl StorageError {
-    /// Maps an I/O error to [`StorageError::BadBlock`] for the error codes that
-    /// indicate an inaccessible region of the device, [`StorageError::Other`] otherwise.
-    fn from_io(err: std::io::Error) -> StorageError {
-        match err.raw_os_error() {
-            Some(c)
-                if c == ERROR_CRC as i32
-                    || c == ERROR_SEEK as i32
-                    || c == ERROR_SECTOR_NOT_FOUND as i32
-                    || c == ERROR_WRITE_FAULT as i32
-                    || c == ERROR_READ_FAULT as i32 =>
-            {
-                StorageError::BadBlock
-            }
-            _ => StorageError::Other(err),
+    pub(super) fn ioctl<T: Default>(&self, code: u32) -> Result<T> {
+        let mut output = T::default();
+        self.ioctl_into(code, Option::<&()>::None, &mut output)?;
+        Ok(output)
+    }
+
+    pub(super) fn ioctl_with_input<I, T: Default>(&self, code: u32, input: &I) -> Result<T> {
+        let mut output = T::default();
+        self.ioctl_into(code, Some(input), &mut output)?;
+        Ok(output)
+    }
+
+    pub(super) fn ioctl_into<I, T>(
+        &self,
+        code: u32,
+        input: Option<&I>,
+        output: &mut T,
+    ) -> Result<u32> {
+        let mut returned = 0u32;
+
+        unsafe {
+            DeviceIoControl(
+                self.handle,
+                code,
+                input.map(|value| std::ptr::from_ref(value).cast::<c_void>()),
+                input.map_or(0, |value| {
+                    u32::try_from(size_of_val(value)).expect("ioctl input is too large")
+                }),
+                Some(std::ptr::from_mut(output).cast::<c_void>()),
+                u32::try_from(size_of_val(output)).expect("ioctl output is too large"),
+                Some(&raw mut returned),
+                None,
+            )
         }
+        .map_err(|error| StorageError::from_windows(&error))?;
+
+        Ok(returned)
     }
 }
 
 impl Drop for DeviceFile {
     fn drop(&mut self) {
-        if self.handle != null_mut() {
-            if self.is_locked {
-                unsafe {
-                    let mut returned: DWORD = 0;
-                    if DeviceIoControl(
-                        self.handle,
-                        winioctl::FSCTL_UNLOCK_VOLUME,
-                        null_mut(),
-                        0,
-                        null_mut(),
-                        0,
-                        &mut returned,
-                        null_mut(),
-                    ) == 0
-                    {
-                        //there doesn't seem to be a good way to recover
-                    }
-                }
-            }
+        if self.handle.is_invalid() {
+            return;
+        }
+
+        if self.is_locked {
+            let mut returned = 0u32;
             unsafe {
-                let _ = CloseHandle(self.handle);
+                let _ = DeviceIoControl(
+                    self.handle,
+                    FSCTL_UNLOCK_VOLUME,
+                    None,
+                    0,
+                    None,
+                    0,
+                    Some(&raw mut returned),
+                    None,
+                );
             }
         }
+
+        unsafe {
+            let _ = CloseHandle(self.handle);
+        }
+    }
+}
+
+impl StorageError {
+    fn from_windows(error: &WindowsError) -> Self {
+        let code = win32_error_code(error);
+
+        match code {
+            c if c == ERROR_CRC.0
+                || c == ERROR_SEEK.0
+                || c == ERROR_SECTOR_NOT_FOUND.0
+                || c == ERROR_WRITE_FAULT.0
+                || c == ERROR_READ_FAULT.0 =>
+            {
+                StorageError::BadBlock
+            }
+            _ => StorageError::Other(io::Error::from_raw_os_error(code.cast_signed())),
+        }
+    }
+}
+
+fn win32_error_code(error: &WindowsError) -> u32 {
+    let code = error.code().0.cast_unsigned();
+    if code & 0xFFFF_0000 == 0x8007_0000 {
+        code & 0xFFFF
+    } else {
+        code
     }
 }
 
 impl StorageAccess for DeviceFile {
     fn seek(&mut self, position: u64) -> Result<u64> {
-        unsafe {
-            let mut distance: LARGE_INTEGER = mem::zeroed();
-            *distance.QuadPart_mut() = position as i64;
+        let distance = i64::try_from(position).context("Device position is too large.")?;
+        let mut new_position = 0i64;
 
-            let mut new_position: LARGE_INTEGER = mem::zeroed();
-            if SetFilePointerEx(self.handle, distance, &mut new_position, FILE_BEGIN) == 0 {
-                return Err(StorageError::from_io(io::Error::last_os_error()))
-                    .context("Unable to set device position.");
-            };
-            Ok(*new_position.QuadPart() as u64)
+        unsafe {
+            SetFilePointerEx(
+                self.handle,
+                distance,
+                Some(&raw mut new_position),
+                FILE_BEGIN,
+            )
         }
+        .map_err(|error| StorageError::from_windows(&error))
+        .context("Unable to set device position.")?;
+
+        u64::try_from(new_position).context("Device position is negative.")
     }
 
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        unsafe {
-            let mut read = 0;
-            if ReadFile(
-                self.handle,
-                buffer.as_ptr() as LPVOID,
-                buffer.len() as DWORD,
-                &mut read,
-                ptr::null_mut(),
-            ) == 0
-            {
-                return Err(StorageError::from_io(io::Error::last_os_error()))
-                    .context("Unable to read from the device.");
-            };
-            Ok(read as usize)
-        }
+        let mut read = 0u32;
+
+        unsafe { ReadFile(self.handle, Some(buffer), Some(&raw mut read), None) }
+            .map_err(|error| StorageError::from_windows(&error))
+            .context("Unable to read from the device.")?;
+
+        Ok(usize::try_from(read).expect("read length fits into usize"))
     }
 
     fn write(&mut self, data: &[u8]) -> Result<()> {
-        unsafe {
-            let mut written = 0;
-            if WriteFile(
-                self.handle,
-                data.as_ptr() as LPVOID,
-                data.len() as DWORD,
-                &mut written,
-                ptr::null_mut(),
-            ) == 0
-            {
-                return Err(StorageError::from_io(io::Error::last_os_error()))
-                    .context("Unable to write to the device.");
-            };
-            Ok(())
-        }
+        let mut written = 0u32;
+
+        unsafe { WriteFile(self.handle, Some(data), Some(&raw mut written), None) }
+            .map_err(|error| StorageError::from_windows(&error))
+            .context("Unable to write to the device.")?;
+
+        Ok(())
     }
 
     fn flush(&mut self) -> Result<()> {
-        unsafe {
-            if FlushFileBuffers(self.handle) == 0 {
-                return Err(StorageError::from_io(io::Error::last_os_error()))
-                    .context("Unable to flush device write buffers.");
-            }
-            Ok(())
-        }
+        unsafe { FlushFileBuffers(self.handle) }
+            .map_err(|error| StorageError::from_windows(&error))
+            .context("Unable to flush device write buffers.")
     }
 }

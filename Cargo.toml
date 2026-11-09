@@ -35,25 +35,14 @@ plist = "1"
 serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
-widestring = "1"
-winapi = { version = "0.3", features = [
-    "cguid",
-    "commapi",
-    "errhandlingapi",
-    "fileapi",
-    "guiddef",
-    "handleapi",
-    "ioapiset",
-    "minwinbase",
-    "minwindef",
-    "ntdef",
-    "processthreadsapi",
-    "securitybaseapi",
-    "setupapi",
-    "winbase",
-    "winerror",
-    "winioctl",
-    "winnt",
+windows = { version = "0.62", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Threading",
 ] }
 
 [dev-dependencies]

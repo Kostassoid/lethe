@@ -1,26 +1,26 @@
 #![cfg(windows)]
-extern crate winapi;
-
-use crate::storage::*;
-
-mod meta;
-use super::windows::meta::*;
-
-mod access;
-use access::*;
-
-mod misc;
-use misc::*;
 
 use anyhow::{Context, Result};
+
+use crate::storage::{StorageAccess, StorageDevice, StorageRef, System};
+
+mod access;
+mod enumeration;
+mod misc;
+mod physical_drive;
+mod volumes;
+
+use access::{DeviceAccess, DeviceFile};
+use enumeration::DiskDeviceEnumerator;
+use misc::is_elevated;
 
 impl System {
     pub fn enumerate_storage_devices() -> Result<Vec<StorageRef>> {
         let enumerator = DiskDeviceEnumerator::new().with_context(|| {
-            if !is_elevated() {
-                "Make sure you run the application with Administrator permissions!".to_string()
+            if is_elevated() {
+                String::new()
             } else {
-                "".to_string() //todo: hints?
+                "Make sure you run the application with Administrator permissions!".to_string()
             }
         })?;
         let mut devices: Vec<StorageRef> = enumerator.collect();
@@ -31,11 +31,11 @@ impl System {
 
 impl StorageDevice for StorageRef {
     fn access(&self) -> Result<Box<dyn StorageAccess>> {
-        CompositeStorageAccess::open(self).map(|a| Box::new(a) as Box<dyn StorageAccess>)
+        CompositeStorageAccess::open(self).map(|access| Box::new(access) as Box<dyn StorageAccess>)
     }
 }
 
-/// On Windows, to work with a low level PhysicalDrive, we have to acquire locks to all partitions/volumes
+/// On Windows, to work with a low level `PhysicalDrive`, we have to acquire locks to all partitions/volumes
 /// located on this drive and we have to keep these locks for the duration of wiping process.
 /// In terms of implementation we just open the whole tree of devices for write which effectively
 /// locks and dismounts every volume in that tree.
@@ -49,10 +49,10 @@ impl CompositeStorageAccess {
         let children: Result<Vec<DeviceFile>> = device
             .children
             .iter()
-            .map(|c| DeviceFile::open(&c.id, true))
+            .map(|child| DeviceFile::open(&child.id, DeviceAccess::Wipe))
             .collect();
 
-        let device = DeviceFile::open(&device.id, true)?;
+        let device = DeviceFile::open(&device.id, DeviceAccess::Wipe)?;
 
         Ok(Self {
             device,
