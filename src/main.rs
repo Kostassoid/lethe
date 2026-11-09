@@ -1,9 +1,8 @@
 #![recursion_limit = "256"]
 
 use anyhow::{Context, Result, anyhow};
-use console::style;
 use indicatif::HumanBytes;
-use prettytable::{Table, format, row};
+use prettytable::{Attr, Cell, Row, Table, format, row};
 
 mod actions;
 mod sanitization;
@@ -36,25 +35,30 @@ fn main() -> Result<()> {
 
             let format_device = |tt: &mut Table, x: &StorageRef, level: usize| {
                 let short_id = storage_repo.get_short_id(&x.id).map_or("", String::as_str);
+                let device_id = format!("{}{}", " ".repeat(level * 2), x.id);
 
-                match &x.readiness {
-                    StorageReadiness::Ready(details) => tt.add_row(row![
-                        style(format!("{}{}", " ".repeat(level * 2), x.id)).bold(),
-                        style(short_id).bold(),
-                        HumanBytes(details.size),
-                        &details.storage_type,
-                        details.label.as_deref().unwrap_or(""),
-                        details.mount_point.as_deref().unwrap_or(""),
+                let device_cell = Cell::new(&device_id).with_style(Attr::Bold);
+                let short_id_cell = Cell::new(short_id).with_style(Attr::Bold);
+
+                let row = match &x.readiness {
+                    StorageReadiness::Ready(details) => Row::new(vec![
+                        device_cell,
+                        short_id_cell,
+                        Cell::new(&HumanBytes(details.size).to_string()),
+                        Cell::new(&details.storage_type.to_string()),
+                        Cell::new(details.label.as_deref().unwrap_or("")),
+                        Cell::new(details.mount_point.as_deref().unwrap_or("")),
                     ]),
-                    StorageReadiness::Locked => tt.add_row(row![
-                        style(format!("{}{}", " ".repeat(level * 2), x.id)).bold(),
-                        style(short_id).bold(),
-                        HumanBytes(0),
-                        "locked",
-                        "locked",
-                        "locked",
+                    StorageReadiness::Locked => Row::new(vec![
+                        device_cell,
+                        short_id_cell,
+                        Cell::new(&HumanBytes(0).to_string()),
+                        Cell::new("locked"),
+                        Cell::new("locked"),
+                        Cell::new("locked"),
                     ]),
                 };
+                tt.add_row(row);
             };
 
             let devices = storage_repo.devices();
