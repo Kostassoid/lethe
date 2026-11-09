@@ -24,6 +24,92 @@ require "fileutils"
 
 Vagrant.require_version ">= 2.4.0"
 
+def windows_host?
+  RUBY_PLATFORM.match?(/(mingw|mswin|msvcrt)/)
+end
+
+def darwin_host?
+  RUBY_PLATFORM.include?("darwin")
+end
+
+def qemu_binary_names
+  %w[qemu-system-x86_64 qemu-system-aarch64]
+end
+
+def qemu_file_present?(dir, name)
+  extensions = windows_host? ? [".exe", ""] : [""]
+  extensions.any? { |ext| File.file?(File.join(dir, "#{name}#{ext}")) }
+end
+
+def qemu_directory?(dir)
+  qemu_file_present?(dir, "qemu-img") &&
+    qemu_binary_names.any? { |name| qemu_file_present?(dir, name) }
+end
+
+def qemu_search_dirs
+  dirs = []
+
+  # Accept both an installation directory and a path to the executable.
+  [ENV["QEMU_BIN"], ENV["QEMU_DIR"]].compact.each do |value|
+    dirs << (File.directory?(value) ? value : File.dirname(value))
+  end
+
+  if windows_host?
+    dirs.concat([
+      "C:/Program Files/qemu",
+      "C:/Program Files (x86)/qemu",
+      "C:/tools/qemu",
+      "C:/msys64/mingw64/bin",
+      "C:/msys64/ucrt64/bin",
+      File.join(ENV.fetch("ProgramData", "C:/ProgramData"), "chocolatey", "bin"),
+      File.join(ENV.fetch("LOCALAPPDATA", ""), "Programs", "qemu")
+    ])
+  elsif darwin_host?
+    dirs.concat(["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"])
+  else
+    dirs.concat(["/usr/bin", "/usr/local/bin"])
+  end
+
+  dirs.reject { |dir| dir.nil? || dir.empty? }.uniq
+end
+
+def find_qemu_dir
+  path_dirs = ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)
+  (path_dirs + qemu_search_dirs).find { |dir| qemu_directory?(dir) }
+end
+
+def find_qemu_firmware_dir(qemu_dir)
+  [
+    File.join(qemu_dir, "share", "qemu"),
+    File.join(qemu_dir, "share"),
+    qemu_dir,
+    "/usr/share/qemu",
+    "/usr/local/share/qemu",
+    "/opt/homebrew/share/qemu"
+  ].find { |dir| File.file?(File.join(dir, "edk2-aarch64-code.fd")) }
+end
+
+qemu_dir = find_qemu_dir
+
+if qemu_dir.nil?
+  abort <<~MSG
+    QEMU could not be found.
+
+    Install QEMU and make sure `qemu-img` and a `qemu-system-*` binary are on
+    PATH, or set QEMU_DIR to the directory containing those executables.
+  MSG
+end
+
+path_parts = ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)
+ENV["PATH"] = ([qemu_dir] + path_parts).join(File::PATH_SEPARATOR) unless path_parts.include?(qemu_dir)
+
+# vagrant-qemu reads QEMU_DIR for the aarch64 firmware files. Point it at the
+# directory that actually contains them when one can be found.
+firmware_dir = find_qemu_firmware_dir(qemu_dir)
+if firmware_dir && !File.file?(File.join(ENV.fetch("QEMU_DIR", ""), "edk2-aarch64-code.fd"))
+  ENV["QEMU_DIR"] = firmware_dir
+end
+
 unless Vagrant.has_plugin?("vagrant-qemu")
   abort <<~MSG
     The vagrant-qemu provider plugin is required.
@@ -54,6 +140,24 @@ end
 
 TEST_DISK_SIZE = ENV.fetch("LETHE_TEST_DISK_SIZE", "1GB")
 
+def qemu_acceleration(guest_arch)
+  accel = ENV["LETHE_QEMU_ACCEL"]
+
+  # WHPX is unreliable on many Windows hosts (and often unavailable inside
+  # VMs), so default to software emulation there. Set LETHE_QEMU_ACCEL=whpx
+  # to opt into hardware acceleration.
+  accel = "tcg" if accel.nil? && windows_host?
+  return nil if accel.nil?
+
+  machine = if guest_arch == "x86_64"
+              "q35,accel=#{accel}"
+            else
+              "virt,highmem=on,accel=#{accel}"
+            end
+
+  { machine: machine, cpu: accel == "tcg" ? "max" : "host" }
+end
+
 def configure_qemu(machine, guest_arch, ssh_port)
   machine.vm.provider "qemu" do |qe|
     qe.arch = guest_arch
@@ -61,6 +165,19 @@ def configure_qemu(machine, guest_arch, ssh_port)
     qe.smp = ENV.fetch("LETHE_VM_CPUS", "2")
     qe.ssh_port = ssh_port
     qe.ssh_auto_correct = true
+
+    acceleration = qemu_acceleration(guest_arch)
+    if acceleration
+      qe.machine = acceleration[:machine]
+      qe.cpu = acceleration[:cpu]
+    end
+
+    if windows_host?
+      # The Windows QEMU build has neither daemonize mode nor Unix sockets.
+      qe.no_daemonize = true
+      qe.control_port = ssh_port + 10
+      qe.debug_port = ssh_port + 20
+    end
   end
 end
 

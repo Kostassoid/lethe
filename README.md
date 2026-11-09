@@ -91,6 +91,12 @@ tests wipe. The host needs [Vagrant](https://developer.hashicorp.com/vagrant), [
 vagrant plugin install vagrant-qemu
 ```
 
+QEMU is auto-detected in the usual install locations (including `C:\Program Files\qemu` on Windows and the
+Homebrew/`/usr` prefixes elsewhere). Set `QEMU_DIR` if your installation lives somewhere else.
+
+On Windows the provider uses TCG software emulation by default because WHPX is unreliable or unavailable on many
+hosts. Set `LETHE_QEMU_ACCEL=whpx` to opt into hardware acceleration; Linux and macOS use KVM/HVF automatically.
+
 Supported machines:
 
 | Machine        | Guest                     | Notes                                                        |
@@ -111,9 +117,10 @@ just vm-test-linux linux-x64
 just vm-destroy linux-x64
 ```
 
-Use `just vm-test-windows <machine>` for Windows guests. The tests build the current working tree inside the VM, wipe
-the scratch disk with the `zero` scheme using full verification, check the result independently, then repeat with the
-`random` scheme. `testing/run-tests.sh` and
+Use `just vm-test-windows <machine>` for Windows guests. The test recipes re-upload the current test scripts first;
+after changing application source, run `just vm-sync <machine>` to re-upload and re-provision the VM. The tests build
+the source inside the VM, wipe the scratch disk with the `zero` scheme using full verification, check the result
+independently, then repeat with the `random` scheme. `testing/run-tests.sh` and
 `testing/run-tests.ps1` can also be run directly on a macOS/Windows host when `LETHE_TEST_DEVICE` points at a dedicated
 scratch disk. Auto-detection of the scratch disk is only enabled inside the provisioned test VMs.
 

@@ -52,6 +52,36 @@ find_linux_test_disk() {
   return 1
 }
 
+device_size_bytes() {
+  local device="$1"
+  if command -v blockdev >/dev/null 2>&1; then
+    "${SUDO[@]}" blockdev --getsize64 "$device"
+  else
+    diskutil info -plist "$device" | plutil -extract Size raw -o - -
+  fi
+}
+
+# Compares the whole device against a same-sized sparse file of zeroes.
+# Exit status follows cmp: 0 = identical, 1 = differ, >1 = error.
+compare_device_with_zeroes() {
+  local device="$1"
+  local size tmp status
+
+  size="$(device_size_bytes "$device")" || return 2
+  tmp="$(mktemp "${TMPDIR:-/tmp}/lethe-zero.XXXXXX")" || return 2
+
+  # A one-byte write at the last offset creates a sparse zero-filled file.
+  if ! dd if=/dev/zero of="$tmp" bs=1 count=1 seek=$((size - 1)) 2>/dev/null; then
+    rm -f "$tmp"
+    return 2
+  fi
+
+  "${SUDO[@]}" cmp -s "$device" "$tmp"
+  status=$?
+  rm -f "$tmp"
+  return $status
+}
+
 if [[ -n "${LETHE_TEST_DEVICE:-}" ]]; then
   DEVICE="$LETHE_TEST_DEVICE"
 elif [[ "$(uname -s)" == "Linux" && -f /etc/lethe-test-vm ]]; then
@@ -94,8 +124,13 @@ echo "==> Zero wipe with full verification"
   "$DEVICE"
 
 echo "==> Independently checking that ${DEVICE} is all zeroes"
-if ! "${SUDO[@]}" cmp "$DEVICE" /dev/zero; then
-  echo "FAIL: device still contains non-zero data after the zero wipe." >&2
+set +e
+compare_device_with_zeroes "$DEVICE"
+cmp_status=$?
+set -e
+
+if [[ $cmp_status -ne 0 ]]; then
+  echo "FAIL: device is not all zeroes after the zero wipe (cmp exit code $cmp_status)." >&2
   exit 1
 fi
 
@@ -110,7 +145,7 @@ echo "==> Random wipe with partial verification"
 
 echo "==> Independently checking that ${DEVICE} is no longer all zeroes"
 set +e
-"${SUDO[@]}" cmp "$DEVICE" /dev/zero >/dev/null 2>&1
+compare_device_with_zeroes "$DEVICE"
 cmp_status=$?
 set -e
 

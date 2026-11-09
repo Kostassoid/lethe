@@ -70,12 +70,18 @@ vm-up platform="linux-x64":
 vm-ssh platform="linux-x64":
     vagrant ssh {{platform}}
 
+# Re-upload the working tree and re-run provisioning on a test VM
+vm-sync platform="linux-x64":
+    vagrant provision {{platform}}
+
 # Run the integration tests inside a Linux test VM
 vm-test-linux platform="linux-x64":
+    vagrant upload testing/run-tests.sh /home/vagrant/lethe/testing/run-tests.sh {{platform}}
     vagrant ssh {{platform}} -c "cd ~/lethe && bash testing/run-tests.sh"
 
 # Run the integration tests inside a Windows test VM
 vm-test-windows platform="windows-x64":
+    vagrant upload testing/run-tests.ps1 C:/Users/vagrant/lethe/testing/run-tests.ps1 {{platform}}
     vagrant ssh {{platform}} -c "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/vagrant/lethe/testing/run-tests.ps1"
 
 # Stop and delete one test VM
