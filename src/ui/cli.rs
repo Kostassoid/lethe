@@ -63,7 +63,7 @@ impl WipeEventHandler for ConsoleEventHandler {
             WipeEvent::StepStarted(step) => self.start_step(plan, step),
             WipeEvent::Progress(position) => {
                 if let Some(pb) = &self.pb {
-                    pb.set_position(position);
+                    pb.set_position(position.saturating_sub(plan.range.start));
                 }
             }
             WipeEvent::SkippedBadBlock(position) => {
