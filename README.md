@@ -1,29 +1,27 @@
 # Lethe
 
-A secure, free, cross-platform and open-source drive wiping utility.
+A secure, free, cross-platform and open-source drive wiping utility for HDDs, SSDs (see [Limitations](#limitations))
+and flash drives.
 
-Should work with any HDD, SSD (read limitations) and flash drives.
+Most drive wiping methods, including those allegedly used by government agencies, rely on destructive writes:
+overwriting existing data with random data or static patterns over one or more passes. Lethe does exactly that.
 
-The usual methods for wiping (or sanitization) a drive, including those (allegedly) used by government agencies are
-based
-on destructive writes. In other words, on overwriting existing data with multiple layers of randomly generated data or
-some static pattern.
-This is basically what this tool does.
-
-There are other similar applications around (including multiple built-in Linux tools). Most of them are proprietary, or
-slow, or non-cross-platform. That's why this application exists.
+Similar tools exist, but most are proprietary, slow or not cross-platform. Lethe aims to be none of those.
 
 ## Features
 
-- Supports Windows (x86-64 and ARM64; but not WSL), macOS (Apple Silicon) and Linux (x86-64 and ARM64).
-- Validates the data (reads back) to make sure all write commands were successful
-- Uses fast cryptographic random generator
-- Allows to override OS recommended block size for faster operations
-- Tracks & skips bad blocks and other localized errors automatically
+- **Cross-platform** — Windows (x86-64 and ARM64; WSL is not supported), macOS (Apple Silicon) and Linux (x86-64 and
+  ARM64).
+- **Verified wiping** — reads the data back and compares it with the expected pattern.
+- **Full or partial coverage** — verify every pass or only the last one, over the whole drive or just a sample of its
+  beginning and end.
+- **Fast random data** — uses a fast cryptographic random generator.
+- **Tunable block size** — override the OS-recommended block size for faster operations.
+- **Bad block handling** — tracks, skips and reports bad blocks and other localized errors automatically.
 
 ## Limitations
 
-- For SSD, it's impossible to reliable wipe all the data because of the various optimizations performed by modern SSD
+- For SSD, it's impossible to reliably wipe all the data because of the various optimizations performed by modern SSD
   controllers, namely wear leveling and compression. The best approach currently is to use multiple wiping rounds with
   random data.
 - In theory, Secure Erase ATA commands may be used additionally, but there's no guarantee regarding their semantics.
@@ -38,7 +36,7 @@ This application is already fairly old and was used in many scenarios. I never r
 functionality, apart from some minor issues. I believe it is stable enough for general use.
 
 Saying that, I didn't have to deal with forensics experts and my area of expertise is not related to security. I would
-love to hear from people with more experience in this area, regarding the effectiveness of the application.
+love to hear from people with more experience in this area.
 
 Also, while it's fun working on this project, I don't have a significant roadmap for it apart from a few improvements.
 At the very least, I'm going to keep updating it from time to time to keep dependencies up to date and fix any issues
@@ -71,20 +69,153 @@ cargo install lethe
 
 ## Usage
 
-`lethe` is a CLI (command-line interface). Run it without parameters or use `help` command to display usage information.
+> **Warning:** Wiping is irreversible. Double-check the device ID before answering `yes`.
+> Raw device access requires root/administrator privileges (`sudo` or an elevated shell).
+
+The CLI has two commands: `list` and `wipe`.
+
+### List devices
+
+```sh
+sudo lethe list
+```
+
+Every device gets a full ID (`/dev/sda`, `/dev/rdisk2`, `\\.\PhysicalDrive0`) and a short ID. Both are accepted by
+`wipe`.
+
+### Wipe a device
+
+```sh
+sudo lethe wipe <device-id>
+```
+
+With no options, Lethe uses the `random2x` scheme, 1 MiB blocks and verifies the last pass. It prints the plan and
+waits for confirmation:
 
 ```
+Wiping:
+    Device            /dev/sdb
+    Size              16 GB (16000000000 bytes)
+    Steps             fill, fill, verify
+    Block size        1 MB
+    Starting offset   0 bytes
+    Total area size   16 GB (16000000000 bytes)
+    Verification      Last stage only (100% coverage)
+
+Are you sure? (type 'yes' to confirm):
+```
+
+### Options
+
+| Option              | Default    | Description                                |
+|---------------------|------------|--------------------------------------------|
+| `--scheme`, `-s`    | `random2x` | Data sanitization scheme                   |
+| `--verify`, `-v`    | `last`     | Verify `no`, `last` or `all` passes        |
+| `--coverage`, `-c`  | `100`      | Verification coverage in percent           |
+| `--blocksize`, `-b` | `1m`       | I/O block size; must be a power of two     |
+| `--offset`, `-o`    | `0`        | Start position in bytes                    |
+| `--retries`, `-r`   | `8`        | Maximum retries per step                   |
+| `--yes`, `-y`       | off        | Skip the confirmation prompt               |
+
+Sizes accept `k`, `m`, `g` and `t` suffixes (e.g. `128k`, `4m`, `1g`). Use `lethe help wipe` for the full list.
+
+### Schemes
+
+| Scheme      | Passes | Patterns                        |
+|-------------|--------|---------------------------------|
+| `zero`      | 1      | zeroes                          |
+| `random`    | 1      | random                          |
+| `random2x`  | 2      | random, random                  |
+| `badblocks` | 4      | `aa`, `55`, `ff`, `00`          |
+| `gost`      | 2      | zeroes, random                  |
+| `dod`       | 3      | zeroes, ones, random            |
+| `vsitr`     | 7      | zeroes/ones alternating, random |
+
+```sh
+# Default: two random passes
+sudo lethe wipe /dev/sdb
+
+# Fast: single zero pass, no verification
+sudo lethe wipe /dev/sdb --scheme=zero --verify=no
+
+# DoD-style: three passes, verify after each one
+sudo lethe wipe /dev/sdb --scheme=dod --verify=all
+```
+
+### Verification
+
+`--verify` controls when data is read back:
+
+- `no` — never verify; fastest.
+- `last` — verify only the final pass (default).
+- `all` — verify after every pass; slowest but most thorough.
+
+If verification finds a mismatch, the write step is retried from the failure point and checked again, up to
+`--retries` times.
+
+#### Partial coverage
+
+`--coverage` limits how much of the wiped area is verified, as a percentage. It works with both `last` and `all`:
+
+```sh
+# Verify the entire last pass (default)
+sudo lethe wipe /dev/sdb --coverage=100
+
+# Spot-check only 10% of the last pass
+sudo lethe wipe /dev/sdb --verify=last --coverage=10
+
+# Check 50% after each pass
+sudo lethe wipe /dev/sdb --verify=all --coverage=50
+```
+
+Partial coverage samples the **beginning and the end** of the wiped area, rounded outward to whole blocks, because
+those regions are the most likely to reveal an incomplete wipe. Even `--coverage=0` still checks the first and last
+block. This is a fast sanity check for very large drives, not a substitute for a full read-back.
+
+### Block size
+
+The default is 1 MiB and the value must be a power of two. Larger blocks are often faster over USB and on large
+drives; the OS-recommended block size may be better in some cases.
+
+```sh
+sudo lethe wipe /dev/sdb --blocksize=4m
+sudo lethe wipe /dev/sdb --blocksize=128k
+```
+
+### Wiping only part of a drive
+
+`--offset` starts the wipe at the given byte position and continues to the end of the device:
+
+```sh
+# Leave the first 1 GiB untouched
+sudo lethe wipe /dev/sdb --offset=1g
+```
+
+Offsets are rounded down to a block boundary. Make sure the skipped area does not belong to a mounted filesystem.
+
+### Retries and bad blocks
+
+`--retries` (default `8`) sets how many times a failed step is retried. Blocks that cannot be accessed are marked,
+skipped and counted in the summary instead of aborting the whole operation.
+
+```sh
+sudo lethe wipe /dev/sdb --retries=3
+```
+
+### Unattended use
+
+`--yes` skips the confirmation prompt:
+
+```sh
+sudo lethe wipe /dev/sdb --yes --scheme=random --verify=last
+```
+
+### Help
+
+```sh
 lethe help
-```
-
-You can also use `help` command to get more information about any particular command.
-
-```
 lethe help wipe
 ```
-
-Note that `lethe` operates on a low level and will require a root/administrator access (e.g. `sudo`) to work with any
-real drives.
 
 ## Testing
 
