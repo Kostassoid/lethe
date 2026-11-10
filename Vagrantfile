@@ -17,7 +17,7 @@
 #
 # On Apple Silicon macOS:
 #
-#   brew install cirruslabs/cli/tart
+#   brew install openai/tools/tart
 #   vagrant plugin install vagrant-tart
 #   vagrant up macos-arm64 --provider=tart
 #
@@ -151,7 +151,7 @@ if !qemu_available && !macos_vm_available
       vagrant plugin install vagrant-qemu
 
     For macOS guests on Apple Silicon:
-      brew install cirruslabs/cli/tart
+      brew install openai/tools/tart
       vagrant plugin install vagrant-tart
   MSG
 end
@@ -163,7 +163,7 @@ SOURCE_ARCHIVE = File.join(CACHE_DIR, "lethe-src.tar.gz")
 # Ship the current working tree to each guest. This keeps the guests
 # independent from host shared-folder support, which is limited and
 # platform-specific in the QEMU provider.
-if (ARGV & %w[up provision reload resume]).any? && ENV["LETHE_SKIP_SOURCE_ARCHIVE"] != "1"
+if (ARGV & %w[up provision reload resume validate]).any? && ENV["LETHE_SKIP_SOURCE_ARCHIVE"] != "1"
   FileUtils.mkdir_p(CACHE_DIR)
 
   excludes = %w[./.git ./target ./.vagrant ./testing/.cache ./.idea]
@@ -178,6 +178,20 @@ TEST_DISK_SIZE = ENV.fetch("LETHE_TEST_DISK_SIZE", "1GB")
 
 MACOS_SCRATCH_DISK = File.join(CACHE_DIR, "macos-scratch.img")
 MACOS_SCRATCH_BYTES = 1 << 30
+
+MACOS_IMAGE = ENV.fetch("LETHE_MACOS_IMAGE", "ghcr.io/cirruslabs/macos-sequoia-base:latest")
+# Use bridged networking when the host VPN blocks the default vmnet NAT (for
+# example Mullvad). The guest then gets an address directly from the LAN.
+MACOS_NET_BRIDGED = ENV["LETHE_MACOS_NET_BRIDGED"]
+# Override SSH address discovery when using bridged networking: ARP entries
+# expire when the guest is idle, which makes `tart ip --resolver arp` flaky.
+MACOS_SSH_HOST = ENV["LETHE_MACOS_SSH_HOST"]
+# vagrant-tart always calls `tart set --disk-size`, and Tart refuses to shrink a
+# disk. Keep the configured size in sync with the selected image: the base and
+# vanilla images use a 50 GB virtual disk, the xcode images use 140 GB.
+MACOS_DISK_GB = Integer(
+  ENV.fetch("LETHE_MACOS_DISK_GB", MACOS_IMAGE.match?(/xcode/) ? "140" : "50")
+)
 
 if macos_vm_available
   FileUtils.mkdir_p(CACHE_DIR)
@@ -295,17 +309,31 @@ Vagrant.configure("2") do |config|
   if macos_vm_available
     config.vm.define "macos-arm64", autostart: false do |machine|
       machine.vm.provider "tart" do |tart|
-        tart.image = ENV.fetch("LETHE_MACOS_IMAGE", "ghcr.io/cirruslabs/macos-sequoia-xcode:latest")
+        # The base image includes the Command Line Tools needed to build Lethe.
+        # The xcode variant is several times larger and is only needed when a
+        # full Xcode installation is required.
+        tart.image = MACOS_IMAGE
         tart.name = ENV.fetch("LETHE_MACOS_VM_NAME", "lethe-macos-arm64")
         tart.cpus = Integer(ENV.fetch("LETHE_MACOS_CPUS", ENV.fetch("LETHE_VM_CPUS", "2")))
         tart.memory = Integer(ENV.fetch("LETHE_MACOS_MEMORY_MB", "8192"))
+        tart.disk = MACOS_DISK_GB
         tart.gui = false
-        tart.extra_run_args = ["--disk", MACOS_SCRATCH_DISK]
+        run_args = ["--disk", MACOS_SCRATCH_DISK]
+        if MACOS_NET_BRIDGED && !MACOS_NET_BRIDGED.empty?
+          run_args << "--net-bridged=#{MACOS_NET_BRIDGED}"
+          # Bridged guests are not in the host's vmnet DHCP lease file.
+          tart.ip_resolver = "arp"
+        end
+        tart.extra_run_args = run_args
       end
 
       machine.vm.communicator = "ssh"
+      # The first boot of a freshly cloned macOS image can take well over the
+      # global boot timeout (first-boot setup and Spotlight indexing).
+      machine.vm.boot_timeout = Integer(ENV.fetch("LETHE_MACOS_BOOT_TIMEOUT", "1800"))
       machine.ssh.username = ENV.fetch("LETHE_MACOS_USER", "admin")
       machine.ssh.password = ENV.fetch("LETHE_MACOS_PASSWORD", "admin")
+      machine.ssh.host = MACOS_SSH_HOST if MACOS_SSH_HOST && !MACOS_SSH_HOST.empty?
       machine.vm.provision "file", source: SOURCE_ARCHIVE, destination: "lethe-src.tar.gz"
       machine.vm.provision "shell", path: "testing/provision-macos.sh"
     end

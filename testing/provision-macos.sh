@@ -22,13 +22,19 @@ fi
 TARGET_GROUP="$(id -gn "$TARGET_USER")"
 
 if ! xcode-select -p >/dev/null 2>&1; then
-  echo "Xcode Command Line Tools are required. Use a Tart image with Xcode installed." >&2
+  echo "Xcode Command Line Tools are required. Use a Tart image with the Command Line Tools installed." >&2
   exit 1
 fi
 
 if ! sudo -u "$TARGET_USER" -H test -x "$TARGET_HOME/.cargo/bin/cargo"; then
   sudo -u "$TARGET_USER" -H bash -lc \
     'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
+
+  if ! sudo -u "$TARGET_USER" -H test -x "$TARGET_HOME/.cargo/bin/cargo"; then
+    echo "Rust installation failed. Check that the guest can reach the internet" >&2
+    echo "(on macOS hosts, a VPN such as Mullvad can block shared VM networking)." >&2
+    exit 1
+  fi
 fi
 
 if ! sudo -u "$TARGET_USER" sudo -n true >/dev/null 2>&1; then

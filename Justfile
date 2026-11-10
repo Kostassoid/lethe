@@ -60,6 +60,24 @@ vm-setup:
 
 # Install the macOS VM prerequisites (Apple Silicon; run once)
 vm-setup-macos:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if ! command -v tart >/dev/null 2>&1; then
+      if ! command -v brew >/dev/null 2>&1; then
+        echo "Homebrew is required to install Tart. See https://tart.run/quick-start/." >&2
+        exit 1
+      fi
+
+      # Tart moved from the cirruslabs tap to openai/tools. Homebrew 6 also
+      # requires trusting third-party taps before loading their formulae.
+      brew tap openai/tools
+      if brew help trust >/dev/null 2>&1; then
+        brew trust openai/tools
+      fi
+      brew install openai/tools/tart
+    fi
+
     tart --version
     vagrant plugin install vagrant-tart
 
