@@ -58,13 +58,22 @@ wipe device scheme="zero" verify="no" blocksize="128k" *args:
 vm-setup:
     vagrant plugin install vagrant-qemu
 
+# Install the macOS VM prerequisites (Apple Silicon; run once)
+vm-setup-macos:
+    tart --version
+    vagrant plugin install vagrant-tart
+
 # Show the state of the test VMs
 vm-status:
     vagrant status
 
-# Start a test VM: linux-x64, linux-arm64, windows-x64 or windows-arm64
+# Start a QEMU test VM: linux-x64, linux-arm64, windows-x64 or windows-arm64
 vm-up platform="linux-x64":
     vagrant up {{platform}} --provider=qemu
+
+# Start the macOS test VM on Apple Silicon
+vm-up-macos platform="macos-arm64":
+    vagrant up {{platform}} --provider=tart
 
 # Open a shell in a test VM
 vm-ssh platform="linux-x64":
@@ -83,6 +92,11 @@ vm-test-linux platform="linux-x64":
 vm-test-windows platform="windows-x64":
     vagrant upload testing/run-tests.ps1 C:/Users/vagrant/lethe/testing/run-tests.ps1 {{platform}}
     vagrant ssh {{platform}} -c "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/vagrant/lethe/testing/run-tests.ps1"
+
+# Run the integration tests inside a macOS test VM
+vm-test-macos platform="macos-arm64" user="admin":
+    vagrant upload testing/run-tests.sh /Users/{{user}}/lethe/testing/run-tests.sh {{platform}}
+    vagrant ssh {{platform}} -c "cd ~/lethe && bash testing/run-tests.sh"
 
 # Stop and delete one test VM
 vm-destroy platform="linux-x64":

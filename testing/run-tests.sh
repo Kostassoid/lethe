@@ -54,10 +54,12 @@ find_linux_test_disk() {
 
 device_size_bytes() {
   local device="$1"
-  if command -v blockdev >/dev/null 2>&1; then
+  if [[ "$(uname -s)" == "Linux" ]]; then
     "${SUDO[@]}" blockdev --getsize64 "$device"
   else
-    diskutil info -plist "$device" | plutil -extract Size raw -o - -
+    local id="${device#/dev/}"
+    id="${id#r}"
+    diskutil info -plist "$id" | plutil -extract Size raw -o - -
   fi
 }
 
@@ -86,6 +88,10 @@ if [[ -n "${LETHE_TEST_DEVICE:-}" ]]; then
   DEVICE="$LETHE_TEST_DEVICE"
 elif [[ "$(uname -s)" == "Linux" && -f /etc/lethe-test-vm ]]; then
   DEVICE="$(find_linux_test_disk)"
+elif [[ "$(uname -s)" == "Darwin" && -f "$HOME/.lethe-test-device" ]]; then
+  DEVICE="$(cat "$HOME/.lethe-test-device")"
+elif [[ "$(uname -s)" == "Darwin" && -f /etc/lethe-test-vm ]]; then
+  DEVICE="$(cat /etc/lethe-test-vm)"
 elif [[ "$(uname -s)" == "Linux" ]]; then
   echo "Refusing to guess a disk outside a Lethe test VM." >&2
   echo "Set LETHE_TEST_DEVICE=/dev/sdX to run against a dedicated scratch disk." >&2

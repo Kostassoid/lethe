@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Space-separated test VMs (linux-x64, linux-arm64, windows-x64, windows-arm64)"
+        description: "Space-separated test VMs (linux-x64, linux-arm64, windows-x64, windows-arm64). macOS VM tests need a self-hosted Apple Silicon runner."
         required: true
         default: "linux-x64"
   schedule:
@@ -53,6 +53,10 @@ jobs:
         run: |
           set -euo pipefail
           for platform in $PLATFORMS; do
+            if [[ "$platform" == macos-* ]]; then
+              echo "macOS VM tests require a self-hosted Apple Silicon runner (Tart)." >&2
+              exit 2
+            fi
             echo "::group::${platform}"
             vagrant up "$platform" --provider=qemu
             if [[ "$platform" == linux-* ]]; then

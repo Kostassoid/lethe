@@ -2,9 +2,11 @@
 
 # Reproducible integration-test VMs for Lethe.
 #
-# Every machine boots with an additional 1 GiB scratch disk named
-# `lethe_test`. The guest test harness only wipes that disk, never the boot
-# disk. QEMU is used on every host OS through the `vagrant-qemu` plugin.
+# Every machine boots with an additional 1 GiB scratch disk. The guest test
+# harness only wipes that disk, never the boot disk. Linux and Windows guests
+# use QEMU through the `vagrant-qemu` plugin. macOS guests use Apple's
+# Virtualization.framework through Tart and the `vagrant-tart` plugin, which
+# only works on Apple Silicon Macs.
 #
 # Typical usage:
 #
@@ -13,12 +15,14 @@
 #   vagrant ssh linux-x64 -c "cd ~/lethe && bash testing/run-tests.sh"
 #   vagrant destroy -f linux-x64
 #
-# Machine names:
-#   linux-x64, linux-arm64, windows-x64, windows-arm64
+# On Apple Silicon macOS:
 #
-# macOS guests are not offered here: Apple's EULA only permits macOS
-# virtualization on Apple-branded hardware and there is no QEMU/libvirt
-# Vagrant box. Run `testing/run-tests.sh` on a real Mac instead.
+#   brew install cirruslabs/cli/tart
+#   vagrant plugin install vagrant-tart
+#   vagrant up macos-arm64 --provider=tart
+#
+# Machine names:
+#   linux-x64, linux-arm64, windows-x64, windows-arm64, macos-arm64
 
 require "fileutils"
 
@@ -30,6 +34,10 @@ end
 
 def darwin_host?
   RUBY_PLATFORM.include?("darwin")
+end
+
+def apple_silicon_host?
+  darwin_host? && RUBY_PLATFORM.match?(/(arm64|aarch64)/)
 end
 
 def qemu_binary_names
@@ -89,34 +97,62 @@ def find_qemu_firmware_dir(qemu_dir)
   ].find { |dir| File.file?(File.join(dir, "edk2-aarch64-code.fd")) }
 end
 
-qemu_dir = find_qemu_dir
+MACHINE_NAMES = %w[linux-x64 linux-arm64 windows-x64 windows-arm64 macos-arm64].freeze
+REQUESTED_MACHINES = ARGV.select { |arg| MACHINE_NAMES.include?(arg) }.freeze
 
-if qemu_dir.nil?
+qemu_plugin_available = Vagrant.has_plugin?("vagrant-qemu")
+tart_plugin_available = Vagrant.has_plugin?("vagrant-tart")
+macos_vm_available = apple_silicon_host? && tart_plugin_available
+
+qemu_dir = qemu_plugin_available ? find_qemu_dir : nil
+qemu_available = !qemu_dir.nil?
+
+if qemu_dir
+  path_parts = ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)
+  ENV["PATH"] = ([qemu_dir] + path_parts).join(File::PATH_SEPARATOR) unless path_parts.include?(qemu_dir)
+
+  # vagrant-qemu reads QEMU_DIR for the aarch64 firmware files. Point it at the
+  # directory that actually contains them when one can be found.
+  firmware_dir = find_qemu_firmware_dir(qemu_dir)
+  if firmware_dir && !File.file?(File.join(ENV.fetch("QEMU_DIR", ""), "edk2-aarch64-code.fd"))
+    ENV["QEMU_DIR"] = firmware_dir
+  end
+end
+
+qemu_requested = REQUESTED_MACHINES.any? { |machine| machine != "macos-arm64" }
+macos_requested = REQUESTED_MACHINES.include?("macos-arm64")
+
+if qemu_requested && !qemu_available
   abort <<~MSG
-    QEMU could not be found.
+    QEMU and the vagrant-qemu plugin are required for Linux and Windows test VMs.
+
+      vagrant plugin install vagrant-qemu
 
     Install QEMU and make sure `qemu-img` and a `qemu-system-*` binary are on
     PATH, or set QEMU_DIR to the directory containing those executables.
   MSG
 end
 
-path_parts = ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)
-ENV["PATH"] = ([qemu_dir] + path_parts).join(File::PATH_SEPARATOR) unless path_parts.include?(qemu_dir)
+if macos_requested && !macos_vm_available
+  abort <<~MSG
+    The macos-arm64 test VM requires an Apple Silicon Mac with Tart and the
+    vagrant-tart plugin:
 
-# vagrant-qemu reads QEMU_DIR for the aarch64 firmware files. Point it at the
-# directory that actually contains them when one can be found.
-firmware_dir = find_qemu_firmware_dir(qemu_dir)
-if firmware_dir && !File.file?(File.join(ENV.fetch("QEMU_DIR", ""), "edk2-aarch64-code.fd"))
-  ENV["QEMU_DIR"] = firmware_dir
+      brew install cirruslabs/cli/tart
+      vagrant plugin install vagrant-tart
+  MSG
 end
 
-unless Vagrant.has_plugin?("vagrant-qemu")
+if !qemu_available && !macos_vm_available
   abort <<~MSG
-    The vagrant-qemu provider plugin is required.
+    No usable VM provider was found.
 
+    For Linux and Windows guests:
       vagrant plugin install vagrant-qemu
 
-    QEMU must also be installed and available on PATH.
+    For macOS guests on Apple Silicon:
+      brew install cirruslabs/cli/tart
+      vagrant plugin install vagrant-tart
   MSG
 end
 
@@ -139,6 +175,17 @@ if (ARGV & %w[up provision reload resume]).any? && ENV["LETHE_SKIP_SOURCE_ARCHIV
 end
 
 TEST_DISK_SIZE = ENV.fetch("LETHE_TEST_DISK_SIZE", "1GB")
+
+MACOS_SCRATCH_DISK = File.join(CACHE_DIR, "macos-scratch.img")
+MACOS_SCRATCH_BYTES = 1 << 30
+
+if macos_vm_available
+  FileUtils.mkdir_p(CACHE_DIR)
+
+  unless File.file?(MACOS_SCRATCH_DISK) && File.size(MACOS_SCRATCH_DISK) == MACOS_SCRATCH_BYTES
+    File.open(MACOS_SCRATCH_DISK, "wb") { |file| file.truncate(MACOS_SCRATCH_BYTES) }
+  end
+end
 
 def qemu_acceleration(guest_arch)
   accel = ENV["LETHE_QEMU_ACCEL"]
@@ -203,43 +250,64 @@ Vagrant.configure("2") do |config|
   config.vm.boot_timeout = Integer(ENV.fetch("LETHE_VM_BOOT_TIMEOUT", "900"))
   config.vm.synced_folder ".", "/vagrant", disabled: true
 
-  config.vm.define "linux-x64", autostart: false do |machine|
-    machine.vm.box = linux_x64_box
-    machine.vm.box_architecture = "amd64"
-    machine.vm.disk :disk, size: TEST_DISK_SIZE, name: "lethe_test"
-    configure_qemu(machine, "x86_64", 50_022)
-    machine.vm.provision "file", source: SOURCE_ARCHIVE, destination: "lethe-src.tar.gz"
-    machine.vm.provision "shell", path: "testing/provision-linux.sh"
-  end
+  if qemu_available
+    config.vm.define "linux-x64", autostart: false do |machine|
+      machine.vm.box = linux_x64_box
+      machine.vm.box_architecture = "amd64"
+      machine.vm.disk :disk, size: TEST_DISK_SIZE, name: "lethe_test"
+      configure_qemu(machine, "x86_64", 50_022)
+      machine.vm.provision "file", source: SOURCE_ARCHIVE, destination: "lethe-src.tar.gz"
+      machine.vm.provision "shell", path: "testing/provision-linux.sh"
+    end
 
-  config.vm.define "linux-arm64", autostart: false do |machine|
-    machine.vm.box = linux_arm64_box
-    machine.vm.box_architecture = "arm64"
-    machine.vm.disk :disk, size: TEST_DISK_SIZE, name: "lethe_test"
-    configure_qemu(machine, "aarch64", 50_023)
-    machine.vm.provision "file", source: SOURCE_ARCHIVE, destination: "lethe-src.tar.gz"
-    machine.vm.provision "shell", path: "testing/provision-linux.sh"
-  end
-
-  config.vm.define "windows-x64", autostart: false do |machine|
-    machine.vm.box = windows_x64_box
-    machine.vm.box_architecture = "amd64"
-    machine.vm.communicator = "ssh"
-    machine.vm.disk :disk, size: TEST_DISK_SIZE, name: "lethe_test"
-    configure_qemu(machine, "x86_64", 50_024)
-    machine.vm.provision "file", source: SOURCE_ARCHIVE, destination: "lethe-src.tar.gz"
-    machine.vm.provision "shell", path: "testing/provision-windows.ps1", privileged: false
-  end
-
-  if windows_arm64_box
-    config.vm.define "windows-arm64", autostart: false do |machine|
-      machine.vm.box = windows_arm64_box
+    config.vm.define "linux-arm64", autostart: false do |machine|
+      machine.vm.box = linux_arm64_box
       machine.vm.box_architecture = "arm64"
+      machine.vm.disk :disk, size: TEST_DISK_SIZE, name: "lethe_test"
+      configure_qemu(machine, "aarch64", 50_023)
+      machine.vm.provision "file", source: SOURCE_ARCHIVE, destination: "lethe-src.tar.gz"
+      machine.vm.provision "shell", path: "testing/provision-linux.sh"
+    end
+
+    config.vm.define "windows-x64", autostart: false do |machine|
+      machine.vm.box = windows_x64_box
+      machine.vm.box_architecture = "amd64"
       machine.vm.communicator = "ssh"
       machine.vm.disk :disk, size: TEST_DISK_SIZE, name: "lethe_test"
-      configure_qemu(machine, "aarch64", 50_025)
+      configure_qemu(machine, "x86_64", 50_024)
       machine.vm.provision "file", source: SOURCE_ARCHIVE, destination: "lethe-src.tar.gz"
       machine.vm.provision "shell", path: "testing/provision-windows.ps1", privileged: false
+    end
+
+    if windows_arm64_box
+      config.vm.define "windows-arm64", autostart: false do |machine|
+        machine.vm.box = windows_arm64_box
+        machine.vm.box_architecture = "arm64"
+        machine.vm.communicator = "ssh"
+        machine.vm.disk :disk, size: TEST_DISK_SIZE, name: "lethe_test"
+        configure_qemu(machine, "aarch64", 50_025)
+        machine.vm.provision "file", source: SOURCE_ARCHIVE, destination: "lethe-src.tar.gz"
+        machine.vm.provision "shell", path: "testing/provision-windows.ps1", privileged: false
+      end
+    end
+  end
+
+  if macos_vm_available
+    config.vm.define "macos-arm64", autostart: false do |machine|
+      machine.vm.provider "tart" do |tart|
+        tart.image = ENV.fetch("LETHE_MACOS_IMAGE", "ghcr.io/cirruslabs/macos-sequoia-xcode:latest")
+        tart.name = ENV.fetch("LETHE_MACOS_VM_NAME", "lethe-macos-arm64")
+        tart.cpus = Integer(ENV.fetch("LETHE_MACOS_CPUS", ENV.fetch("LETHE_VM_CPUS", "2")))
+        tart.memory = Integer(ENV.fetch("LETHE_MACOS_MEMORY_MB", "8192"))
+        tart.gui = false
+        tart.extra_run_args = ["--disk", MACOS_SCRATCH_DISK]
+      end
+
+      machine.vm.communicator = "ssh"
+      machine.ssh.username = ENV.fetch("LETHE_MACOS_USER", "admin")
+      machine.ssh.password = ENV.fetch("LETHE_MACOS_PASSWORD", "admin")
+      machine.vm.provision "file", source: SOURCE_ARCHIVE, destination: "lethe-src.tar.gz"
+      machine.vm.provision "shell", path: "testing/provision-macos.sh"
     end
   end
 end

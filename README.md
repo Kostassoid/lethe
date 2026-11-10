@@ -83,31 +83,44 @@ real drives.
 
 ## Integration testing
 
-The `Vagrantfile` provisions disposable QEMU VMs with an extra 1 GiB scratch disk (`lethe_test`) that the integration
-tests wipe. The host needs [Vagrant](https://developer.hashicorp.com/vagrant), [QEMU](https://www.qemu.org/) and the
-[`vagrant-qemu`](https://github.com/ppggff/vagrant-qemu) plugin:
+The `Vagrantfile` provisions disposable VMs with an extra 1 GiB scratch disk that the integration tests wipe. Linux and
+Windows guests use QEMU through the [`vagrant-qemu`](https://github.com/ppggff/vagrant-qemu) plugin. macOS guests on
+Apple Silicon use Apple's Virtualization.framework through [Tart](https://tart.run/) and the
+[`vagrant-tart`](https://github.com/letiemble/vagrant-tart) plugin.
+
+Linux and Windows hosts need [Vagrant](https://developer.hashicorp.com/vagrant), [QEMU](https://www.qemu.org/) and
+`vagrant-qemu`:
 
 ```sh
 vagrant plugin install vagrant-qemu
 ```
 
 QEMU is auto-detected in the usual install locations (including `C:\Program Files\qemu` on Windows and the
-Homebrew/`/usr` prefixes elsewhere). Set `QEMU_DIR` if your installation lives somewhere else.
+Homebrew/`/usr` prefixes elsewhere). Set `QEMU_DIR` if your installation lives somewhere else. On Windows the provider
+uses TCG software emulation by default because WHPX is unreliable or unavailable on many hosts. Set
+`LETHE_QEMU_ACCEL=whpx` to opt into hardware acceleration; Linux and macOS use KVM/HVF automatically.
 
-On Windows the provider uses TCG software emulation by default because WHPX is unreliable or unavailable on many
-hosts. Set `LETHE_QEMU_ACCEL=whpx` to opt into hardware acceleration; Linux and macOS use KVM/HVF automatically.
+macOS VM testing requires an Apple Silicon Mac, Tart and `vagrant-tart`:
+
+```sh
+brew install cirruslabs/cli/tart
+vagrant plugin install vagrant-tart
+```
 
 Supported machines:
 
-| Machine        | Guest                     | Notes                                                        |
-|----------------|---------------------------|--------------------------------------------------------------|
-| `linux-x64`    | Ubuntu 24.04 x86-64       | Native KVM/WHV/HVF acceleration where available              |
-| `linux-arm64`  | Ubuntu 24.04 ARM64        | TCG emulation on non-ARM hosts                               |
-| `windows-x64`  | Windows Server 2025 x86-64| Builds with the Rust GNU toolchain inside the VM             |
-| `windows-arm64`| Windows ARM64             | Requires `LETHE_WINDOWS_ARM64_BOX`; no public QEMU box exists|
+| Machine        | Guest                     | Notes                                                          |
+|----------------|---------------------------|----------------------------------------------------------------|
+| `linux-x64`    | Ubuntu 24.04 x86-64       | Native KVM/WHV/HVF acceleration where available                |
+| `linux-arm64`  | Ubuntu 24.04 ARM64        | TCG emulation on non-ARM hosts                                 |
+| `windows-x64`  | Windows Server 2025 x86-64| Builds with the Rust GNU toolchain inside the VM               |
+| `windows-arm64`| Windows ARM64             | Requires `LETHE_WINDOWS_ARM64_BOX`; no public QEMU box exists  |
+| `macos-arm64`  | macOS on Apple Silicon    | Apple Silicon host only; uses Tart instead of QEMU             |
 
-macOS cannot be run as a QEMU guest: Apple only allows macOS virtualization on Apple hardware, and no QEMU/libvirt
-Vagrant box is published. Run the integration tests natively on a Mac instead.
+Apple only permits macOS virtualization on Apple-branded hardware, so `macos-arm64` is only defined on Apple Silicon
+hosts. GitHub-hosted macOS runners do not support nested virtualization; run this machine on a self-hosted Apple Silicon
+Mac. The default image is `ghcr.io/cirruslabs/macos-sequoia-xcode:latest`; override it with `LETHE_MACOS_IMAGE`. Use
+`LETHE_MACOS_VM_NAME`, `LETHE_MACOS_USER`, and `LETHE_MACOS_PASSWORD` to customize the VM name and SSH credentials.
 
 Typical workflow:
 
@@ -115,6 +128,15 @@ Typical workflow:
 just vm-up linux-x64
 just vm-test-linux linux-x64
 just vm-destroy linux-x64
+```
+
+On Apple Silicon macOS:
+
+```sh
+just vm-setup-macos
+just vm-up-macos
+just vm-test-macos
+just vm-destroy macos-arm64
 ```
 
 Use `just vm-test-windows <machine>` for Windows guests. The test recipes re-upload the current test scripts first;
