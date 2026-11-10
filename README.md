@@ -7,38 +7,43 @@ Should work with any HDD, SSD (read limitations) and flash drives.
 The usual methods for wiping (or sanitization) a drive, including those (allegedly) used by government agencies are
 based
 on destructive writes. In other words, on overwriting existing data with multiple layers of randomly generated data or
-some
-static pattern.
+some static pattern.
 This is basically what this tool does.
 
 There are other similar applications around (including multiple built-in Linux tools). Most of them are proprietary, or
-slow,
-or non-cross-platform, which was a requirement for me. So I wrote this application.
+slow, or non-cross-platform. That's why this application exists.
 
 ## Features
 
 - Supports Windows (x86-64 and ARM64; but not WSL), macOS (Apple Silicon) and Linux (x86-64 and ARM64).
 - Validates the data (reads back) to make sure all write commands were successful
 - Uses fast cryptographic random generator
-- Allows to override OS recommended block size for possibly faster operations
-- Tracks & skips bad blocks and other localized errors automatically (Experimental)
+- Allows to override OS recommended block size for faster operations
+- Tracks & skips bad blocks and other localized errors automatically
 
 ## Limitations
 
 - For SSD, it's impossible to reliable wipe all the data because of the various optimizations performed by modern SSD
   controllers, namely wear leveling and compression. The best approach currently is to use multiple wiping rounds with
-  random data. Later, a support for Secure Erase ATA commands may be added to make the process more reliable.
+  random data.
+- In theory, Secure Erase ATA commands may be used additionally, but there's no guarantee regarding their semantics.
+  This application doesn't support this method.
 - The maximum number of blocks per storage device is 2<sup>32</sup>, or 4,294,967,296. For example, using a block size
   of 1 MB the size of the storage can be up to 4096 TB.
-- The application hasn't even been tested on RAID storages, beware.
+- The application hasn't been tested on RAID storages and other complex storage configurations, beware.
 
 ## Current status
 
-The initial active development phase is done.
-I have been using the application for some time for personal needs on all supported platforms. It does what it was
-designed to do. Didn't have to deal with forensics experts yet though.
-I still make some additions/changes occasionally, but there's no exact roadmap.
-I would love to learn about other people's experience with the application. Let me know if you have any issues!
+This application is already fairly old and was used in many scenarios. I never received any complaints regarding its
+functionality, apart from some minor issues. I believe it is stable enough for general use.
+
+Saying that, I didn't have to deal with forensics experts and my area of expertise is not related to security. I would
+love to hear from people with more experience in this area, regarding the effectiveness of the application.
+
+Also, while it's fun working on this project, I don't have a significant roadmap for it apart from a few improvements.
+At the very least, I'm going to keep updating it from time to time to keep dependencies up to date and fix any issues
+that may arise.
+Let me know if you have any issues!
 
 ## Installation
 
@@ -83,10 +88,8 @@ real drives.
 
 ## Testing
 
-The integration test suite runs inside disposable VMs and verifies real wiping behavior, not just unit-level logic. The
-recipes below use the [`just`](https://github.com/casey/just) command runner. Check that `just --version` reports
-`1.x`; an unrelated Spring Boot runner with the same name (for example from the `maciejwalkowiak/brew` Homebrew
-tap) will not read this `Justfile`.
+The integration test suite runs inside disposable VMs and verifies real wiping behavior. The
+recipes below use the [`just`](https://github.com/casey/just) command runner.
 
 The `Vagrantfile` provisions disposable VMs with an extra 1 GiB scratch disk that the integration tests wipe. Linux and
 Windows guests use QEMU through the [`vagrant-qemu`](https://github.com/ppggff/vagrant-qemu) plugin. macOS guests on
@@ -112,7 +115,7 @@ to do it manually, run:
 
 ```sh
 brew tap openai/tools
-brew trust openai/tools   # Homebrew 6+
+brew trust openai/tools
 brew install openai/tools/tart
 vagrant plugin install vagrant-tart
 ```
@@ -123,25 +126,23 @@ requires macOS Tahoe, so install Tart from the release archive instead (see the
 
 ### Supported machines
 
-| Machine        | Guest                     | Notes                                                          |
-|----------------|---------------------------|----------------------------------------------------------------|
-| `linux-x64`    | Ubuntu 24.04 x86-64       | Native KVM/WHV/HVF acceleration where available                |
-| `linux-arm64`  | Ubuntu 24.04 ARM64        | TCG emulation on non-ARM hosts                                 |
-| `windows-x64`  | Windows Server 2025 x86-64| Builds with the Rust GNU toolchain inside the VM               |
-| `windows-arm64`| Windows ARM64             | Requires `LETHE_WINDOWS_ARM64_BOX`; no public QEMU box exists  |
-| `macos-arm64`  | macOS on Apple Silicon    | Apple Silicon host only; uses Tart instead of QEMU             |
+| Machine         | Guest                      | Notes                                                         |
+|-----------------|----------------------------|---------------------------------------------------------------|
+| `linux-x64`     | Ubuntu 24.04 x86-64        | Native KVM/WHV/HVF acceleration where available               |
+| `linux-arm64`   | Ubuntu 24.04 ARM64         | TCG emulation on non-ARM hosts                                |
+| `windows-x64`   | Windows Server 2025 x86-64 | Builds with the Rust GNU toolchain inside the VM              |
+| `windows-arm64` | Windows ARM64              | Requires `LETHE_WINDOWS_ARM64_BOX`; no public QEMU box exists |
+| `macos-arm64`   | macOS on Apple Silicon     | Apple Silicon host only; uses Tart instead of QEMU            |
 
 Apple only permits macOS virtualization on Apple-branded hardware, so `macos-arm64` is only defined on Apple Silicon
 hosts. GitHub-hosted macOS runners do not support nested virtualization; run this machine on a self-hosted Apple Silicon
 Mac. The default image is `ghcr.io/cirruslabs/macos-sequoia-base:latest` (about 25 GB compressed and a 50 GB virtual
-disk); override it with `LETHE_MACOS_IMAGE`. The `macos-sequoia-xcode` variant is about 68 GB compressed with a 140 GB
-disk and is only needed when the guest requires a full Xcode installation. `LETHE_MACOS_DISK_GB` defaults to the
-selected image's disk size (50 GB, or 140 GB for `xcode` images); Tart cannot shrink an existing VM, so destroy and
+disk); override it with `LETHE_MACOS_IMAGE`. `LETHE_MACOS_DISK_GB` defaults to the
+selected image's disk size; Tart cannot shrink an existing VM, so destroy and
 recreate the VM after switching images. Use `LETHE_MACOS_VM_NAME`, `LETHE_MACOS_USER`, and `LETHE_MACOS_PASSWORD` to
 customize the VM name and SSH credentials. The first boot of a freshly cloned image can take 15+ minutes while macOS
 finishes first-boot setup, so the macOS machine uses a 30-minute boot timeout by default (`LETHE_MACOS_BOOT_TIMEOUT`).
-See [macOS VMs with bridged networking](#macos-vms-with-bridged-networking) if a host VPN blocks the VM's network
-access.
+See [macOS VMs with bridged networking](#macos-vms-with-bridged-networking) if a host VPN blocks the VM's network access.
 
 ### Running the tests
 
@@ -247,8 +248,8 @@ mullvad connect
 ### Troubleshooting
 
 - `Host unreachable. Retrying...` during the first boot is expected for a freshly cloned macOS image; first-boot setup
-  and Spotlight indexing can take 15+ minutes. The macOS VM has a 30-minute boot timeout
-  (`LETHE_MACOS_BOOT_TIMEOUT`). Check `just vm-status`; the VM may still be booting after Vagrant prints retries.
+  and Spotlight indexing can take 15+ minutes. The macOS VM has a 30-minute boot timeout (`LETHE_MACOS_BOOT_TIMEOUT`).
+  Check `just vm-status`; the VM may still be booting after Vagrant prints retries.
 - `The provider ... is not yet ready for SSH`: with bridged networking, the ARP cache entry for the guest probably
   expired. Set `LETHE_MACOS_SSH_HOST` as described above.
 - `new disk size ... should be larger than the current disk size ...`: this is a `vagrant-tart` quirk when its disk
