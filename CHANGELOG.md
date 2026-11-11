@@ -1,5 +1,11 @@
 # Change Log
 
+## [Unreleased] - ReleaseDate
+
+### Added
+
+* The system is now prevented from sleeping while a wipe is in progress on Windows, macOS and Linux.
+
 ## [v1.0.1] - 2026-11-11
 
 ### Added

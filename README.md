@@ -22,6 +22,7 @@ Similar tools exist, but most are proprietary, slow or not cross-platform. Lethe
 - **Fast random data** — uses a fast cryptographic random generator.
 - **Tunable block size** — override the OS-recommended block size for faster operations.
 - **Bad block handling** — tracks, skips and reports bad blocks and other localized errors automatically.
+- **Sleep prevention** — blocks the OS from sleeping while a wipe is in progress.
 
 ## Limitations
 

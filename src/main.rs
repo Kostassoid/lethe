@@ -5,11 +5,13 @@ use indicatif::HumanBytes;
 use prettytable::{Attr, Cell, Row, Table, format, row};
 
 mod actions;
+mod power;
 mod sanitization;
 mod storage;
 mod ui;
 
 use actions::{Percent, Verification, WipePlan};
+use power::SleepInhibitor;
 use sanitization::SchemeRepo;
 use storage::{StorageDevice, StorageReadiness, StorageRef, System};
 use ui::{args, cli, storage_repo};
@@ -127,6 +129,12 @@ fn main() -> Result<()> {
             let session = cli::wipe_session(&device.id, cmd.get_flag("yes"));
 
             let device_access = device.access()?;
+
+            let _sleep_inhibitor = SleepInhibitor::acquire(&format!("Wiping device {device_id}"))
+                .inspect_err(|err| {
+                    eprintln!("Warning: unable to prevent the system from sleeping: {err:#}");
+                })
+                .ok();
 
             plan.execute(device_access, Box::new(session), *retries)?;
         }
