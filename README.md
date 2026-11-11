@@ -1,3 +1,7 @@
+<div align="center">
+<img src="https://raw.githubusercontent.com/Kostassoid/lethe/main/assets/logo.svg" width="200" alt="Logo" />
+</div>
+
 # Lethe
 
 A secure, free, cross-platform and open-source drive wiping utility for HDDs, SSDs (see [Limitations](#limitations))
@@ -398,6 +402,28 @@ The source archive sent to the VMs is generated from the working tree (excluding
 `testing/run-tests.sh` and `testing/run-tests.ps1` can also be run directly on a macOS/Windows host when
 `LETHE_TEST_DEVICE` points at a dedicated scratch disk. Auto-detection of the scratch disk is only enabled inside the
 provisioned test VMs.
+
+## Releasing
+
+Releases are driven by a version tag. Install [`cargo-release`](https://github.com/crate-ci/cargo-release), make sure
+the working tree is clean, then preview the release:
+
+```sh
+just release 0.9.0
+```
+
+This runs `cargo-release` in dry-run mode, showing the version bump, file changes, commit and tag without modifying
+anything. To perform the release, pass `--execute`:
+
+```sh
+just release 0.9.0 --execute
+```
+
+This bumps the version, updates the changelog and README, commits the changes, creates the `v0.9.0` tag and pushes it.
+The tag triggers the GitHub Actions release workflow, which builds the supported platforms and attaches the artifacts
+to the GitHub release. A second tag-triggered workflow publishes the crate to crates.io.
+
+Set the `CARGO_REGISTRY_TOKEN` repository secret to a crates.io API token before the first release.
 
 ## Benchmarks
 

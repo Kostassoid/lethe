@@ -1,7 +1,9 @@
-disable-publish = true
-dev-version-ext = "dev"
+publish = false
+tag-name = "v{{version}}"
+tag-message = "Release v{{version}}"
+pre-release-commit-message = "Release v{{version}}"
 pre-release-replacements = [
-    { file = "README.md", search = "v[0-9]+\\.[0-9]+\\.[0-9]+", replace = "v{{version}}" },
+    { file = "README.md", search = 'Current release: \*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*', replace = "Current release: **v{{version}}**" },
     { file = "CHANGELOG.md", search = "Unreleased", replace = "v{{version}}", min = 0 },
     { file = "CHANGELOG.md", search = "ReleaseDate", replace = "{{date}}", min = 0 }
 ]

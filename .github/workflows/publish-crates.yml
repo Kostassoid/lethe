@@ -1,0 +1,43 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check registry token
+        run: |
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is not set. Add it as a repository secret."
+            exit 1
+          fi
+
+      - name: Verify tag matches the crate version
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "lethe") | .version')"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version."
+            exit 1
+          fi
+
+      - name: Publish
+        run: cargo publish --locked

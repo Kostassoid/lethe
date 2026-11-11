@@ -31,8 +31,12 @@ build *args:
     cargo build --locked {{args}}
 
 # Build the optimized release binary
-release:
+release-build:
     cargo build --locked --release
+
+# Release a new version (dry run by default; add `--execute` to release): e.g. `just release 0.9.0`
+release version *args:
+    cargo release {{version}} {{args}}
 
 # Run tests; extra flags are forwarded
 test *args:
@@ -164,7 +168,7 @@ info:
     @cargo clippy --version
 
 # Run the full CI check suite
-ci: fmt-check clippy test dist-check release
+ci: fmt-check clippy test dist-check release-build
 
 # Run CI checks without the release build
 ci-quick: fmt-check clippy test dist-check
