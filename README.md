@@ -49,7 +49,7 @@ Let me know if you have any issues!
 
 ## Installation
 
-Current release: **v0.8.2** [Changelog](CHANGELOG.md)
+Current release: **v1.0.1** [Changelog](CHANGELOG.md)
 
 ### Bash (Linux, macOS)
 
