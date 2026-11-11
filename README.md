@@ -1,5 +1,5 @@
 <div align="center">
-<img src="https://raw.githubusercontent.com/Kostassoid/lethe/main/assets/logo.svg" width="200" alt="Logo" />
+<img src="https://raw.githubusercontent.com/Kostassoid/lethe/master/assets/logo.svg" width="200" alt="Logo" />
 </div>
 
 # Lethe
