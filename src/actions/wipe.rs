@@ -461,10 +461,14 @@ impl AsyncWipeSession {
     }
 }
 
+#[derive(Clone, Copy)]
 struct SlotMeta {
     position: u64,
     len: usize,
 }
+
+/// How many times a short transfer is retried before it is treated as a failure.
+const MAX_SHORT_TRANSFER_RETRIES: u8 = 4;
 
 struct QueueEntry {
     slot: Option<usize>,
@@ -481,6 +485,7 @@ struct AsyncSessionIO<'a> {
     buffers: Vec<AlignedBuffer>,
     expected: Vec<Vec<u8>>,
     slots: Vec<Option<SlotMeta>>,
+    short_retries: Vec<u8>,
     free_slots: Vec<usize>,
     queue: VecDeque<QueueEntry>,
     /// Absolute position of the next chunk to submit.
@@ -512,6 +517,7 @@ impl<'a> AsyncSessionIO<'a> {
             Vec::new()
         };
         let slots = (0..depth).map(|_| None).collect();
+        let short_retries = vec![0; depth];
         let free_slots = (0..depth).rev().collect();
 
         AsyncSessionIO {
@@ -522,6 +528,7 @@ impl<'a> AsyncSessionIO<'a> {
             buffers,
             expected,
             slots,
+            short_retries,
             free_slots,
             queue: VecDeque::new(),
             submitted: 0,
@@ -624,7 +631,7 @@ impl<'a> AsyncSessionIO<'a> {
     }
 
     fn ensure_free_slot(&mut self) -> Result<()> {
-        if self.inflight >= self.buffers.len() {
+        while self.inflight >= self.buffers.len() {
             self.reap_one()?;
         }
 
@@ -634,10 +641,30 @@ impl<'a> AsyncSessionIO<'a> {
     fn reap_one(&mut self) -> Result<()> {
         let completion = self.storage.reap()?;
         let slot = completion.slot;
-        let meta = self.slots[slot]
-            .take()
+        let meta = *self.slots[slot]
+            .as_ref()
             .expect("completion references an in-flight slot");
 
+        if let Ok(bytes) = &completion.result
+            && *bytes < meta.len
+            && self.short_retries[slot] < MAX_SHORT_TRANSFER_RETRIES
+        {
+            // Windows (and some devices) may report a short transfer instead of an
+            // error. Re-issue the request, mirroring read_exact/write_all in the
+            // synchronous implementation.
+            self.short_retries[slot] += 1;
+            let kind = if self.verifying {
+                IoKind::Read
+            } else {
+                IoKind::Write
+            };
+            let buffer = &mut self.buffers[slot].as_mut_slice()[..meta.len];
+            self.storage.submit(slot, meta.position, buffer, kind)?;
+            return Ok(());
+        }
+
+        self.slots[slot] = None;
+        self.short_retries[slot] = 0;
         self.inflight -= 1;
         self.free_slots.push(slot);
 
@@ -648,13 +675,15 @@ impl<'a> AsyncSessionIO<'a> {
         match completion.result {
             Ok(bytes) => {
                 if bytes != meta.len {
+                    let operation = if self.verifying { "read" } else { "write" };
+
                     return self.fail(
                         meta.position,
                         anyhow!(
-                            "Unexpected transfer length {} (expected {}) at position {}",
-                            bytes,
+                            "Unexpected {operation} transfer length {bytes} (expected {}) at position {} (wiped area ends at {})",
                             meta.len,
-                            meta.position
+                            meta.position,
+                            self.plan.range.end
                         ),
                     );
                 }
@@ -1568,6 +1597,35 @@ mod test {
     }
 
     #[test]
+    fn test_async_retries_short_transfers() {
+        let scheme = SchemeRepo::default().find("zero").unwrap().clone();
+        let size = 100_000;
+        let block_size = 8192;
+        let data = Arc::new(Mutex::new(vec![0xffu8; size]));
+        let mut storage = MockAsyncStorage::new(Arc::clone(&data), 4);
+        storage.zero_transfers = vec![24_576];
+        let receiver = StubReceiver::new();
+
+        let plan = WipePlan::new(
+            scheme,
+            Verification::Last(Percent::new(100.0).unwrap()),
+            0..size as u64,
+            block_size,
+        )
+        .unwrap();
+
+        let result = plan.execute_async(Box::new(storage), Box::new(receiver), 0, 4);
+        assert!(result.is_ok());
+        assert!(
+            data.lock()
+                .expect("test storage lock poisoned")
+                .iter()
+                .all(|byte| *byte == 0),
+            "the retried transfer did not cover the whole area"
+        );
+    }
+
+    #[test]
     fn test_async_random_wipe_skips_bad_blocks_and_keeps_stream_positions() {
         let stage = Stage::random();
         let scheme = Scheme {
@@ -1829,6 +1887,7 @@ mod test {
         completions: VecDeque<IoCompletion>,
         bad_blocks: Vec<u64>,
         corrupt_reads: Vec<u64>,
+        zero_transfers: Vec<u64>,
         depth: usize,
     }
 
@@ -1839,6 +1898,7 @@ mod test {
                 completions: VecDeque::new(),
                 bad_blocks: Vec::new(),
                 corrupt_reads: Vec::new(),
+                zero_transfers: Vec::new(),
                 depth,
             }
         }
@@ -1865,6 +1925,9 @@ mod test {
                 .any(|block| start as u64 <= *block && end as u64 > *block)
             {
                 Err(StorageError::BadBlock.into())
+            } else if self.zero_transfers.contains(&position) {
+                self.zero_transfers.retain(|value| *value != position);
+                Ok(0)
             } else {
                 let mut data = self.data.lock().expect("test storage lock poisoned");
                 if start >= data.len() {

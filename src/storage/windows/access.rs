@@ -17,6 +17,7 @@ use windows::Win32::System::IO::{DeviceIoControl, GetOverlappedResult, OVERLAPPE
 use windows::Win32::System::Ioctl::{
     FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME,
 };
+use windows::Win32::System::Threading::CreateEventW;
 use windows::core::{Error as WindowsError, HSTRING};
 
 use crate::storage::{
@@ -215,7 +216,16 @@ fn win32_error_code(error: &WindowsError) -> u32 {
 
 struct PendingOp {
     overlapped: Box<OVERLAPPED>,
+    event: HANDLE,
     slot: usize,
+}
+
+fn close_event(event: HANDLE) {
+    if !event.is_invalid() {
+        unsafe {
+            let _ = CloseHandle(event);
+        }
+    }
 }
 
 /// Asynchronous access over one overlapped device handle. Requests are reaped in
@@ -266,6 +276,10 @@ impl AsyncStorageAccess for OverlappedAccess {
         overlapped.Anonymous.Anonymous.OffsetHigh =
             u32::try_from(position >> 32).expect("high word fits u32");
 
+        let event = unsafe { CreateEventW(None, true, false, None) }
+            .context("Unable to create an overlapped I/O event")?;
+        overlapped.hEvent = event;
+
         let overlapped_ptr: *mut OVERLAPPED = std::ptr::addr_of_mut!(*overlapped);
 
         let result = unsafe {
@@ -282,10 +296,17 @@ impl AsyncStorageAccess for OverlappedAccess {
         match result {
             Ok(()) => {}
             Err(error) if win32_error_code(&error) == ERROR_IO_PENDING.0 => {}
-            Err(error) => return Err(StorageError::from_windows(&error).into()),
+            Err(error) => {
+                close_event(event);
+                return Err(StorageError::from_windows(&error).into());
+            }
         }
 
-        self.pending.push_back(PendingOp { overlapped, slot });
+        self.pending.push_back(PendingOp {
+            overlapped,
+            event,
+            slot,
+        });
         Ok(())
     }
 
@@ -309,6 +330,8 @@ impl AsyncStorageAccess for OverlappedAccess {
             .map(|()| transferred as usize)
             .map_err(|error| StorageError::from_windows(&error).into());
 
+        close_event(op.event);
+
         Ok(IoCompletion {
             slot: op.slot,
             result,
@@ -326,6 +349,7 @@ impl AsyncStorageAccess for OverlappedAccess {
                     true,
                 );
             }
+            close_event(op.event);
         }
 
         Ok(())
