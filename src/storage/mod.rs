@@ -4,7 +4,9 @@ mod nix;
 #[cfg(windows)]
 mod windows;
 
-use anyhow::Result;
+use std::collections::VecDeque;
+
+use anyhow::{Result, anyhow};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -34,21 +36,106 @@ pub struct StorageRef {
 pub trait StorageDevice {
     fn access(&self) -> Result<Box<dyn StorageAccess>>;
 
-    /// Opens `count` independent handles to the device, for parallel I/O.
+    /// Opens the device for asynchronous, positional I/O.
     ///
-    /// Platforms with exclusive device locking override this to lock once and then open
-    /// the remaining handles without re-locking.
-    fn access_many(&self, count: usize) -> Result<Vec<Box<dyn StorageAccess>>> {
-        (0..count).map(|_| self.access()).collect()
+    /// The default implementation falls back to synchronous requests with a depth of 1.
+    fn access_async(&self, _depth: usize) -> Result<Box<dyn AsyncStorageAccess>> {
+        Ok(Box::new(SyncAsyncAccess::new(self.access()?)))
     }
 }
 
 /// Random-access I/O over a storage device.
-pub trait StorageAccess: Send {
+pub trait StorageAccess {
     fn seek(&mut self, position: u64) -> Result<u64>;
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize>;
     fn write(&mut self, data: &[u8]) -> Result<()>;
     fn flush(&mut self) -> Result<()>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IoKind {
+    Read,
+    Write,
+}
+
+/// A completed asynchronous request.
+pub struct IoCompletion {
+    pub slot: usize,
+    pub result: Result<usize>,
+}
+
+/// Positional I/O with multiple requests in flight.
+///
+/// Requests are submitted against reusable slots. The caller must keep the buffer
+/// passed to [`AsyncStorageAccess::submit`] alive and untouched until the matching
+/// completion has been reaped.
+pub trait AsyncStorageAccess {
+    /// Maximum number of requests that can be in flight.
+    fn depth(&self) -> usize;
+
+    fn submit(&mut self, slot: usize, position: u64, buffer: &mut [u8], kind: IoKind)
+    -> Result<()>;
+
+    /// Blocks until at least one request completes.
+    fn reap(&mut self) -> Result<IoCompletion>;
+
+    /// Waits for every in-flight request and releases its slot.
+    fn drain(&mut self) -> Result<()>;
+
+    fn flush(&mut self) -> Result<()>;
+}
+
+/// Adapts a synchronous [`StorageAccess`] to the asynchronous interface with a depth
+/// of 1. Used on platforms without a native asynchronous disk I/O API.
+struct SyncAsyncAccess {
+    access: Box<dyn StorageAccess>,
+    completions: VecDeque<IoCompletion>,
+}
+
+impl SyncAsyncAccess {
+    fn new(access: Box<dyn StorageAccess>) -> Self {
+        SyncAsyncAccess {
+            access,
+            completions: VecDeque::new(),
+        }
+    }
+}
+
+impl AsyncStorageAccess for SyncAsyncAccess {
+    fn depth(&self) -> usize {
+        1
+    }
+
+    fn submit(
+        &mut self,
+        slot: usize,
+        position: u64,
+        buffer: &mut [u8],
+        kind: IoKind,
+    ) -> Result<()> {
+        let result = self.access.seek(position).and_then(|_| match kind {
+            IoKind::Read => self.access.read(buffer),
+            IoKind::Write => self.access.write(buffer).map(|()| buffer.len()),
+        });
+
+        self.completions.push_back(IoCompletion { slot, result });
+        Ok(())
+    }
+
+    fn reap(&mut self) -> Result<IoCompletion> {
+        self.completions
+            .pop_front()
+            .ok_or_else(|| anyhow!("No pending I/O completion"))
+    }
+
+    fn drain(&mut self) -> Result<()> {
+        self.completions.clear();
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.access.flush()
+    }
 }
 
 #[derive(Clone, Debug, Default)]

@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use anyhow::{Result, anyhow};
 use streaming_iterator::StreamingIterator;
 
@@ -5,7 +7,7 @@ use crate::actions::bad_blocks::BadBlocks;
 use crate::actions::plan::{Step, StreamId, WipePlan};
 use crate::sanitization::mem::AlignedBuffer;
 use crate::sanitization::stream::Stream;
-use crate::storage::{StorageAccess, StorageError};
+use crate::storage::{AsyncStorageAccess, IoKind, StorageAccess, StorageError};
 
 type StepIndex = usize;
 type BytePosition = u64;
@@ -254,6 +256,522 @@ impl WipeSession {
     }
 }
 
+/// Executes a [`WipePlan`] with several positional I/O requests in flight.
+///
+/// The observable session semantics are the same as [`WipeSession`]: steps run in order,
+/// bad blocks are marked and skipped, verification resumes from the failure point, and
+/// progress only advances over contiguously completed chunks.
+pub struct AsyncWipeSession {
+    event_handler: Box<dyn WipeEventHandler>,
+    storage: Box<dyn AsyncStorageAccess>,
+    plan: WipePlan,
+    streams: Vec<Stream>,
+    state: WipeSessionState,
+    depth: usize,
+}
+
+impl AsyncWipeSession {
+    pub fn new(
+        plan: WipePlan,
+        storage: Box<dyn AsyncStorageAccess>,
+        event_handler: Box<dyn WipeEventHandler>,
+        retries: u32,
+        depth: usize,
+    ) -> Self {
+        let streams = plan
+            .scheme
+            .stages
+            .iter()
+            .map(|stage| Stream::new(stage, plan.range.clone(), plan.block_size))
+            .collect();
+
+        Self::with_streams(plan, storage, event_handler, retries, depth, streams)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_seed(
+        plan: WipePlan,
+        storage: Box<dyn AsyncStorageAccess>,
+        event_handler: Box<dyn WipeEventHandler>,
+        retries: u32,
+        depth: usize,
+        seed: [u8; crate::sanitization::stream::RANDOM_SEED_SIZE],
+    ) -> Self {
+        let streams = plan
+            .scheme
+            .stages
+            .iter()
+            .map(|stage| Stream::with_seed(stage, plan.range.clone(), plan.block_size, seed))
+            .collect();
+
+        Self::with_streams(plan, storage, event_handler, retries, depth, streams)
+    }
+
+    fn with_streams(
+        plan: WipePlan,
+        storage: Box<dyn AsyncStorageAccess>,
+        mut event_handler: Box<dyn WipeEventHandler>,
+        retries: u32,
+        depth: usize,
+        streams: Vec<Stream>,
+    ) -> Self {
+        let state = WipeSessionState {
+            position: 0,
+            retries_left: retries,
+            step: 0,
+            bad_blocks: BadBlocks::default(),
+        };
+
+        event_handler.handle(&plan, &state, WipeEvent::Created);
+
+        AsyncWipeSession {
+            event_handler,
+            storage,
+            plan,
+            streams,
+            state,
+            depth: depth.max(1),
+        }
+    }
+
+    pub(crate) fn run(mut self) -> Result<()> {
+        self.publish(WipeEvent::Started);
+
+        self.state.step = 0;
+        self.state.position = self.plan.range.start;
+
+        let mut resume_from: Option<u64> = None;
+
+        let result = loop {
+            if self.state.step >= self.plan.steps.len() {
+                break Ok(());
+            }
+
+            let step = self.plan.steps[self.state.step];
+            self.publish(WipeEvent::StepStarted(self.state.step));
+
+            let result = match step {
+                Step::Write(stream_id) => self.write_step(stream_id),
+                Step::Verify(stream_id) => self.verify_step(stream_id),
+            };
+
+            match result {
+                Ok(()) => {
+                    self.publish(WipeEvent::StepCompleted(self.state.step));
+                    self.state.step += 1;
+                    self.state.position = resume_from.take().unwrap_or(self.plan.range.start);
+                }
+                Err(err) => {
+                    self.publish(WipeEvent::StepFailed(self.state.step, err.to_string()));
+
+                    if self.state.retries_left == 0 {
+                        break Err(err.context(failure_context(step)));
+                    }
+
+                    self.state.retries_left -= 1;
+
+                    if let Step::Verify(_) = step {
+                        resume_from = Some(self.state.position);
+                        self.state.step -= 1;
+                    }
+
+                    self.publish(WipeEvent::Retrying(self.state.step, self.state.position));
+                }
+            }
+        };
+
+        match &result {
+            Ok(()) => self.publish(WipeEvent::Completed),
+            Err(err) => self.publish(WipeEvent::Failed(err.to_string())),
+        }
+
+        result
+    }
+
+    fn write_step(&mut self, stream_id: StreamId) -> Result<()> {
+        let start = self.state.position;
+        let mut io = AsyncSessionIO::new(
+            &self.plan,
+            &mut self.state,
+            &mut *self.event_handler,
+            &mut *self.storage,
+            self.depth,
+            false,
+        );
+        let stream = &mut self.streams[stream_id];
+
+        io.begin(start);
+        io.skip_bad_blocks(self.plan.range.end);
+
+        if io.at_end() {
+            return io.finish(true);
+        }
+
+        stream.seek(io.submitted);
+
+        while let Some(chunk) = stream.next() {
+            io.write_chunk(chunk)?;
+        }
+
+        io.finish(true)
+    }
+
+    fn verify_step(&mut self, stream_id: StreamId) -> Result<()> {
+        let resume_from = self.state.position;
+
+        for span in self.plan.verification_coverage().spans() {
+            let start = span.start.max(resume_from);
+            if start >= span.end {
+                continue;
+            }
+
+            let mut io = AsyncSessionIO::new(
+                &self.plan,
+                &mut self.state,
+                &mut *self.event_handler,
+                &mut *self.storage,
+                self.depth,
+                true,
+            );
+            let stream = &mut self.streams[stream_id];
+
+            io.begin(start);
+            io.skip_bad_blocks(span.end);
+
+            if io.submitted >= span.end {
+                io.finish(false)?;
+                continue;
+            }
+
+            stream.seek(io.submitted);
+
+            while io.submitted < span.end {
+                let Some(chunk) = stream.next() else { break };
+                io.read_chunk(chunk)?;
+            }
+
+            io.finish(false)?;
+        }
+
+        Ok(())
+    }
+
+    fn publish(&mut self, event: WipeEvent) {
+        self.event_handler.handle(&self.plan, &self.state, event);
+    }
+}
+
+struct SlotMeta {
+    position: u64,
+    len: usize,
+}
+
+struct QueueEntry {
+    slot: Option<usize>,
+    len: usize,
+}
+
+/// The pipelined I/O face of an [`AsyncWipeSession`], mirroring [`SessionIO`] but
+/// submitting multiple requests before reaping their completions.
+struct AsyncSessionIO<'a> {
+    plan: &'a WipePlan,
+    state: &'a mut WipeSessionState,
+    event_handler: &'a mut dyn WipeEventHandler,
+    storage: &'a mut dyn AsyncStorageAccess,
+    buffers: Vec<AlignedBuffer>,
+    expected: Vec<Vec<u8>>,
+    slots: Vec<Option<SlotMeta>>,
+    free_slots: Vec<usize>,
+    queue: VecDeque<QueueEntry>,
+    /// Absolute position of the next chunk to submit.
+    submitted: u64,
+    /// Absolute position up to which every chunk has completed.
+    progress: u64,
+    inflight: usize,
+    verifying: bool,
+}
+
+impl<'a> AsyncSessionIO<'a> {
+    fn new(
+        plan: &'a WipePlan,
+        state: &'a mut WipeSessionState,
+        event_handler: &'a mut dyn WipeEventHandler,
+        storage: &'a mut dyn AsyncStorageAccess,
+        depth: usize,
+        verifying: bool,
+    ) -> Self {
+        let depth = depth.max(1).min(storage.depth().max(1));
+        let block_size = plan.block_size;
+
+        let buffers = (0..depth)
+            .map(|_| AlignedBuffer::new(block_size, block_size))
+            .collect();
+        let expected = if verifying {
+            (0..depth).map(|_| vec![0u8; block_size]).collect()
+        } else {
+            Vec::new()
+        };
+        let slots = (0..depth).map(|_| None).collect();
+        let free_slots = (0..depth).rev().collect();
+
+        AsyncSessionIO {
+            plan,
+            state,
+            event_handler,
+            storage,
+            buffers,
+            expected,
+            slots,
+            free_slots,
+            queue: VecDeque::new(),
+            submitted: 0,
+            progress: 0,
+            inflight: 0,
+            verifying,
+        }
+    }
+
+    fn publish(&mut self, event: WipeEvent) {
+        self.event_handler.handle(self.plan, self.state, event);
+    }
+
+    fn begin(&mut self, position: u64) {
+        self.submitted = position;
+        self.progress = position;
+        self.state.position = position;
+        self.publish(WipeEvent::Progress(position));
+    }
+
+    fn at_end(&self) -> bool {
+        self.submitted >= self.plan.range.end
+    }
+
+    fn at_bad_block(&self, position: u64) -> bool {
+        self.state
+            .bad_blocks
+            .contains(self.plan.block_index(position))
+    }
+
+    fn skip_bad_blocks(&mut self, limit: u64) {
+        while self.submitted < limit {
+            if !self.at_bad_block(self.submitted) {
+                return;
+            }
+
+            let len = usize::try_from((limit - self.submitted).min(self.plan.block_size as u64))
+                .expect("block size fits usize");
+            self.publish(WipeEvent::SkippedBadBlock(self.submitted));
+            self.queue.push_back(QueueEntry { slot: None, len });
+            self.submitted += len as u64;
+            self.drain_completed();
+        }
+    }
+
+    /// Submits the next write chunk, reaping a completion first if all slots are busy.
+    fn write_chunk(&mut self, chunk: &[u8]) -> Result<()> {
+        let position = self.submitted;
+        let len = chunk.len();
+
+        if self.at_bad_block(position) {
+            self.queue.push_back(QueueEntry { slot: None, len });
+            self.submitted += len as u64;
+            self.drain_completed();
+            return Ok(());
+        }
+
+        self.ensure_free_slot()?;
+
+        let slot = self.free_slots.pop().expect("a slot is available");
+        self.buffers[slot].as_mut_slice()[..len].copy_from_slice(chunk);
+
+        let buffer = &mut self.buffers[slot].as_mut_slice()[..len];
+        self.storage.submit(slot, position, buffer, IoKind::Write)?;
+        self.track(slot, position, len);
+        Ok(())
+    }
+
+    /// Submits the next read chunk and keeps the expected pattern for comparison.
+    fn read_chunk(&mut self, chunk: &[u8]) -> Result<()> {
+        let position = self.submitted;
+        let len = chunk.len();
+
+        if self.at_bad_block(position) {
+            self.queue.push_back(QueueEntry { slot: None, len });
+            self.submitted += len as u64;
+            self.drain_completed();
+            return Ok(());
+        }
+
+        self.ensure_free_slot()?;
+
+        let slot = self.free_slots.pop().expect("a slot is available");
+        self.expected[slot][..len].copy_from_slice(chunk);
+
+        let buffer = &mut self.buffers[slot].as_mut_slice()[..len];
+        self.storage.submit(slot, position, buffer, IoKind::Read)?;
+        self.track(slot, position, len);
+        Ok(())
+    }
+
+    fn track(&mut self, slot: usize, position: u64, len: usize) {
+        self.slots[slot] = Some(SlotMeta { position, len });
+        self.queue.push_back(QueueEntry {
+            slot: Some(slot),
+            len,
+        });
+        self.submitted += len as u64;
+        self.inflight += 1;
+    }
+
+    fn ensure_free_slot(&mut self) -> Result<()> {
+        if self.inflight >= self.buffers.len() {
+            self.reap_one()?;
+        }
+
+        Ok(())
+    }
+
+    fn reap_one(&mut self) -> Result<()> {
+        let completion = self.storage.reap()?;
+        let slot = completion.slot;
+        let meta = self.slots[slot]
+            .take()
+            .expect("completion references an in-flight slot");
+
+        self.inflight -= 1;
+        self.free_slots.push(slot);
+
+        if let Some(entry) = self.queue.iter_mut().find(|entry| entry.slot == Some(slot)) {
+            entry.slot = None;
+        }
+
+        match completion.result {
+            Ok(bytes) => {
+                if bytes != meta.len {
+                    return self.fail(
+                        meta.position,
+                        anyhow!(
+                            "Unexpected transfer length {} (expected {}) at position {}",
+                            bytes,
+                            meta.len,
+                            meta.position
+                        ),
+                    );
+                }
+
+                if self.verifying {
+                    let actual = &self.buffers[slot].as_slice()[..meta.len];
+                    let expected = &self.expected[slot][..meta.len];
+
+                    if actual != expected {
+                        return self.fail(
+                            meta.position,
+                            anyhow!("Verification failed at position {}", meta.position),
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                if let Some(StorageError::BadBlock) = underlying_storage_error(&err) {
+                    self.state.position = meta.position;
+                    self.state
+                        .bad_blocks
+                        .mark(self.plan.block_index(meta.position));
+                    self.publish(WipeEvent::MarkedBlockAsBad(meta.position));
+                } else {
+                    return self.fail(meta.position, err);
+                }
+            }
+        }
+
+        self.drain_completed();
+        Ok(())
+    }
+
+    /// Drains the remaining requests, then reports the earliest failed position so that
+    /// a retry resumes from the same place the sequential implementation would use.
+    fn fail(&mut self, position: u64, error: anyhow::Error) -> Result<()> {
+        let mut earliest = position;
+
+        while self.inflight > 0 {
+            let Ok(completion) = self.storage.reap() else {
+                break;
+            };
+
+            let slot = completion.slot;
+            let Some(meta) = self.slots[slot].take() else {
+                continue;
+            };
+
+            self.inflight -= 1;
+            self.free_slots.push(slot);
+            match completion.result {
+                Err(_) => earliest = earliest.min(meta.position),
+                Ok(bytes) => {
+                    let short = bytes != meta.len;
+                    let mismatch = self.verifying
+                        && !short
+                        && self.buffers[slot].as_slice()[..meta.len]
+                            != self.expected[slot][..meta.len];
+
+                    if short || mismatch {
+                        earliest = earliest.min(meta.position);
+                    }
+                }
+            }
+        }
+
+        self.storage.drain().ok();
+        self.state.position = earliest;
+
+        if self.verifying {
+            Err(anyhow!("Verification failed at position {earliest}"))
+        } else {
+            Err(error)
+        }
+    }
+
+    fn drain_completed(&mut self) {
+        while self.queue.front().is_some_and(|entry| entry.slot.is_none()) {
+            let entry = self.queue.pop_front().expect("queue is not empty");
+            self.progress += entry.len as u64;
+            self.state.position = self.progress;
+            self.publish(WipeEvent::Progress(self.progress));
+        }
+    }
+
+    fn finish(&mut self, flush: bool) -> Result<()> {
+        while self.inflight > 0 {
+            self.reap_one()?;
+        }
+
+        self.drain_completed();
+
+        if flush {
+            self.storage.flush()?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for AsyncSessionIO<'_> {
+    fn drop(&mut self) {
+        if self.inflight == 0 {
+            return;
+        }
+
+        // Never leave requests pointing into this session's buffers after an early
+        // return. If the backend cannot drain, leak the buffers rather than risk the
+        // kernel writing into freed memory.
+        if self.storage.drain().is_err() {
+            for buffer in std::mem::take(&mut self.buffers) {
+                std::mem::forget(buffer);
+            }
+        }
+    }
+}
+
 fn failure_context(step: Step) -> &'static str {
     match step {
         Step::Write(_) => "Failed to fill stream",
@@ -435,6 +953,7 @@ mod test {
     use crate::actions::verification::{Percent, Verification};
     use crate::sanitization::stream::RANDOM_SEED_SIZE;
     use crate::sanitization::{Scheme, SchemeRepo, Stage};
+    use crate::storage::IoCompletion;
     use WipeEvent::*;
     use anyhow::Result;
     use assert_matches::*;
@@ -539,51 +1058,6 @@ mod test {
         assert_matches!(e.next(), Some(Progress(100_000)));
         assert_matches!(e.next(), Some(StepCompleted(3)));
         assert_matches!(e.next(), Some(Completed));
-    }
-
-    #[test]
-    fn test_parallel_sections_wipe_the_whole_area() {
-        use crate::actions::plan::SectionHandlerFactory;
-
-        let scheme = Scheme {
-            description: "Single zeroes fill".to_string(),
-            stages: vec![Stage::zero()],
-        };
-        let size = 100_000;
-        let block_size = 8192;
-        let (storage, data) = InMemoryStorage::shared(size);
-
-        let plan = WipePlan::new(
-            scheme,
-            Verification::Last(Percent::new(100.0).unwrap()),
-            0..size as u64,
-            block_size,
-        )
-        .unwrap();
-        let sections = plan.split(4);
-
-        let storages: Vec<Box<dyn StorageAccess>> = sections
-            .iter()
-            .map(|_| Box::new(storage.fork()) as Box<dyn StorageAccess>)
-            .collect();
-
-        let handlers: Vec<SectionHandlerFactory> = sections
-            .iter()
-            .map(|_| {
-                Box::new(|| Box::new(StubReceiver::new()) as Box<dyn WipeEventHandler>)
-                    as SectionHandlerFactory
-            })
-            .collect();
-
-        WipePlan::execute_sections(sections, storages, handlers, 8).unwrap();
-
-        assert!(
-            data.lock()
-                .expect("test storage lock poisoned")
-                .iter()
-                .all(|byte| *byte == 0),
-            "some bytes were not wiped"
-        );
     }
 
     #[test]
@@ -1059,6 +1533,143 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_async_wiping_and_verification() {
+        let scheme = SchemeRepo::default().find("zero").unwrap().clone();
+        let size = 100_000;
+        let block_size = 8192;
+        let data = Arc::new(Mutex::new(vec![0xffu8; size]));
+        let storage = MockAsyncStorage::new(Arc::clone(&data), 4);
+        let receiver = StubReceiver::new();
+
+        let plan = WipePlan::new(
+            scheme,
+            Verification::Last(Percent::new(100.0).unwrap()),
+            0..size as u64,
+            block_size,
+        )
+        .unwrap();
+
+        let result = plan.execute_async(Box::new(storage), Box::new(receiver.clone()), 0, 4);
+        assert!(result.is_ok());
+        assert!(
+            data.lock()
+                .expect("test storage lock poisoned")
+                .iter()
+                .all(|byte| *byte == 0),
+            "the async wipe did not cover the whole area"
+        );
+
+        let collected = receiver.collected.borrow();
+        assert!(
+            collected.iter().any(|event| matches!(event, Completed)),
+            "the async session did not complete"
+        );
+    }
+
+    #[test]
+    fn test_async_random_wipe_skips_bad_blocks_and_keeps_stream_positions() {
+        let stage = Stage::random();
+        let scheme = Scheme {
+            description: "random".to_string(),
+            stages: vec![stage.clone()],
+        };
+        let block_size = 8192;
+        let size = 100_000;
+        let seed = [0x5a; RANDOM_SEED_SIZE];
+        let data = Arc::new(Mutex::new(vec![0xffu8; size]));
+        let mut storage = MockAsyncStorage::new(Arc::clone(&data), 8);
+        storage.bad_blocks = vec![0, 8192, 49152];
+
+        let plan = WipePlan::new(
+            scheme,
+            Verification::Last(Percent::new(30.0).unwrap()),
+            0..size as u64,
+            block_size,
+        )
+        .unwrap();
+        let reference = fill_reference(&stage, plan.range.clone(), block_size, seed);
+        let receiver = StubReceiver::new();
+
+        let result = AsyncWipeSession::new_with_seed(
+            plan,
+            Box::new(storage),
+            Box::new(receiver),
+            8,
+            8,
+            seed,
+        )
+        .run();
+        assert!(result.is_ok());
+
+        let data = data.lock().expect("test storage lock poisoned");
+        for start in (0..size).step_by(block_size) {
+            let end = (start + block_size).min(size);
+
+            if matches!(start, 0 | 8192 | 49152) {
+                assert!(
+                    data[start..end].iter().all(|byte| *byte == 0xff),
+                    "bad block at {start} was modified"
+                );
+            } else {
+                assert_eq!(
+                    &data[start..end],
+                    &reference[start..end],
+                    "block at {start} does not match the reference stream"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_async_verification_failure_rewrites_from_the_failing_position() {
+        let stage = Stage::random();
+        let scheme = Scheme {
+            description: "random".to_string(),
+            stages: vec![stage.clone()],
+        };
+        let block_size = 8192;
+        let size = 100_000;
+        let seed = [0x33; RANDOM_SEED_SIZE];
+        let data = Arc::new(Mutex::new(vec![0xffu8; size]));
+        let mut storage = MockAsyncStorage::new(Arc::clone(&data), 8);
+        storage.corrupt_reads = vec![24_576];
+
+        let plan = WipePlan::new(
+            scheme,
+            Verification::Last(Percent::new(100.0).unwrap()),
+            0..size as u64,
+            block_size,
+        )
+        .unwrap();
+        let reference = fill_reference(&stage, plan.range.clone(), block_size, seed);
+        let receiver = StubReceiver::new();
+
+        let result = AsyncWipeSession::new_with_seed(
+            plan,
+            Box::new(storage),
+            Box::new(receiver.clone()),
+            8,
+            8,
+            seed,
+        )
+        .run();
+        assert!(result.is_ok());
+
+        assert_eq!(
+            &data.lock().expect("test storage lock poisoned")[..],
+            reference.as_slice()
+        );
+
+        let collected = receiver.collected.borrow();
+        assert!(
+            collected
+                .iter()
+                .any(|event| matches!(event, WipeEvent::Retrying(0, 24_576))),
+            "expected the async verification to resume the write at 24576"
+        );
+    }
+
     fn fill_reference(
         stage: &Stage,
         range: std::ops::Range<u64>,
@@ -1129,20 +1740,6 @@ mod test {
             };
 
             (storage, data)
-        }
-
-        /// Creates an independent cursor over the same underlying bytes, as a separate
-        /// storage handle would provide for a parallel section.
-        fn fork(&self) -> Self {
-            InMemoryStorage {
-                data: Arc::clone(&self.data),
-                position: 0,
-                size: self.size,
-                total_written: 0,
-                total_read: 0,
-                failures: Vec::new(),
-                bad_blocks: Vec::new(),
-            }
         }
 
         fn fail_after_any(&mut self, amount: usize) {
@@ -1217,6 +1814,91 @@ mod test {
             }
             target[start..end].copy_from_slice(data);
             self.position = end as u64;
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Completes every request immediately but defers reporting through `reap`, so the
+    /// session exercises its multi-request bookkeeping.
+    struct MockAsyncStorage {
+        data: Arc<Mutex<Vec<u8>>>,
+        completions: VecDeque<IoCompletion>,
+        bad_blocks: Vec<u64>,
+        corrupt_reads: Vec<u64>,
+        depth: usize,
+    }
+
+    impl MockAsyncStorage {
+        fn new(data: Arc<Mutex<Vec<u8>>>, depth: usize) -> Self {
+            MockAsyncStorage {
+                data,
+                completions: VecDeque::new(),
+                bad_blocks: Vec::new(),
+                corrupt_reads: Vec::new(),
+                depth,
+            }
+        }
+    }
+
+    impl AsyncStorageAccess for MockAsyncStorage {
+        fn depth(&self) -> usize {
+            self.depth
+        }
+
+        fn submit(
+            &mut self,
+            slot: usize,
+            position: u64,
+            buffer: &mut [u8],
+            kind: IoKind,
+        ) -> Result<()> {
+            let start = usize::try_from(position).expect("test position fits usize");
+            let end = start + buffer.len();
+
+            let result = if self
+                .bad_blocks
+                .iter()
+                .any(|block| start as u64 <= *block && end as u64 > *block)
+            {
+                Err(StorageError::BadBlock.into())
+            } else {
+                let mut data = self.data.lock().expect("test storage lock poisoned");
+                if start >= data.len() {
+                    Ok(0)
+                } else {
+                    let count = (data.len() - start).min(buffer.len());
+                    match kind {
+                        IoKind::Read => {
+                            buffer[..count].copy_from_slice(&data[start..start + count]);
+                            if self.corrupt_reads.contains(&position) {
+                                buffer[0] ^= 0xff;
+                                self.corrupt_reads.retain(|value| *value != position);
+                            }
+                        }
+                        IoKind::Write => {
+                            data[start..start + count].copy_from_slice(&buffer[..count]);
+                        }
+                    }
+                    Ok(count)
+                }
+            };
+
+            self.completions.push_back(IoCompletion { slot, result });
+            Ok(())
+        }
+
+        fn reap(&mut self) -> Result<IoCompletion> {
+            self.completions
+                .pop_front()
+                .ok_or_else(|| anyhow!("No pending mock completion"))
+        }
+
+        fn drain(&mut self) -> Result<()> {
+            self.completions.clear();
             Ok(())
         }
 

@@ -1,12 +1,16 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
+use io_uring::{IoUring, opcode, types};
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::*;
 use std::path::Path;
 use sysfs_class::{Block, SysClass};
 
-use crate::storage::{StorageDetails, StorageReadiness, StorageRef, StorageType, System};
+use crate::storage::{
+    AsyncStorageAccess, IoCompletion, IoKind, StorageDetails, StorageError, StorageReadiness,
+    StorageRef, StorageType, System,
+};
 
 const SYSFS_BLOCK_SIZE: u64 = 512;
 
@@ -40,6 +44,132 @@ pub fn open_file_direct<P: AsRef<Path>>(file_path: P, write_access: bool) -> Res
             "Unable to open file-device {}",
             file_path.as_ref().to_str().unwrap_or("?")
         ))
+}
+
+/// Opens a device for positional I/O through `io_uring`.
+pub fn open_async<P: AsRef<Path>>(path: P, depth: usize) -> Result<Box<dyn AsyncStorageAccess>> {
+    let file = open_file_direct(path, true)?;
+    let depth = depth.clamp(1, 4096);
+    let ring = IoUring::new(u32::try_from(depth).expect("depth is clamped")).context(
+        "Unable to create an io_uring instance. The kernel or sandbox may not support it.",
+    )?;
+
+    Ok(Box::new(UringAccess {
+        file,
+        ring,
+        depth,
+        inflight: 0,
+    }))
+}
+
+struct UringAccess {
+    file: File,
+    ring: IoUring,
+    depth: usize,
+    inflight: usize,
+}
+
+impl AsyncStorageAccess for UringAccess {
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn submit(
+        &mut self,
+        slot: usize,
+        position: u64,
+        buffer: &mut [u8],
+        kind: IoKind,
+    ) -> Result<()> {
+        let fd = types::Fd(self.file.as_raw_fd());
+        let len = u32::try_from(buffer.len()).context("I/O buffer is too large")?;
+        let user_data = u64::try_from(slot).expect("slot fits u64");
+        let sqe = match kind {
+            IoKind::Read => opcode::Read::new(fd, buffer.as_mut_ptr(), len)
+                .offset(position)
+                .build()
+                .user_data(user_data),
+            IoKind::Write => opcode::Write::new(fd, buffer.as_mut_ptr(), len)
+                .offset(position)
+                .build()
+                .user_data(user_data),
+        };
+
+        if self.ring.submission().is_full() {
+            self.ring
+                .submit()
+                .context("io_uring submit failed before enqueueing")?;
+        }
+
+        // SAFETY: the SQE points at a buffer owned by the caller, which keeps it alive
+        // and untouched until the matching completion is reaped.
+        unsafe {
+            self.ring
+                .submission()
+                .push(&sqe)
+                .map_err(|_| anyhow!("io_uring submission queue is full"))?;
+        }
+
+        self.inflight += 1;
+        Ok(())
+    }
+
+    fn reap(&mut self) -> Result<IoCompletion> {
+        let mut completion = self
+            .ring
+            .completion()
+            .next()
+            .map(|entry| (entry.user_data(), entry.result()));
+
+        if completion.is_none() {
+            self.ring
+                .submit_and_wait(1)
+                .context("io_uring submit failed")?;
+
+            completion = self
+                .ring
+                .completion()
+                .next()
+                .map(|entry| (entry.user_data(), entry.result()));
+        }
+
+        let (user_data, result) =
+            completion.ok_or_else(|| anyhow!("io_uring returned no completion"))?;
+
+        self.inflight -= 1;
+
+        let result = if result >= 0 {
+            Ok(usize::try_from(result).expect("non-negative result fits usize"))
+        } else {
+            let error = std::io::Error::from_raw_os_error(-result);
+            Err(StorageError::from_io(error).into())
+        };
+
+        Ok(IoCompletion {
+            slot: usize::try_from(user_data).expect("slot fits usize"),
+            result,
+        })
+    }
+
+    fn drain(&mut self) -> Result<()> {
+        let mut result = Ok(());
+
+        while self.inflight > 0 {
+            if let Err(err) = self.reap() {
+                result = Err(err);
+                break;
+            }
+        }
+
+        result
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.file
+            .flush()
+            .map_err(StorageError::from_io)
+            .context("Unable to flush data to the storage")
+    }
 }
 
 #[allow(dead_code)]

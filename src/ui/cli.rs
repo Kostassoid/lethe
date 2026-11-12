@@ -1,18 +1,13 @@
 use std::fmt::Write as _;
-use std::sync::mpsc::{Sender, channel};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
-use indicatif::{HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 use prettytable::format::FormatBuilder;
 use prettytable::{Table, row};
 
-use crate::actions::{
-    SectionHandlerFactory, Step, WipeEvent, WipeEventHandler, WipePlan, WipeSessionState,
-};
+use crate::actions::{Step, WipeEvent, WipeEventHandler, WipePlan, WipeSessionState};
 use crate::sanitization::scheme::{Scheme, SchemeRepo, Stage};
-use crate::storage::{StorageDevice, StorageRef};
 
 const RETRY_BACKOFF_SECONDS: u32 = 3;
 
@@ -42,16 +37,22 @@ fn describe_scheme(scheme: &Scheme) -> String {
 pub struct ConsoleEventHandler {
     device_id: String,
     auto_confirm: bool,
+    queue_depth: usize,
     pb: Option<ProgressBar>,
     session_started: Option<Instant>,
     stage_started: Option<Instant>,
 }
 
 /// Creates a handler for wiping the given device.
-pub fn wipe_session(device_id: &str, auto_confirm: bool) -> ConsoleEventHandler {
+pub fn wipe_session(
+    device_id: &str,
+    auto_confirm: bool,
+    queue_depth: usize,
+) -> ConsoleEventHandler {
     ConsoleEventHandler {
         device_id: String::from(device_id),
         auto_confirm,
+        queue_depth,
         pb: None,
         session_started: None,
         stage_started: None,
@@ -128,7 +129,7 @@ impl WipeEventHandler for ConsoleEventHandler {
 
 impl ConsoleEventHandler {
     fn announce_plan(&mut self, plan: &WipePlan) {
-        if !announce_and_confirm(&self.device_id, plan, self.auto_confirm, 1) {
+        if !announce_and_confirm(&self.device_id, plan, self.auto_confirm, self.queue_depth) {
             std::process::exit(0);
         }
     }
@@ -175,7 +176,7 @@ pub fn announce_and_confirm(
     device_id: &str,
     plan: &WipePlan,
     auto_confirm: bool,
-    sections: usize,
+    queue_depth: usize,
 ) -> bool {
     let steps = plan
         .steps
@@ -213,8 +214,8 @@ pub fn announce_and_confirm(
         )
     ]);
     t.add_row(row!["Verification", &plan.verification]);
-    if sections > 1 {
-        t.add_row(row!["I/O sections", sections]);
+    if queue_depth > 1 {
+        t.add_row(row!["I/O queue depth", queue_depth]);
     }
     print!("Wiping:\n{t}");
 
@@ -263,162 +264,6 @@ fn print_summary(plan: &WipePlan, bad_blocks: u64, elapsed: Option<Duration>) {
     ]);
 
     print!("{t}");
-}
-
-struct SectionResult {
-    bad_blocks: u64,
-}
-
-/// Reports one section of a parallel wipe, with its own progress bar.
-struct SectionEventHandler {
-    section: usize,
-    sections: usize,
-    pb: ProgressBar,
-    results: Sender<SectionResult>,
-    bad_blocks: u64,
-}
-
-impl WipeEventHandler for SectionEventHandler {
-    fn handle(&mut self, plan: &WipePlan, _state: &WipeSessionState, event: WipeEvent) {
-        let label = format!("section {}/{}", self.section + 1, self.sections);
-
-        match event {
-            WipeEvent::Created | WipeEvent::Started => {}
-            WipeEvent::StepStarted(step) => {
-                let (stage, at_verification) = match plan.steps[step] {
-                    Step::Verify(i) => (&plan.scheme.stages[i], true),
-                    Step::Write(i) => (&plan.scheme.stages[i], false),
-                };
-
-                self.pb.set_length(plan.total_bytes());
-                self.pb.set_position(0);
-                self.pb.set_message(format!(
-                    "{label} step {}/{} {} {}",
-                    step + 1,
-                    plan.steps.len(),
-                    if at_verification {
-                        "verifying"
-                    } else {
-                        "writing"
-                    },
-                    describe_stage(stage)
-                ));
-            }
-            WipeEvent::Progress(position) => {
-                self.pb
-                    .set_position(position.saturating_sub(plan.range.start));
-            }
-            WipeEvent::MarkedBlockAsBad(position) => {
-                self.bad_blocks += 1;
-                self.pb.println(format!(
-                    "[{label}] Unable to access block at {position}. Skipping."
-                ));
-            }
-            WipeEvent::SkippedBadBlock(position) => {
-                self.pb
-                    .println(format!("[{label}] Skipping bad block at {position}."));
-            }
-            WipeEvent::StepCompleted(step) => {
-                self.pb.println(format!(
-                    "[{label}] Step {}/{} completed",
-                    step + 1,
-                    plan.steps.len()
-                ));
-            }
-            WipeEvent::StepFailed(step, err) => {
-                self.pb.println(format!(
-                    "[{label}] FAILED at step {}/{}: {err}",
-                    step + 1,
-                    plan.steps.len()
-                ));
-            }
-            WipeEvent::Retrying(step, position) => {
-                self.pb.println(format!(
-                    "[{label}] Retrying step {}/{} from position {position} in {RETRY_BACKOFF_SECONDS} seconds.",
-                    step + 1,
-                    plan.steps.len()
-                ));
-                sleep(Duration::from_secs(u64::from(RETRY_BACKOFF_SECONDS)));
-            }
-            WipeEvent::Completed => {
-                self.pb.finish_with_message(format!("{label} done"));
-                let _ = self.results.send(SectionResult {
-                    bad_blocks: self.bad_blocks,
-                });
-            }
-            WipeEvent::Failed(err) => {
-                self.pb
-                    .finish_with_message(format!("{label} failed: {err}"));
-                let _ = self.results.send(SectionResult {
-                    bad_blocks: self.bad_blocks,
-                });
-            }
-        }
-    }
-}
-
-/// Runs a wipe as several independent sections, each with its own storage handle and
-/// progress bar. Verification coverage is still computed over the whole planned area.
-pub fn run_parallel_wipe(
-    device: &StorageRef,
-    plan: WipePlan,
-    retries: u32,
-    queue_depth: usize,
-    auto_confirm: bool,
-) -> Result<()> {
-    let mut storages = device.access_many(queue_depth)?;
-
-    // Platforms may provide fewer handles than requested (for example, a partition
-    // target on Windows), and a small area may not have enough blocks for every section.
-    let sections = plan.split(storages.len());
-    storages.truncate(sections.len());
-
-    if sections.len() <= 1 {
-        let storage = storages
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("No storage handle was opened"))?;
-        let session = wipe_session(&device.id, auto_confirm);
-        return plan.execute(storage, Box::new(session), retries);
-    }
-
-    if !announce_and_confirm(&device.id, &plan, auto_confirm, sections.len()) {
-        return Ok(());
-    }
-
-    let section_count = sections.len();
-
-    let (results_tx, results_rx) = channel();
-    let multi = MultiProgress::new();
-    let mut handlers: Vec<SectionHandlerFactory> = Vec::with_capacity(section_count);
-
-    for (index, section) in sections.iter().enumerate() {
-        let pb = multi.add(create_progress_bar(section.total_bytes()));
-        pb.set_message(format!("section {}/{}", index + 1, section_count));
-
-        let results = results_tx.clone();
-        handlers.push(Box::new(move || {
-            Box::new(SectionEventHandler {
-                section: index,
-                sections: section_count,
-                pb,
-                results,
-                bad_blocks: 0,
-            })
-        }));
-    }
-
-    drop(results_tx);
-
-    let started = Instant::now();
-    let result = WipePlan::execute_sections(sections, storages, handlers, retries);
-    let outcomes: Vec<SectionResult> = results_rx.try_iter().collect();
-
-    if result.is_ok() {
-        let bad_blocks = outcomes.iter().map(|outcome| outcome.bad_blocks).sum();
-        print_summary(&plan, bad_blocks, Some(started.elapsed()));
-    }
-
-    result
 }
 
 fn indented_table_format() -> prettytable::format::TableFormat {

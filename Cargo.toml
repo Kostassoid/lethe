@@ -30,6 +30,9 @@ thiserror = "2"
 nix = { version = "0.29", features = ["ioctl"] }
 sysfs-class = "0.1"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1"
 serde = { version = "1", features = ["derive"] }

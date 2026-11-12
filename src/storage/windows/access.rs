@@ -1,42 +1,40 @@
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::io;
 use std::mem::size_of_val;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_CRC, ERROR_READ_FAULT, ERROR_SECTOR_NOT_FOUND, ERROR_SEEK,
+    CloseHandle, ERROR_CRC, ERROR_IO_PENDING, ERROR_READ_FAULT, ERROR_SECTOR_NOT_FOUND, ERROR_SEEK,
     ERROR_WRITE_FAULT, GENERIC_READ, GENERIC_WRITE, HANDLE,
 };
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_FLAG_NO_BUFFERING,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OVERLAPPED,
     FILE_FLAG_RANDOM_ACCESS, FILE_FLAG_SEQUENTIAL_SCAN, FILE_FLAG_WRITE_THROUGH, FILE_SHARE_READ,
     FILE_SHARE_WRITE, FlushFileBuffers, OPEN_EXISTING, ReadFile, SetFilePointerEx, WriteFile,
 };
-use windows::Win32::System::IO::DeviceIoControl;
+use windows::Win32::System::IO::{DeviceIoControl, GetOverlappedResult, OVERLAPPED};
 use windows::Win32::System::Ioctl::{
     FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME,
 };
 use windows::core::{Error as WindowsError, HSTRING};
 
-use crate::storage::{StorageAccess, StorageError};
+use crate::storage::{
+    AsyncStorageAccess, IoCompletion, IoKind, StorageAccess, StorageError, StorageRef,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeviceAccess {
     Query,
     Wipe,
-    /// A write handle for a parallel section. The primary handle already locked and
-    /// dismounted the volume tree, so this one only needs raw read/write access.
-    WipeSecondary,
+    /// A write handle for asynchronous I/O, opened with `FILE_FLAG_OVERLAPPED`.
+    WipeOverlapped,
 }
 
 pub(super) struct DeviceFile {
     is_locked: bool,
     handle: HANDLE,
 }
-
-// SAFETY: a device handle may be used from any thread. Ownership is unique, and each
-// parallel section owns its own handle for the duration of the wipe.
-unsafe impl Send for DeviceFile {}
 
 impl DeviceFile {
     pub(super) fn open(path: &str, access: DeviceAccess) -> Result<Self> {
@@ -47,8 +45,18 @@ impl DeviceFile {
 
         let desired_access = match access {
             DeviceAccess::Query => 0,
-            DeviceAccess::Wipe | DeviceAccess::WipeSecondary => GENERIC_READ.0 | GENERIC_WRITE.0,
+            DeviceAccess::Wipe | DeviceAccess::WipeOverlapped => GENERIC_READ.0 | GENERIC_WRITE.0,
         };
+
+        let mut flags = FILE_ATTRIBUTE_NORMAL
+            | FILE_FLAG_NO_BUFFERING
+            | FILE_FLAG_WRITE_THROUGH
+            | FILE_FLAG_SEQUENTIAL_SCAN
+            | FILE_FLAG_RANDOM_ACCESS;
+
+        if access == DeviceAccess::WipeOverlapped {
+            flags |= FILE_FLAG_OVERLAPPED;
+        }
 
         let name = HSTRING::from(file_path.as_str());
         let handle = unsafe {
@@ -58,11 +66,7 @@ impl DeviceFile {
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 None,
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL
-                    | FILE_FLAG_NO_BUFFERING
-                    | FILE_FLAG_WRITE_THROUGH
-                    | FILE_FLAG_SEQUENTIAL_SCAN
-                    | FILE_FLAG_RANDOM_ACCESS,
+                flags,
                 None,
             )
         }
@@ -73,7 +77,7 @@ impl DeviceFile {
             handle,
         };
 
-        if access == DeviceAccess::Wipe {
+        if access == DeviceAccess::Wipe || access == DeviceAccess::WipeOverlapped {
             let mut returned = 0u32;
 
             unsafe {
@@ -206,6 +210,129 @@ fn win32_error_code(error: &WindowsError) -> u32 {
         code & 0xFFFF
     } else {
         code
+    }
+}
+
+struct PendingOp {
+    overlapped: Box<OVERLAPPED>,
+    slot: usize,
+}
+
+/// Asynchronous access over one overlapped device handle. Requests are reaped in
+/// submission order, which keeps completion processing deterministic while still
+/// allowing several requests to be in flight.
+pub(super) struct OverlappedAccess {
+    device: DeviceFile,
+    _children: Vec<DeviceFile>,
+    pending: VecDeque<PendingOp>,
+    depth: usize,
+}
+
+pub(super) fn open_overlapped(
+    device: &StorageRef,
+    depth: usize,
+) -> Result<Box<dyn AsyncStorageAccess>> {
+    let children: Result<Vec<DeviceFile>> = device
+        .children
+        .iter()
+        .map(|child| DeviceFile::open(&child.id, DeviceAccess::Wipe))
+        .collect();
+
+    let device = DeviceFile::open(&device.id, DeviceAccess::WipeOverlapped)?;
+
+    Ok(Box::new(OverlappedAccess {
+        device,
+        _children: children?,
+        pending: VecDeque::new(),
+        depth: depth.max(1),
+    }))
+}
+
+impl AsyncStorageAccess for OverlappedAccess {
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn submit(
+        &mut self,
+        slot: usize,
+        position: u64,
+        buffer: &mut [u8],
+        kind: IoKind,
+    ) -> Result<()> {
+        let mut overlapped = Box::<OVERLAPPED>::default();
+        overlapped.Anonymous.Anonymous.Offset =
+            u32::try_from(position & 0xFFFF_FFFF).expect("low word fits u32");
+        overlapped.Anonymous.Anonymous.OffsetHigh =
+            u32::try_from(position >> 32).expect("high word fits u32");
+
+        let overlapped_ptr: *mut OVERLAPPED = std::ptr::addr_of_mut!(*overlapped);
+
+        let result = unsafe {
+            match kind {
+                IoKind::Read => {
+                    ReadFile(self.device.handle, Some(buffer), None, Some(overlapped_ptr))
+                }
+                IoKind::Write => {
+                    WriteFile(self.device.handle, Some(buffer), None, Some(overlapped_ptr))
+                }
+            }
+        };
+
+        match result {
+            Ok(()) => {}
+            Err(error) if win32_error_code(&error) == ERROR_IO_PENDING.0 => {}
+            Err(error) => return Err(StorageError::from_windows(&error).into()),
+        }
+
+        self.pending.push_back(PendingOp { overlapped, slot });
+        Ok(())
+    }
+
+    fn reap(&mut self) -> Result<IoCompletion> {
+        let op = self
+            .pending
+            .pop_front()
+            .ok_or_else(|| anyhow!("No pending overlapped I/O"))?;
+
+        let mut transferred = 0u32;
+        let result = unsafe {
+            GetOverlappedResult(
+                self.device.handle,
+                std::ptr::addr_of!(*op.overlapped),
+                &raw mut transferred,
+                true,
+            )
+        };
+
+        let result = result
+            .map(|()| transferred as usize)
+            .map_err(|error| StorageError::from_windows(&error).into());
+
+        Ok(IoCompletion {
+            slot: op.slot,
+            result,
+        })
+    }
+
+    fn drain(&mut self) -> Result<()> {
+        while let Some(op) = self.pending.pop_front() {
+            let mut transferred = 0u32;
+            unsafe {
+                let _ = GetOverlappedResult(
+                    self.device.handle,
+                    std::ptr::addr_of!(*op.overlapped),
+                    &raw mut transferred,
+                    true,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.device.flush()
     }
 }
 

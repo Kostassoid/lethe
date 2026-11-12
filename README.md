@@ -120,7 +120,7 @@ Are you sure? (type 'yes' to confirm):
 | `--blocksize`, `-b` | `1m`       | I/O block size; must be a power of two     |
 | `--offset`, `-o`    | `0`        | Start position in bytes                    |
 | `--retries`, `-r`   | `8`        | Maximum retries per step                   |
-| `--queue-depth`, `-q` | `1`      | Concurrent I/O sections (experimental)     |
+| `--queue-depth`, `-q` | `1`      | In-flight I/O requests (experimental)      |
 | `--yes`, `-y`       | off        | Skip the confirmation prompt               |
 
 Sizes accept `k`, `m`, `g` and `t` suffixes (e.g. `128k`, `4m`, `1g`). Use `lethe help wipe` for the full list.
@@ -188,13 +188,16 @@ sudo lethe wipe /dev/sdb --blocksize=4m
 sudo lethe wipe /dev/sdb --blocksize=128k
 ```
 
-### Parallel I/O (experimental)
+### Queued I/O (experimental)
 
-`--queue-depth` splits the wiped area into that many block-aligned sections and runs
-them concurrently, each with its own storage handle and progress bar. This can improve
-throughput on NVMe drives, especially for verification (read-back), but may not help
-large sequential writes. Verification coverage is still computed over the whole drive, so
-partial coverage keeps sampling its beginning and its end.
+`--queue-depth` keeps up to that many positional read/write requests in flight. On Linux
+this uses `io_uring`; on Windows it uses overlapped I/O. Other platforms fall back to
+synchronous I/O, so the effective depth remains `1`.
+
+This can improve throughput on NVMe drives, especially for verification (read-back), but
+may not help large sequential writes. The wipe semantics are unchanged: steps still run
+in order, bad blocks are tracked the same way, and partial coverage is still computed over
+the whole drive.
 
 ```sh
 sudo lethe wipe /dev/nvme0n1 --queue-depth=4

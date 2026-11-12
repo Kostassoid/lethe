@@ -139,11 +139,13 @@ fn main() -> Result<()> {
                 .ok();
 
             if queue_depth <= 1 {
-                let session = cli::wipe_session(&device.id, cmd.get_flag("yes"));
+                let session = cli::wipe_session(&device.id, cmd.get_flag("yes"), 1);
                 let device_access = device.access()?;
                 plan.execute(device_access, Box::new(session), *retries)?;
             } else {
-                cli::run_parallel_wipe(device, plan, *retries, queue_depth, cmd.get_flag("yes"))?;
+                let session = cli::wipe_session(&device.id, cmd.get_flag("yes"), queue_depth);
+                let device_access = device.access_async(queue_depth)?;
+                plan.execute_async(device_access, Box::new(session), *retries, queue_depth)?;
             }
         }
         _ => {

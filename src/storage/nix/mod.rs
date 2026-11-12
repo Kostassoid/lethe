@@ -6,6 +6,8 @@ use std::io::SeekFrom;
 use std::io::prelude::*;
 use std::path::Path;
 
+#[cfg(target_os = "linux")]
+use crate::storage::AsyncStorageAccess;
 use crate::storage::{StorageAccess, StorageDevice, StorageError, StorageReadiness, StorageRef};
 
 #[cfg(target_os = "linux")]
@@ -75,20 +77,41 @@ impl StorageAccess for FileAccess {
 
 impl StorageDevice for StorageRef {
     fn access(&self) -> Result<Box<dyn StorageAccess>> {
-        for child in &self.children {
-            if let StorageReadiness::Ready(details) = &child.readiness {
-                if let Some(mount_point) = &details.mount_point {
-                    let _ = os::unmount(mount_point.as_str());
-                }
-            }
-        }
-
-        if let StorageReadiness::Ready(details) = &self.readiness {
-            if let Some(mount_point) = &details.mount_point {
-                os::unmount(mount_point.as_str())?;
-            }
-        }
-
+        unmount_volumes(self)?;
         FileAccess::new(&self.id).map(|a| Box::new(a) as Box<dyn StorageAccess>)
     }
+
+    #[cfg(target_os = "linux")]
+    fn access_async(&self, depth: usize) -> Result<Box<dyn AsyncStorageAccess>> {
+        unmount_volumes(self)?;
+
+        match os::open_async(&self.id, depth) {
+            Ok(access) => Ok(access),
+            Err(err) => {
+                eprintln!(
+                    "Warning: unable to use io_uring ({err:#}). Falling back to synchronous I/O."
+                );
+                let access = Box::new(FileAccess::new(&self.id)?) as Box<dyn StorageAccess>;
+                Ok(Box::new(super::SyncAsyncAccess::new(access)))
+            }
+        }
+    }
+}
+
+fn unmount_volumes(device: &StorageRef) -> Result<()> {
+    for child in &device.children {
+        if let StorageReadiness::Ready(details) = &child.readiness
+            && let Some(mount_point) = &details.mount_point
+        {
+            let _ = os::unmount(mount_point.as_str());
+        }
+    }
+
+    if let StorageReadiness::Ready(details) = &device.readiness
+        && let Some(mount_point) = &details.mount_point
+    {
+        os::unmount(mount_point.as_str())?;
+    }
+
+    Ok(())
 }
