@@ -222,6 +222,25 @@ lethe help
 lethe help wipe
 ```
 
+## Benchmarks
+
+Measured on MacBook Air (M3, 2024) running macOS 27.2.1 against a 10 GiB (10,737,418,240 bytes) partition on a removable drive, using 1 MiB blocks.
+Times include process startup and teardown.
+
+**Zero fill**
+
+| Command                                                                    | Time taken (seconds) | Throughput |
+|----------------------------------------------------------------------------|----------------------|------------|
+| `dd if=/dev/zero of=/dev/rdisk4s2 bs=1m`                                   | 32.34                | 332 MB/s   |
+| `lethe wipe --scheme=zero --blocksize=1m --verify=no --yes /dev/rdisk4s2`  | 34.20                | 314 MB/s   |
+
+**Random fill**
+
+| Command                                                                      | Time taken (seconds) | Throughput |
+|------------------------------------------------------------------------------|----------------------|------------|
+| `dd if=/dev/urandom of=/dev/rdisk4s2 bs=1m`                                  | 49.33                | 218 MB/s   |
+| `lethe wipe --scheme=random --blocksize=1m --verify=no --yes /dev/rdisk4s2`  | 34.18                | 314 MB/s   |
+
 ## Testing
 
 The integration test suite runs inside disposable VMs and verifies real wiping behavior. The
@@ -425,29 +444,6 @@ The tag triggers the GitHub Actions release workflow, which builds the supported
 to the GitHub release. A second tag-triggered workflow publishes the crate to crates.io.
 
 Set the `CARGO_REGISTRY_TOKEN` repository secret to a crates.io API token before the first release.
-
-## Benchmarks
-
-### macOS
-
-Measured on Macbook Pro 2015 with macOS 10.14.4 (Mojave) using a Sandisk 64G Flash Drive with USB 3.0 interface. OS
-recommended block size is 128k.
-
-**Zero fill**
-
-| Command                                                             | Block size | Time taken (seconds) |
-|---------------------------------------------------------------------|------------|----------------------|
-| `dd if=/dev/zero of=/dev/rdisk3 bs=131072`                          | 128k       | 2667.21              |
-| `lethe wipe --scheme=zero --blocksize=128k --verify=no /dev/rdisk3` | 128k       | 2725.77              |
-| `dd if=/dev/zero of=/dev/rdisk3 bs=1m`                              | 1m         | 2134.99              |
-| `lethe wipe --scheme=zero --blocksize=1m --verify=no /dev/rdisk3`   | 1m         | 2129.61              |
-
-**Random fill**
-
-| Command                                                               | Block size | Time taken (seconds) |
-|-----------------------------------------------------------------------|------------|----------------------|
-| `dd if=/dev/urandom of=/dev/rdisk3 bs=131072`                         | 128k       | 4546.48              |
-| `lethe wipe --scheme=random --blocksize=128k --verify=no /dev/rdisk3` | 128k       | 2758.11              |
 
 ## License
 
