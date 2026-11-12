@@ -8,8 +8,8 @@ use std::path::Path;
 use sysfs_class::{Block, SysClass};
 
 use crate::storage::{
-    AsyncStorageAccess, IoCompletion, IoKind, StorageDetails, StorageError, StorageReadiness,
-    StorageRef, StorageType, System,
+    AsyncStorageAccess, DriveKind, IoCompletion, IoKind, StorageDetails, StorageError,
+    StorageReadiness, StorageRef, StorageType, System,
 };
 
 const SYSFS_BLOCK_SIZE: u64 = 512;
@@ -212,6 +212,55 @@ pub fn resolve_fs_label<P: AsRef<Path>>(path: P) -> Result<Option<String>> {
     Ok(None)
 }
 
+fn drive_kind(block: &Block) -> DriveKind {
+    let name = block
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    if name.starts_with("nvme") {
+        return DriveKind::NvmeSsd;
+    }
+
+    let rotational = block.queue_rotational().unwrap_or(1);
+
+    if block.removable().unwrap_or(0) == 1 {
+        // UAS (USB Attached SCSI) supports command queueing; legacy bulk-only
+        // transport does not.
+        if driver_is_uas(block) {
+            return if rotational == 1 {
+                DriveKind::Hdd
+            } else {
+                DriveKind::Ssd
+            };
+        }
+
+        return DriveKind::Removable;
+    }
+
+    if rotational == 1 {
+        DriveKind::Hdd
+    } else {
+        DriveKind::Ssd
+    }
+}
+
+fn driver_is_uas(block: &Block) -> bool {
+    let mut candidates = vec![block.path().join("device/driver")];
+
+    if let Some(parent) = block.parent_device() {
+        candidates.push(parent.path().join("device/driver"));
+    }
+
+    candidates.iter().any(|path| {
+        std::fs::read_link(path)
+            .ok()
+            .and_then(|target| target.file_name().map(|name| name == "uas"))
+            .unwrap_or(false)
+    })
+}
+
 fn build_device_info(d: &Block) -> Option<StorageRef> {
     let device_path = format!("/dev/{}", d.path().file_name()?.to_str()?);
     let children = d
@@ -243,6 +292,7 @@ fn build_device_info(d: &Block) -> Option<StorageRef> {
         storage_type,
         mount_point: resolve_mount_point(&device_path).unwrap_or(None),
         label: resolve_fs_label(&device_path).unwrap_or(None),
+        drive_kind: drive_kind(d),
     };
 
     Some(StorageRef {

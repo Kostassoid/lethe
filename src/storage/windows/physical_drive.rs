@@ -2,15 +2,18 @@ use std::mem;
 use std::slice;
 
 use anyhow::{Context, Result};
+use windows::Win32::Storage::FileSystem::{BusTypeNvme, BusTypeUsb};
 use windows::Win32::System::Ioctl::{
-    DISK_GEOMETRY_EX, DRIVE_LAYOUT_INFORMATION_EX, FixedMedia, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
-    IOCTL_DISK_GET_DRIVE_LAYOUT_EX, IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY,
-    PARTITION_INFORMATION_EX, PARTITION_STYLE_GPT, PARTITION_STYLE_MBR, PropertyStandardQuery,
-    RemovableMedia, STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_DEVICE_NUMBER,
-    STORAGE_PROPERTY_QUERY, StorageAccessAlignmentProperty,
+    DEVICE_SEEK_PENALTY_DESCRIPTOR, DISK_GEOMETRY_EX, DRIVE_LAYOUT_INFORMATION_EX, FixedMedia,
+    IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
+    IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY, PARTITION_INFORMATION_EX,
+    PARTITION_STYLE_GPT, PARTITION_STYLE_MBR, PropertyStandardQuery, RemovableMedia,
+    STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_ADAPTER_DESCRIPTOR, STORAGE_DEVICE_NUMBER,
+    STORAGE_PROPERTY_QUERY, StorageAccessAlignmentProperty, StorageAdapterProperty,
+    StorageDeviceSeekPenaltyProperty,
 };
 
-use crate::storage::{StorageDetails, StorageReadiness, StorageRef, StorageType};
+use crate::storage::{DriveKind, StorageDetails, StorageReadiness, StorageRef, StorageType};
 
 use super::access::{DeviceAccess, DeviceFile};
 use super::volumes::Volume;
@@ -62,12 +65,15 @@ impl PhysicalDrive {
             StorageType::Other
         };
 
+        let drive_kind = detect_drive_kind(&self.device);
+
         let drive_details = StorageDetails {
             size: geometry.DiskSize.cast_unsigned(),
             block_size: bytes_per_sector,
             storage_type,
             mount_point: None,
             label: None,
+            drive_kind,
         };
 
         let layout = get_drive_layout(&self.device)?;
@@ -110,6 +116,7 @@ impl PhysicalDrive {
                     label: mount_point_and_label
                         .as_ref()
                         .and_then(|value| value.1.clone()),
+                    drive_kind,
                 }),
                 children: vec![],
             });
@@ -171,4 +178,59 @@ fn get_alignment_descriptor(device: &DeviceFile) -> Result<STORAGE_ACCESS_ALIGNM
     device
         .ioctl_with_input(IOCTL_STORAGE_QUERY_PROPERTY, &query)
         .context("Unable to get alignment info.")
+}
+
+fn get_seek_penalty(device: &DeviceFile) -> Result<DEVICE_SEEK_PENALTY_DESCRIPTOR> {
+    let query = STORAGE_PROPERTY_QUERY {
+        PropertyId: StorageDeviceSeekPenaltyProperty,
+        QueryType: PropertyStandardQuery,
+        AdditionalParameters: [0],
+    };
+
+    device
+        .ioctl_with_input(IOCTL_STORAGE_QUERY_PROPERTY, &query)
+        .context("Unable to query the device seek penalty.")
+}
+
+fn get_adapter_descriptor(device: &DeviceFile) -> Result<STORAGE_ADAPTER_DESCRIPTOR> {
+    let query = STORAGE_PROPERTY_QUERY {
+        PropertyId: StorageAdapterProperty,
+        QueryType: PropertyStandardQuery,
+        AdditionalParameters: [0],
+    };
+
+    device
+        .ioctl_with_input(IOCTL_STORAGE_QUERY_PROPERTY, &query)
+        .context("Unable to query the storage adapter.")
+}
+
+fn detect_drive_kind(device: &DeviceFile) -> DriveKind {
+    let adapter = get_adapter_descriptor(device).ok();
+    let bus_type = adapter.as_ref().map(|descriptor| descriptor.BusType);
+    let queueing = adapter
+        .as_ref()
+        .is_some_and(|descriptor| descriptor.CommandQueueing);
+    let seek_penalty = get_seek_penalty(device)
+        .ok()
+        .map(|descriptor| descriptor.IncursSeekPenalty);
+
+    if bus_type.is_some_and(|bus| i32::from(bus) == BusTypeNvme.0) {
+        return DriveKind::NvmeSsd;
+    }
+
+    if bus_type.is_some_and(|bus| i32::from(bus) == BusTypeUsb.0) {
+        // UAS (USB Attached SCSI) supports command queueing; legacy bulk-only
+        // transport does not.
+        return match (queueing, seek_penalty) {
+            (true, Some(false)) => DriveKind::Ssd,
+            (true, Some(true)) => DriveKind::Hdd,
+            _ => DriveKind::Removable,
+        };
+    }
+
+    match seek_penalty {
+        Some(true) => DriveKind::Hdd,
+        Some(false) => DriveKind::Ssd,
+        None => DriveKind::Unknown,
+    }
 }

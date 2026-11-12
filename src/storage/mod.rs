@@ -160,6 +160,17 @@ impl std::fmt::Display for StorageType {
     }
 }
 
+/// Broad physical characteristics of the storage, used to pick sensible I/O defaults.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DriveKind {
+    #[default]
+    Unknown,
+    Hdd,
+    Ssd,
+    NvmeSsd,
+    Removable,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StorageDetails {
     pub size: u64,
@@ -170,7 +181,57 @@ pub struct StorageDetails {
     pub storage_type: StorageType,
     pub mount_point: Option<String>,
     pub label: Option<String>,
+    pub drive_kind: DriveKind,
+}
+
+impl std::fmt::Display for DriveKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            DriveKind::Unknown => "Unknown",
+            DriveKind::Hdd => "HDD",
+            DriveKind::Ssd => "SSD",
+            DriveKind::NvmeSsd => "NVMe SSD",
+            DriveKind::Removable => "Removable",
+        })
+    }
+}
+
+impl StorageDetails {
+    /// A conservative estimate of how many requests are worth keeping in flight.
+    ///
+    /// The values are deliberately small: raw-device I/O is mostly limited by the
+    /// device itself, and deeper queues do not help every SSD. Users can override the
+    /// result with `--queue-depth`.
+    pub fn recommended_queue_depth(&self) -> usize {
+        match self.drive_kind {
+            DriveKind::NvmeSsd => 8,
+            DriveKind::Ssd => 4,
+            DriveKind::Hdd | DriveKind::Removable | DriveKind::Unknown => 1,
+        }
+    }
 }
 
 /// Entry point for platform-specific storage device discovery.
 pub struct System;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_recommended_queue_depth() {
+        let depth = |drive_kind| {
+            StorageDetails {
+                drive_kind,
+                ..StorageDetails::default()
+            }
+            .recommended_queue_depth()
+        };
+
+        assert_eq!(depth(DriveKind::Hdd), 1);
+        assert_eq!(depth(DriveKind::Ssd), 4);
+        assert_eq!(depth(DriveKind::NvmeSsd), 8);
+        assert_eq!(depth(DriveKind::Removable), 1);
+        assert_eq!(depth(DriveKind::Unknown), 1);
+    }
+}

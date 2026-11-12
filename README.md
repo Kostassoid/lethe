@@ -86,7 +86,7 @@ sudo lethe list
 ```
 
 Every device gets a full ID (`/dev/sda`, `/dev/rdisk2`, `\\.\PhysicalDrive0`) and a short ID. Both are accepted by
-`wipe`.
+`wipe`. The listing also shows the detected drive kind and the queue depth that `--queue-depth=auto` will use.
 
 ### Wipe a device
 
@@ -120,7 +120,7 @@ Are you sure? (type 'yes' to confirm):
 | `--blocksize`, `-b` | `1m`       | I/O block size; must be a power of two     |
 | `--offset`, `-o`    | `0`        | Start position in bytes                    |
 | `--retries`, `-r`   | `8`        | Maximum retries per step                   |
-| `--queue-depth`, `-q` | `1`      | In-flight I/O requests (experimental)      |
+| `--queue-depth`, `-q` | `auto`   | In-flight I/O requests, or a fixed `1`-`256` |
 | `--yes`, `-y`       | off        | Skip the confirmation prompt               |
 
 Sizes accept `k`, `m`, `g` and `t` suffixes (e.g. `128k`, `4m`, `1g`). Use `lethe help wipe` for the full list.
@@ -190,20 +190,37 @@ sudo lethe wipe /dev/sdb --blocksize=128k
 
 ### Queued I/O (experimental)
 
-`--queue-depth` keeps up to that many positional read/write requests in flight. On Linux
-this uses `io_uring`; on Windows it uses overlapped I/O. Other platforms fall back to
+`--queue-depth` keeps multiple positional read/write requests in flight. On Linux this
+uses `io_uring`; on Windows it uses overlapped I/O. Other platforms fall back to
 synchronous I/O, so the effective depth remains `1`.
 
-This can improve throughput on NVMe drives, especially for verification (read-back), but
-may not help large sequential writes. The wipe semantics are unchanged: steps still run
-in order, bad blocks are tracked the same way, and partial coverage is still computed over
-the whole drive.
+The default is `auto`, which picks a conservative depth from the detected drive kind:
+
+| Drive kind                | Queue depth |
+|---------------------------|-------------|
+| NVMe SSD                  | 8           |
+| SATA/other SSD            | 4           |
+| HDD, removable, unknown   | 1           |
+
+USB drives are treated as removable unless the OS reports UAS/command queueing, in which
+case they are classified as an SSD or HDD.
+
+This can improve throughput on SSDs, especially for verification (read-back), but may not
+help large sequential writes. The wipe semantics are unchanged: steps still run in order,
+bad blocks are tracked the same way, and partial coverage is still computed over the whole
+drive.
 
 ```sh
+# Auto (recommended)
+sudo lethe wipe /dev/nvme0n1
+
+# Force a fixed depth
 sudo lethe wipe /dev/nvme0n1 --queue-depth=4
+
+# Force the sequential path
+sudo lethe wipe /dev/nvme0n1 --queue-depth=1
 ```
 
-The default is `1`, which keeps the original sequential behavior.
 
 ### Wiping only part of a drive
 

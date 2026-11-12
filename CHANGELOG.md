@@ -6,7 +6,8 @@
 
 * The system is now prevented from sleeping while a wipe is in progress on Windows, macOS and Linux.
 * Experimental queued I/O via `--queue-depth`, using `io_uring` on Linux and overlapped I/O on Windows to keep
-  multiple positional requests in flight while preserving the existing wipe and verification semantics.
+  multiple positional requests in flight while preserving the existing wipe and verification semantics. The depth
+  defaults to `auto`, based on the detected drive type, and can be overridden with a fixed value.
 
 ## [v1.0.1] - 2026-11-11
 

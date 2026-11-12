@@ -7,7 +7,9 @@ use std::os::unix::io::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::storage::{StorageDetails, StorageReadiness, StorageRef, StorageType, System};
+use crate::storage::{
+    DriveKind, StorageDetails, StorageReadiness, StorageRef, StorageType, System,
+};
 
 impl System {
     pub fn enumerate_storage_devices() -> Result<Vec<StorageRef>> {
@@ -100,6 +102,8 @@ struct DUDiskInfo {
     whole_disk: bool,
     volume_name: Option<String>,
     mount_point: Option<String>,
+    solid_state: Option<bool>,
+    bus_protocol: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -129,12 +133,23 @@ impl DiskUtilCli {
             StorageType::Fixed
         };
 
+        let drive_kind = match info.bus_protocol.as_deref() {
+            Some("NVMe") => DriveKind::NvmeSsd,
+            Some("USB") => DriveKind::Removable,
+            _ => match info.solid_state {
+                Some(true) => DriveKind::Ssd,
+                Some(false) => DriveKind::Hdd,
+                None => DriveKind::Unknown,
+            },
+        };
+
         Ok(StorageDetails {
             size: info.size,
             block_size: info.device_block_size,
             storage_type,
             mount_point: info.mount_point.to_owned(),
             label: info.volume_name.to_owned(),
+            drive_kind,
         })
     }
 }
@@ -155,6 +170,9 @@ impl StorageDeviceEnumerator for DiskUtilCli {
         info.all_disks_and_partitions
             .iter()
             .map(|d| {
+                let disk_details = self.get_storage_details(&d.device_identifier)?;
+                let drive_kind = disk_details.drive_kind;
+
                 let children: Result<Vec<StorageRef>> = d
                     .partitions
                     .as_ref()
@@ -162,11 +180,12 @@ impl StorageDeviceEnumerator for DiskUtilCli {
                     .iter()
                     .chain(d.a_p_f_s_volumes.as_ref().unwrap_or(&vec![]).iter())
                     .map(|p| {
+                        let mut details = self.get_storage_details(&p.device_identifier)?;
+                        details.drive_kind = drive_kind;
+
                         Ok(StorageRef {
                             id: format!("/dev/r{}", p.device_identifier),
-                            readiness: StorageReadiness::Ready(
-                                self.get_storage_details(&p.device_identifier)?,
-                            ),
+                            readiness: StorageReadiness::Ready(details),
                             children: vec![],
                         })
                     })
@@ -174,9 +193,7 @@ impl StorageDeviceEnumerator for DiskUtilCli {
 
                 Ok(StorageRef {
                     id: format!("/dev/r{}", d.device_identifier),
-                    readiness: StorageReadiness::Ready(
-                        self.get_storage_details(&d.device_identifier)?,
-                    ),
+                    readiness: StorageReadiness::Ready(disk_details),
                     children: children?,
                 })
             })

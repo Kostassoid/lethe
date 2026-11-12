@@ -6,6 +6,35 @@ use crate::sanitization::SchemeRepo;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Queue depth requested on the command line, before drive-based auto detection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueueDepth {
+    Auto,
+    Fixed(usize),
+}
+
+impl std::str::FromStr for QueueDepth {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        if value.eq_ignore_ascii_case("auto") {
+            return Ok(Self::Auto);
+        }
+
+        let depth: u32 = value
+            .parse()
+            .map_err(|_| "expected 'auto' or an integer".to_string())?;
+
+        if !(1..=256).contains(&depth) {
+            return Err("queue depth must be between 1 and 256".to_string());
+        }
+
+        Ok(Self::Fixed(
+            usize::try_from(depth).expect("u32 fits into usize"),
+        ))
+    }
+}
+
 /// Builds the command-line interface of the application.
 pub fn build_command(schemes: &SchemeRepo) -> Command {
     let scheme_keys: Vec<_> = schemes.all().keys().copied().collect();
@@ -86,9 +115,9 @@ pub fn build_command(schemes: &SchemeRepo) -> Command {
                         .long("queue-depth")
                         .short('q')
                         .num_args(1)
-                        .value_parser(value_parser!(u32).range(1..=256))
-                        .default_value("1")
-                        .help("Maximum number of concurrent I/O sections (queue depth)"),
+                        .value_parser(value_parser!(QueueDepth))
+                        .default_value("auto")
+                        .help("I/O queue depth: 'auto' or 1..256"),
                 )
                 .arg(
                     Arg::new("yes")
@@ -169,5 +198,17 @@ mod test {
     fn test_block_size_parser_bad() {
         assert_matches!(parse_block_size("4095"), Err(_));
         assert_matches!(parse_block_size("13M"), Err(_));
+    }
+
+    #[test]
+    fn test_queue_depth_parser() {
+        use std::str::FromStr;
+
+        assert_eq!(QueueDepth::from_str("auto").unwrap(), QueueDepth::Auto);
+        assert_eq!(QueueDepth::from_str("AUTO").unwrap(), QueueDepth::Auto);
+        assert_eq!(QueueDepth::from_str("4").unwrap(), QueueDepth::Fixed(4));
+        assert!(QueueDepth::from_str("0").is_err());
+        assert!(QueueDepth::from_str("257").is_err());
+        assert!(QueueDepth::from_str("deep").is_err());
     }
 }

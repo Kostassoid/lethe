@@ -31,6 +31,8 @@ fn main() -> Result<()> {
                 "Short ID",
                 "Size",
                 "Type",
+                "Drive",
+                "QD",
                 "Label",
                 "Mount Point",
             ]);
@@ -48,6 +50,8 @@ fn main() -> Result<()> {
                         short_id_cell,
                         Cell::new(&HumanBytes(details.size).to_string()),
                         Cell::new(&details.storage_type.to_string()),
+                        Cell::new(&details.drive_kind.to_string()),
+                        Cell::new(&details.recommended_queue_depth().to_string()),
                         Cell::new(details.label.as_deref().unwrap_or("")),
                         Cell::new(details.mount_point.as_deref().unwrap_or("")),
                     ]),
@@ -56,6 +60,8 @@ fn main() -> Result<()> {
                         short_id_cell,
                         Cell::new(&HumanBytes(0).to_string()),
                         Cell::new("locked"),
+                        Cell::new("-"),
+                        Cell::new("-"),
                         Cell::new("locked"),
                         Cell::new("locked"),
                     ]),
@@ -119,11 +125,13 @@ fn main() -> Result<()> {
                 .get_one::<u32>("retries")
                 .ok_or_else(|| anyhow!("Invalid retries number value"))?;
 
-            let queue_depth = cmd
-                .get_one::<u32>("queue-depth")
-                .ok_or_else(|| anyhow!("Invalid queue depth value"))?;
-            let queue_depth = usize::try_from((*queue_depth).max(1))
-                .context("Queue depth does not fit into addressable memory")?;
+            let queue_depth = match cmd
+                .get_one::<args::QueueDepth>("queue-depth")
+                .ok_or_else(|| anyhow!("Invalid queue depth value"))?
+            {
+                args::QueueDepth::Auto => device_details.recommended_queue_depth(),
+                args::QueueDepth::Fixed(depth) => *depth,
+            };
 
             let plan = WipePlan::new(
                 scheme.clone(),
