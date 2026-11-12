@@ -202,8 +202,9 @@ The default is `auto`, which picks a conservative depth from the detected drive 
 | SATA/other SSD            | 4           |
 | HDD, removable, unknown   | 1           |
 
-USB drives are treated as removable unless the OS reports UAS/command queueing, in which
-case they are classified as an SSD or HDD.
+USB drives need command queueing (UAS) before using a depth above 1. For such drives the
+OS's seek-penalty or TRIM information is used to distinguish an SSD from an HDD; bridges
+that hide both stay at depth 1.
 
 This can improve throughput on SSDs, especially for verification (read-back), but may not
 help large sequential writes. The wipe semantics are unchanged: steps still run in order,

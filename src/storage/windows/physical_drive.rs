@@ -4,13 +4,13 @@ use std::slice;
 use anyhow::{Context, Result};
 use windows::Win32::Storage::FileSystem::{BusTypeNvme, BusTypeUsb};
 use windows::Win32::System::Ioctl::{
-    DEVICE_SEEK_PENALTY_DESCRIPTOR, DISK_GEOMETRY_EX, DRIVE_LAYOUT_INFORMATION_EX, FixedMedia,
-    IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
-    IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY, PARTITION_INFORMATION_EX,
-    PARTITION_STYLE_GPT, PARTITION_STYLE_MBR, PropertyStandardQuery, RemovableMedia,
-    STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_ADAPTER_DESCRIPTOR, STORAGE_DEVICE_NUMBER,
-    STORAGE_PROPERTY_QUERY, StorageAccessAlignmentProperty, StorageAdapterProperty,
-    StorageDeviceSeekPenaltyProperty,
+    DEVICE_SEEK_PENALTY_DESCRIPTOR, DEVICE_TRIM_DESCRIPTOR, DISK_GEOMETRY_EX,
+    DRIVE_LAYOUT_INFORMATION_EX, FixedMedia, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+    IOCTL_DISK_GET_DRIVE_LAYOUT_EX, IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY,
+    PARTITION_INFORMATION_EX, PARTITION_STYLE_GPT, PARTITION_STYLE_MBR, PropertyStandardQuery,
+    RemovableMedia, STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_ADAPTER_DESCRIPTOR,
+    STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_QUERY, StorageAccessAlignmentProperty,
+    StorageAdapterProperty, StorageDeviceSeekPenaltyProperty, StorageDeviceTrimProperty,
 };
 
 use crate::storage::{DriveKind, StorageDetails, StorageReadiness, StorageRef, StorageType};
@@ -192,6 +192,18 @@ fn get_seek_penalty(device: &DeviceFile) -> Result<DEVICE_SEEK_PENALTY_DESCRIPTO
         .context("Unable to query the device seek penalty.")
 }
 
+fn get_trim(device: &DeviceFile) -> Result<DEVICE_TRIM_DESCRIPTOR> {
+    let query = STORAGE_PROPERTY_QUERY {
+        PropertyId: StorageDeviceTrimProperty,
+        QueryType: PropertyStandardQuery,
+        AdditionalParameters: [0],
+    };
+
+    device
+        .ioctl_with_input(IOCTL_STORAGE_QUERY_PROPERTY, &query)
+        .context("Unable to query the device trim property.")
+}
+
 fn get_adapter_descriptor(device: &DeviceFile) -> Result<STORAGE_ADAPTER_DESCRIPTOR> {
     let query = STORAGE_PROPERTY_QUERY {
         PropertyId: StorageAdapterProperty,
@@ -213,24 +225,32 @@ fn detect_drive_kind(device: &DeviceFile) -> DriveKind {
     let seek_penalty = get_seek_penalty(device)
         .ok()
         .map(|descriptor| descriptor.IncursSeekPenalty);
+    let trim = get_trim(device)
+        .ok()
+        .map(|descriptor| descriptor.TrimEnabled);
 
     if bus_type.is_some_and(|bus| i32::from(bus) == BusTypeNvme.0) {
         return DriveKind::NvmeSsd;
     }
 
     if bus_type.is_some_and(|bus| i32::from(bus) == BusTypeUsb.0) {
-        // UAS (USB Attached SCSI) supports command queueing; legacy bulk-only
-        // transport does not.
-        return match (queueing, seek_penalty) {
-            (true, Some(false)) => DriveKind::Ssd,
-            (true, Some(true)) => DriveKind::Hdd,
-            _ => DriveKind::Removable,
+        // Bulk-only transport cannot keep commands in flight, even on an SSD.
+        if !queueing {
+            return DriveKind::Removable;
+        }
+
+        // Many USB-SATA bridges do not report seek penalty, but still pass TRIM
+        // through, which is a reliable hint that the media is solid state.
+        return match (seek_penalty, trim) {
+            (Some(true), _) => DriveKind::Hdd,
+            (Some(false), _) | (None, Some(true)) => DriveKind::Ssd,
+            (None, _) => DriveKind::Removable,
         };
     }
 
-    match seek_penalty {
-        Some(true) => DriveKind::Hdd,
-        Some(false) => DriveKind::Ssd,
-        None => DriveKind::Unknown,
+    match (seek_penalty, trim) {
+        (Some(true), _) => DriveKind::Hdd,
+        (Some(false), _) | (None, Some(true)) => DriveKind::Ssd,
+        (None, _) => DriveKind::Unknown,
     }
 }
