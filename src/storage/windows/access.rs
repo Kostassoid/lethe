@@ -24,12 +24,19 @@ use crate::storage::{StorageAccess, StorageError};
 pub(super) enum DeviceAccess {
     Query,
     Wipe,
+    /// A write handle for a parallel section. The primary handle already locked and
+    /// dismounted the volume tree, so this one only needs raw read/write access.
+    WipeSecondary,
 }
 
 pub(super) struct DeviceFile {
     is_locked: bool,
     handle: HANDLE,
 }
+
+// SAFETY: a device handle may be used from any thread. Ownership is unique, and each
+// parallel section owns its own handle for the duration of the wipe.
+unsafe impl Send for DeviceFile {}
 
 impl DeviceFile {
     pub(super) fn open(path: &str, access: DeviceAccess) -> Result<Self> {
@@ -40,7 +47,7 @@ impl DeviceFile {
 
         let desired_access = match access {
             DeviceAccess::Query => 0,
-            DeviceAccess::Wipe => GENERIC_READ.0 | GENERIC_WRITE.0,
+            DeviceAccess::Wipe | DeviceAccess::WipeSecondary => GENERIC_READ.0 | GENERIC_WRITE.0,
         };
 
         let name = HSTRING::from(file_path.as_str());

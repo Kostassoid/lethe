@@ -120,6 +120,7 @@ Are you sure? (type 'yes' to confirm):
 | `--blocksize`, `-b` | `1m`       | I/O block size; must be a power of two     |
 | `--offset`, `-o`    | `0`        | Start position in bytes                    |
 | `--retries`, `-r`   | `8`        | Maximum retries per step                   |
+| `--queue-depth`, `-q` | `1`      | Concurrent I/O sections (experimental)     |
 | `--yes`, `-y`       | off        | Skip the confirmation prompt               |
 
 Sizes accept `k`, `m`, `g` and `t` suffixes (e.g. `128k`, `4m`, `1g`). Use `lethe help wipe` for the full list.
@@ -186,6 +187,20 @@ drives; the OS-recommended block size may be better in some cases.
 sudo lethe wipe /dev/sdb --blocksize=4m
 sudo lethe wipe /dev/sdb --blocksize=128k
 ```
+
+### Parallel I/O (experimental)
+
+`--queue-depth` splits the wiped area into that many block-aligned sections and runs
+them concurrently, each with its own storage handle and progress bar. This can improve
+throughput on NVMe drives, especially for verification (read-back), but may not help
+large sequential writes. Verification coverage is still computed over the whole drive, so
+partial coverage keeps sampling its beginning and its end.
+
+```sh
+sudo lethe wipe /dev/nvme0n1 --queue-depth=4
+```
+
+The default is `1`, which keeps the original sequential behavior.
 
 ### Wiping only part of a drive
 

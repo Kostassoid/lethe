@@ -109,6 +109,24 @@ impl Coverage {
         Coverage { spans }
     }
 
+    /// Restricts the covered areas to `range`, dropping everything outside of it.
+    ///
+    /// Used when the wiped area is split into independently verified sections: every
+    /// section keeps only the part of the globally sampled coverage it owns.
+    pub fn clip(&self, range: &Range<u64>) -> Coverage {
+        let spans = self
+            .spans
+            .iter()
+            .filter_map(|span| {
+                let start = span.start.max(range.start);
+                let end = span.end.min(range.end);
+                (start < end).then_some(start..end)
+            })
+            .collect();
+
+        Coverage { spans }
+    }
+
     pub fn spans(&self) -> &[Range<u64>] {
         &self.spans
     }
@@ -187,5 +205,30 @@ mod test {
     fn test_no_verification_has_no_coverage() {
         let v = Verification::No;
         assert_eq!(v.coverage(&(0..100u64), 512).spans().len(), 0);
+    }
+
+    #[test]
+    fn test_clip_drops_spans_outside_the_range() {
+        let coverage = Coverage::from_percent(&(0..100_000u64), 8192, &Percent::new(30.0).unwrap());
+
+        assert_eq!(
+            coverage.clip(&(0..40_960u64)).spans().first(),
+            Some(&(0u64..16_384))
+        );
+        assert_eq!(coverage.clip(&(40_960u64..81_920u64)).spans().len(), 0);
+        assert_eq!(
+            coverage.clip(&(81_920u64..100_000u64)).spans().first(),
+            Some(&(81_920u64..100_000))
+        );
+    }
+
+    #[test]
+    fn test_clip_trims_partial_overlap() {
+        let coverage = Coverage::from_percent(&(0..100_000u64), 8192, &Percent::new(30.0).unwrap());
+
+        assert_eq!(
+            coverage.clip(&(8_192u64..90_112u64)).spans(),
+            &[8_192..16_384u64, 81_920..90_112u64]
+        );
     }
 }

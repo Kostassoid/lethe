@@ -119,6 +119,12 @@ fn main() -> Result<()> {
                 .get_one::<u32>("retries")
                 .ok_or_else(|| anyhow!("Invalid retries number value"))?;
 
+            let queue_depth = cmd
+                .get_one::<u32>("queue-depth")
+                .ok_or_else(|| anyhow!("Invalid queue depth value"))?;
+            let queue_depth = usize::try_from((*queue_depth).max(1))
+                .context("Queue depth does not fit into addressable memory")?;
+
             let plan = WipePlan::new(
                 scheme.clone(),
                 verification,
@@ -126,17 +132,19 @@ fn main() -> Result<()> {
                 block_size,
             )?;
 
-            let session = cli::wipe_session(&device.id, cmd.get_flag("yes"));
-
-            let device_access = device.access()?;
-
             let _sleep_inhibitor = SleepInhibitor::acquire(&format!("Wiping device {device_id}"))
                 .inspect_err(|err| {
                     eprintln!("Warning: unable to prevent the system from sleeping: {err:#}");
                 })
                 .ok();
 
-            plan.execute(device_access, Box::new(session), *retries)?;
+            if queue_depth <= 1 {
+                let session = cli::wipe_session(&device.id, cmd.get_flag("yes"));
+                let device_access = device.access()?;
+                plan.execute(device_access, Box::new(session), *retries)?;
+            } else {
+                cli::run_parallel_wipe(device, plan, *retries, queue_depth, cmd.get_flag("yes"))?;
+            }
         }
         _ => {
             app.print_help()?;

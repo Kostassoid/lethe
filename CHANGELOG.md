@@ -5,6 +5,8 @@
 ### Added
 
 * The system is now prevented from sleeping while a wipe is in progress on Windows, macOS and Linux.
+* Experimental parallel I/O via `--queue-depth`, splitting the wiped area into independently running sections
+  with per-section progress bars. Verification coverage remains global.
 
 ## [v1.0.1] - 2026-11-11
 

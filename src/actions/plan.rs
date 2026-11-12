@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::thread;
 
 use anyhow::{Result, anyhow};
 
@@ -6,6 +7,10 @@ use crate::actions::verification::{Coverage, Verification};
 use crate::actions::wipe::{WipeEventHandler, WipeSession};
 use crate::sanitization::scheme::Scheme;
 use crate::storage::StorageAccess;
+
+/// A handler factory for one parallel section. The handler is built inside the section's
+/// thread, so it does not need to be `Send`.
+pub type SectionHandlerFactory = Box<dyn FnOnce() -> Box<dyn WipeEventHandler> + Send>;
 
 pub type StreamId = usize;
 
@@ -25,6 +30,9 @@ pub struct WipePlan {
     pub range: Range<u64>,
     pub block_size: usize,
     pub verification: Verification,
+    /// Coverage precomputed for the whole original plan, clipped to this plan's range.
+    /// Set on sections produced by [`WipePlan::split`].
+    coverage_override: Option<Coverage>,
 }
 
 impl WipePlan {
@@ -78,6 +86,7 @@ impl WipePlan {
             range,
             block_size,
             verification,
+            coverage_override: None,
         })
     }
 
@@ -88,6 +97,95 @@ impl WipePlan {
         retries: u32,
     ) -> Result<()> {
         WipeSession::new(self, storage, event_handler, retries).run()
+    }
+
+    /// Splits the planned area into up to `parts` contiguous, block-aligned sections.
+    ///
+    /// Every section keeps the globally computed verification coverage, clipped to its
+    /// own range, so partial coverage still samples the beginning and the end of the
+    /// whole device rather than of each section.
+    pub fn split(&self, parts: usize) -> Vec<WipePlan> {
+        let parts = parts.max(1);
+        let total_blocks = self.total_blocks();
+
+        if parts == 1 || total_blocks <= 1 {
+            return vec![self.clone()];
+        }
+
+        let parts = u64::try_from(parts).map_or(total_blocks, |value| value.min(total_blocks));
+        let blocks_per_section = total_blocks.div_ceil(parts);
+        let coverage = self.verification_coverage();
+        let block_size = self.block_size as u64;
+
+        let mut sections = Vec::new();
+        let mut start_block = 0u64;
+
+        while start_block < total_blocks {
+            let end_block = (start_block + blocks_per_section).min(total_blocks);
+
+            let start = self.range.start + start_block * block_size;
+            let end = (self.range.start + end_block * block_size).min(self.range.end);
+            let range = start..end;
+
+            let mut section = self.clone();
+            section.range = range.clone();
+            section.coverage_override = Some(coverage.clip(&range));
+
+            sections.push(section);
+            start_block = end_block;
+        }
+
+        sections
+    }
+
+    /// Runs the given sections concurrently, each against its own storage handle.
+    ///
+    /// The sections are usually produced by [`WipePlan::split`]; this is the parallel
+    /// counterpart of [`WipePlan::execute`].
+    pub fn execute_sections(
+        sections: Vec<WipePlan>,
+        storages: Vec<Box<dyn StorageAccess>>,
+        handlers: Vec<SectionHandlerFactory>,
+        retries: u32,
+    ) -> Result<()> {
+        if sections.len() != storages.len() || sections.len() != handlers.len() {
+            return Err(anyhow!(
+                "Mismatched section, storage and event handler counts"
+            ));
+        }
+
+        let results = thread::scope(|scope| {
+            let mut threads = Vec::with_capacity(sections.len());
+
+            for ((section, storage), handler) in sections.into_iter().zip(storages).zip(handlers) {
+                threads.push(
+                    scope.spawn(move || {
+                        WipeSession::new(section, storage, handler(), retries).run()
+                    }),
+                );
+            }
+
+            threads
+                .into_iter()
+                .map(|thread| {
+                    thread
+                        .join()
+                        .unwrap_or_else(|_| Err(anyhow!("A wipe section thread panicked")))
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let mut error = None;
+
+        for result in results {
+            if let Err(err) = result
+                && error.is_none()
+            {
+                error = Some(err);
+            }
+        }
+
+        error.map_or(Ok(()), Err)
     }
 
     pub fn total_bytes(&self) -> u64 {
@@ -107,13 +205,16 @@ impl WipePlan {
 
     /// The areas a verification pass of this plan has to cover.
     pub fn verification_coverage(&self) -> Coverage {
-        self.verification.coverage(&self.range, self.block_size)
+        self.coverage_override
+            .clone()
+            .unwrap_or_else(|| self.verification.coverage(&self.range, self.block_size))
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::actions::verification::Percent;
     use crate::sanitization::scheme::Stage;
 
     #[test]
@@ -167,6 +268,52 @@ mod test {
         let plan = WipePlan::new(scheme, Verification::No, 70_000..100_000, 32_768).unwrap();
 
         assert_eq!(plan.range, 65_536..100_000);
+    }
+
+    #[test]
+    fn test_split_covers_area_and_clips_global_coverage() {
+        let scheme = Scheme {
+            description: "test".to_string(),
+            stages: vec![Stage::zero()],
+        };
+        let plan = WipePlan::new(
+            scheme,
+            Verification::Last(Percent::new(30.0).unwrap()),
+            0..100_000,
+            8192,
+        )
+        .unwrap();
+
+        let sections = plan.split(3);
+
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].range, 0..40_960);
+        assert_eq!(sections[1].range, 40_960..81_920);
+        assert_eq!(sections[2].range, 81_920..100_000);
+
+        assert_eq!(
+            sections[0].verification_coverage().spans().first(),
+            Some(&(0u64..16_384))
+        );
+        assert_eq!(sections[1].verification_coverage().spans().len(), 0);
+        assert_eq!(
+            sections[2].verification_coverage().spans().first(),
+            Some(&(81_920u64..100_000))
+        );
+
+        let blocks: u64 = sections.iter().map(WipePlan::total_blocks).sum();
+        assert_eq!(blocks, plan.total_blocks());
+    }
+
+    #[test]
+    fn test_split_is_capped_by_the_number_of_blocks() {
+        let scheme = Scheme {
+            description: "test".to_string(),
+            stages: vec![Stage::zero()],
+        };
+        let plan = WipePlan::new(scheme, Verification::No, 0..8192, 4096).unwrap();
+
+        assert_eq!(plan.split(10).len(), 2);
     }
 
     #[test]

@@ -440,6 +440,7 @@ mod test {
     use assert_matches::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_wipe_task_validation() {
@@ -538,6 +539,51 @@ mod test {
         assert_matches!(e.next(), Some(Progress(100_000)));
         assert_matches!(e.next(), Some(StepCompleted(3)));
         assert_matches!(e.next(), Some(Completed));
+    }
+
+    #[test]
+    fn test_parallel_sections_wipe_the_whole_area() {
+        use crate::actions::plan::SectionHandlerFactory;
+
+        let scheme = Scheme {
+            description: "Single zeroes fill".to_string(),
+            stages: vec![Stage::zero()],
+        };
+        let size = 100_000;
+        let block_size = 8192;
+        let (storage, data) = InMemoryStorage::shared(size);
+
+        let plan = WipePlan::new(
+            scheme,
+            Verification::Last(Percent::new(100.0).unwrap()),
+            0..size as u64,
+            block_size,
+        )
+        .unwrap();
+        let sections = plan.split(4);
+
+        let storages: Vec<Box<dyn StorageAccess>> = sections
+            .iter()
+            .map(|_| Box::new(storage.fork()) as Box<dyn StorageAccess>)
+            .collect();
+
+        let handlers: Vec<SectionHandlerFactory> = sections
+            .iter()
+            .map(|_| {
+                Box::new(|| Box::new(StubReceiver::new()) as Box<dyn WipeEventHandler>)
+                    as SectionHandlerFactory
+            })
+            .collect();
+
+        WipePlan::execute_sections(sections, storages, handlers, 8).unwrap();
+
+        assert!(
+            data.lock()
+                .expect("test storage lock poisoned")
+                .iter()
+                .all(|byte| *byte == 0),
+            "some bytes were not wiped"
+        );
     }
 
     #[test]
@@ -942,7 +988,7 @@ mod test {
             WipeSession::new_with_seed(plan, Box::new(storage), Box::new(receiver), 8, seed).run();
         assert!(result.is_ok());
 
-        let data = data.borrow();
+        let data = data.lock().expect("test storage lock poisoned");
         for start in (0..size).step_by(block_size) {
             let end = (start + block_size).min(size);
             let actual = &data[start..end];
@@ -999,7 +1045,10 @@ mod test {
         .run();
         assert!(result.is_ok());
 
-        assert_eq!(&data.borrow()[..], reference.as_slice());
+        assert_eq!(
+            &data.lock().expect("test storage lock poisoned")[..],
+            reference.as_slice()
+        );
 
         let collected = receiver.collected.borrow();
         assert!(
@@ -1050,7 +1099,7 @@ mod test {
     }
 
     struct InMemoryStorage {
-        data: Rc<RefCell<Vec<u8>>>,
+        data: Arc<Mutex<Vec<u8>>>,
         position: u64,
         size: usize,
         total_written: usize,
@@ -1066,11 +1115,11 @@ mod test {
 
         /// Returns the storage and a handle to its underlying bytes, so tests can
         /// inspect the final device contents after a session consumes the storage.
-        fn shared(size: usize) -> (Self, Rc<RefCell<Vec<u8>>>) {
-            let data = Rc::new(RefCell::new(vec![0xff; size]));
+        fn shared(size: usize) -> (Self, Arc<Mutex<Vec<u8>>>) {
+            let data = Arc::new(Mutex::new(vec![0xff; size]));
 
             let storage = InMemoryStorage {
-                data: Rc::clone(&data),
+                data: Arc::clone(&data),
                 position: 0,
                 size,
                 total_written: 0,
@@ -1080,6 +1129,20 @@ mod test {
             };
 
             (storage, data)
+        }
+
+        /// Creates an independent cursor over the same underlying bytes, as a separate
+        /// storage handle would provide for a parallel section.
+        fn fork(&self) -> Self {
+            InMemoryStorage {
+                data: Arc::clone(&self.data),
+                position: 0,
+                size: self.size,
+                total_written: 0,
+                total_read: 0,
+                failures: Vec::new(),
+                bad_blocks: Vec::new(),
+            }
         }
 
         fn fail_after_any(&mut self, amount: usize) {
@@ -1132,7 +1195,7 @@ mod test {
             self.check_for_traps(buffer.len(), 0)?;
 
             let start = self.byte_position();
-            let data = self.data.borrow();
+            let data = self.data.lock().expect("test storage lock poisoned");
             if start >= data.len() {
                 return Ok(0);
             }
@@ -1148,7 +1211,7 @@ mod test {
 
             let start = self.byte_position();
             let end = start + data.len();
-            let mut target = self.data.borrow_mut();
+            let mut target = self.data.lock().expect("test storage lock poisoned");
             if target.len() < end {
                 target.resize(end, 0);
             }

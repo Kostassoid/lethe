@@ -82,6 +82,15 @@ pub fn build_command(schemes: &SchemeRepo) -> Command {
                         .help("Maximum number of retries"),
                 )
                 .arg(
+                    Arg::new("queue-depth")
+                        .long("queue-depth")
+                        .short('q')
+                        .num_args(1)
+                        .value_parser(value_parser!(u32).range(1..=256))
+                        .default_value("1")
+                        .help("Maximum number of concurrent I/O sections (queue depth)"),
+                )
+                .arg(
                     Arg::new("yes")
                         .long("yes")
                         .short('y')

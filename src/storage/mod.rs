@@ -33,10 +33,18 @@ pub struct StorageRef {
 
 pub trait StorageDevice {
     fn access(&self) -> Result<Box<dyn StorageAccess>>;
+
+    /// Opens `count` independent handles to the device, for parallel I/O.
+    ///
+    /// Platforms with exclusive device locking override this to lock once and then open
+    /// the remaining handles without re-locking.
+    fn access_many(&self, count: usize) -> Result<Vec<Box<dyn StorageAccess>>> {
+        (0..count).map(|_| self.access()).collect()
+    }
 }
 
 /// Random-access I/O over a storage device.
-pub trait StorageAccess {
+pub trait StorageAccess: Send {
     fn seek(&mut self, position: u64) -> Result<u64>;
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize>;
     fn write(&mut self, data: &[u8]) -> Result<()>;
