@@ -21,6 +21,8 @@ Similar tools exist, but most are proprietary, slow or not cross-platform. Lethe
   beginning and end.
 - **Fast random data** — uses a fast cryptographic random generator.
 - **Tunable block size** — override the OS-recommended block size for faster operations.
+- **Queued I/O (experimental)** — automatically picks an I/O queue depth for the detected drive type, using
+  `io_uring` on Linux and overlapped I/O on Windows.
 - **Bad block handling** — tracks, skips and reports bad blocks and other localized errors automatically.
 - **Sleep prevention** — blocks the OS from sleeping while a wipe is in progress.
 
@@ -86,7 +88,7 @@ sudo lethe list
 ```
 
 Every device gets a full ID (`/dev/sda`, `/dev/rdisk2`, `\\.\PhysicalDrive0`) and a short ID. Both are accepted by
-`wipe`. The listing also shows the detected drive kind and the queue depth that `--queue-depth=auto` will use.
+`wipe`. The listing also shows the detected bus, drive kind and the queue depth that `--queue-depth=auto` will use.
 
 ### Wipe a device
 

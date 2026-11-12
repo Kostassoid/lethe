@@ -8,7 +8,7 @@ use std::path::Path;
 use sysfs_class::{Block, SysClass};
 
 use crate::storage::{
-    AsyncStorageAccess, DriveKind, IoCompletion, IoKind, StorageDetails, StorageError,
+    AsyncStorageAccess, BusKind, DriveKind, IoCompletion, IoKind, StorageDetails, StorageError,
     StorageReadiness, StorageRef, StorageType, System,
 };
 
@@ -246,19 +246,54 @@ fn drive_kind(block: &Block) -> DriveKind {
     }
 }
 
-fn driver_is_uas(block: &Block) -> bool {
+fn driver_name(block: &Block) -> Option<String> {
     let mut candidates = vec![block.path().join("device/driver")];
 
     if let Some(parent) = block.parent_device() {
         candidates.push(parent.path().join("device/driver"));
     }
 
-    candidates.iter().any(|path| {
+    candidates.iter().find_map(|path| {
         std::fs::read_link(path)
-            .ok()
-            .and_then(|target| target.file_name().map(|name| name == "uas"))
-            .unwrap_or(false)
+            .ok()?
+            .file_name()?
+            .to_str()
+            .map(str::to_owned)
     })
+}
+
+fn driver_is_uas(block: &Block) -> bool {
+    driver_name(block).as_deref() == Some("uas")
+}
+
+fn driver_is_usb(block: &Block) -> bool {
+    matches!(driver_name(block).as_deref(), Some("uas" | "usb-storage"))
+}
+
+fn bus_kind(block: &Block) -> BusKind {
+    let name = block
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    if name.starts_with("nvme") {
+        return BusKind::Nvme;
+    }
+
+    if driver_is_usb(block) {
+        return BusKind::Usb;
+    }
+
+    if name.starts_with("vd") {
+        return BusKind::Virtual;
+    }
+
+    if name.starts_with("sd") {
+        return BusKind::Sata;
+    }
+
+    BusKind::Unknown
 }
 
 fn build_device_info(d: &Block) -> Option<StorageRef> {
@@ -293,6 +328,7 @@ fn build_device_info(d: &Block) -> Option<StorageRef> {
         mount_point: resolve_mount_point(&device_path).unwrap_or(None),
         label: resolve_fs_label(&device_path).unwrap_or(None),
         drive_kind: drive_kind(d),
+        bus: bus_kind(d),
     };
 
     Some(StorageRef {

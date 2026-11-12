@@ -171,6 +171,36 @@ pub enum DriveKind {
     Removable,
 }
 
+/// The transport the device is attached through, when the platform can tell.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(dead_code)] // some kinds are platform-specific
+pub enum BusKind {
+    #[default]
+    Unknown,
+    Usb,
+    Nvme,
+    Sata,
+    Scsi,
+    Pcie,
+    Virtual,
+    Other,
+}
+
+impl std::fmt::Display for BusKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            BusKind::Unknown => "Unknown",
+            BusKind::Usb => "USB",
+            BusKind::Nvme => "NVMe",
+            BusKind::Sata => "SATA",
+            BusKind::Scsi => "SCSI",
+            BusKind::Pcie => "PCIe",
+            BusKind::Virtual => "Virtual",
+            BusKind::Other => "Other",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StorageDetails {
     pub size: u64,
@@ -182,6 +212,7 @@ pub struct StorageDetails {
     pub mount_point: Option<String>,
     pub label: Option<String>,
     pub drive_kind: DriveKind,
+    pub bus: BusKind,
 }
 
 impl std::fmt::Display for DriveKind {

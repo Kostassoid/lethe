@@ -2,7 +2,10 @@ use std::mem;
 use std::slice;
 
 use anyhow::{Context, Result};
-use windows::Win32::Storage::FileSystem::{BusTypeNvme, BusTypeUsb};
+use windows::Win32::Storage::FileSystem::{
+    BusTypeAta, BusTypeNvme, BusTypeSas, BusTypeSata, BusTypeScsi, BusTypeUnknown, BusTypeUsb,
+    BusTypeVirtual,
+};
 use windows::Win32::System::Ioctl::{
     DEVICE_SEEK_PENALTY_DESCRIPTOR, DEVICE_TRIM_DESCRIPTOR, DISK_GEOMETRY_EX,
     DRIVE_LAYOUT_INFORMATION_EX, FixedMedia, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
@@ -13,7 +16,9 @@ use windows::Win32::System::Ioctl::{
     StorageAdapterProperty, StorageDeviceSeekPenaltyProperty, StorageDeviceTrimProperty,
 };
 
-use crate::storage::{DriveKind, StorageDetails, StorageReadiness, StorageRef, StorageType};
+use crate::storage::{
+    BusKind, DriveKind, StorageDetails, StorageReadiness, StorageRef, StorageType,
+};
 
 use super::access::{DeviceAccess, DeviceFile};
 use super::volumes::Volume;
@@ -65,7 +70,7 @@ impl PhysicalDrive {
             StorageType::Other
         };
 
-        let drive_kind = detect_drive_kind(&self.device);
+        let (bus, drive_kind) = detect_drive(&self.device);
 
         let drive_details = StorageDetails {
             size: geometry.DiskSize.cast_unsigned(),
@@ -74,6 +79,7 @@ impl PhysicalDrive {
             mount_point: None,
             label: None,
             drive_kind,
+            bus,
         };
 
         let layout = get_drive_layout(&self.device)?;
@@ -117,6 +123,7 @@ impl PhysicalDrive {
                         .as_ref()
                         .and_then(|value| value.1.clone()),
                     drive_kind,
+                    bus,
                 }),
                 children: vec![],
             });
@@ -216,9 +223,30 @@ fn get_adapter_descriptor(device: &DeviceFile) -> Result<STORAGE_ADAPTER_DESCRIP
         .context("Unable to query the storage adapter.")
 }
 
-fn detect_drive_kind(device: &DeviceFile) -> DriveKind {
+fn bus_kind(bus: u8) -> BusKind {
+    let bus = i32::from(bus);
+
+    if bus == BusTypeNvme.0 {
+        BusKind::Nvme
+    } else if bus == BusTypeUsb.0 {
+        BusKind::Usb
+    } else if bus == BusTypeSata.0 || bus == BusTypeAta.0 {
+        BusKind::Sata
+    } else if bus == BusTypeScsi.0 || bus == BusTypeSas.0 {
+        BusKind::Scsi
+    } else if bus == BusTypeVirtual.0 {
+        BusKind::Virtual
+    } else if bus == BusTypeUnknown.0 {
+        BusKind::Unknown
+    } else {
+        BusKind::Other
+    }
+}
+
+fn detect_drive(device: &DeviceFile) -> (BusKind, DriveKind) {
     let adapter = get_adapter_descriptor(device).ok();
     let bus_type = adapter.as_ref().map(|descriptor| descriptor.BusType);
+    let bus = bus_type.map_or(BusKind::Unknown, bus_kind);
     let queueing = adapter
         .as_ref()
         .is_some_and(|descriptor| descriptor.CommandQueueing);
@@ -230,27 +258,31 @@ fn detect_drive_kind(device: &DeviceFile) -> DriveKind {
         .map(|descriptor| descriptor.TrimEnabled);
 
     if bus_type.is_some_and(|bus| i32::from(bus) == BusTypeNvme.0) {
-        return DriveKind::NvmeSsd;
+        return (bus, DriveKind::NvmeSsd);
     }
 
     if bus_type.is_some_and(|bus| i32::from(bus) == BusTypeUsb.0) {
         // Bulk-only transport cannot keep commands in flight, even on an SSD.
         if !queueing {
-            return DriveKind::Removable;
+            return (bus, DriveKind::Removable);
         }
 
         // Many USB-SATA bridges do not report seek penalty, but still pass TRIM
         // through, which is a reliable hint that the media is solid state.
-        return match (seek_penalty, trim) {
+        let kind = match (seek_penalty, trim) {
             (Some(true), _) => DriveKind::Hdd,
             (Some(false), _) | (None, Some(true)) => DriveKind::Ssd,
             (None, _) => DriveKind::Removable,
         };
+
+        return (bus, kind);
     }
 
-    match (seek_penalty, trim) {
+    let kind = match (seek_penalty, trim) {
         (Some(true), _) => DriveKind::Hdd,
         (Some(false), _) | (None, Some(true)) => DriveKind::Ssd,
         (None, _) => DriveKind::Unknown,
-    }
+    };
+
+    (bus, kind)
 }

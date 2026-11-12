@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::storage::{
-    DriveKind, StorageDetails, StorageReadiness, StorageRef, StorageType, System,
+    BusKind, DriveKind, StorageDetails, StorageReadiness, StorageRef, StorageType, System,
 };
 
 impl System {
@@ -133,6 +133,16 @@ impl DiskUtilCli {
             StorageType::Fixed
         };
 
+        let bus = match info.bus_protocol.as_deref() {
+            Some("USB") => BusKind::Usb,
+            Some("NVMe") => BusKind::Nvme,
+            Some("SATA") => BusKind::Sata,
+            Some("SAS") | Some("SCSI") => BusKind::Scsi,
+            Some("PCI-Express") | Some("PCIe") | Some("Apple Fabric") => BusKind::Pcie,
+            Some(_) => BusKind::Other,
+            None => BusKind::Unknown,
+        };
+
         let drive_kind = match info.bus_protocol.as_deref() {
             Some("NVMe") => DriveKind::NvmeSsd,
             Some("USB") => DriveKind::Removable,
@@ -150,6 +160,7 @@ impl DiskUtilCli {
             mount_point: info.mount_point.to_owned(),
             label: info.volume_name.to_owned(),
             drive_kind,
+            bus,
         })
     }
 }
@@ -172,6 +183,7 @@ impl StorageDeviceEnumerator for DiskUtilCli {
             .map(|d| {
                 let disk_details = self.get_storage_details(&d.device_identifier)?;
                 let drive_kind = disk_details.drive_kind;
+                let bus = disk_details.bus;
 
                 let children: Result<Vec<StorageRef>> = d
                     .partitions
@@ -182,6 +194,7 @@ impl StorageDeviceEnumerator for DiskUtilCli {
                     .map(|p| {
                         let mut details = self.get_storage_details(&p.device_identifier)?;
                         details.drive_kind = drive_kind;
+                        details.bus = bus;
 
                         Ok(StorageRef {
                             id: format!("/dev/r{}", p.device_identifier),
