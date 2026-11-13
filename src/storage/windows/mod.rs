@@ -2,10 +2,13 @@
 
 use anyhow::{Context, Result};
 
-use crate::storage::{AsyncStorageAccess, StorageAccess, StorageDevice, StorageRef, System};
+use crate::storage::{
+    AsyncStorageAccess, HardwareEraseMethod, StorageAccess, StorageDevice, StorageRef, System,
+};
 
 mod access;
 mod enumeration;
+mod erase;
 mod misc;
 mod physical_drive;
 mod volumes;
@@ -80,5 +83,9 @@ impl StorageAccess for CompositeStorageAccess {
 
     fn flush(&mut self) -> Result<()> {
         self.device.flush()
+    }
+
+    fn hardware_erase(&mut self, method: HardwareEraseMethod) -> Result<()> {
+        self.device.hardware_erase(method)
     }
 }

@@ -21,7 +21,8 @@ use windows::Win32::System::Threading::CreateEventW;
 use windows::core::{Error as WindowsError, HSTRING};
 
 use crate::storage::{
-    AsyncStorageAccess, IoCompletion, IoKind, StorageAccess, StorageError, StorageRef,
+    AsyncStorageAccess, HardwareEraseMethod, IoCompletion, IoKind, StorageAccess, StorageError,
+    StorageRef,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,9 +38,14 @@ pub(super) enum DeviceAccess {
 pub(super) struct DeviceFile {
     is_locked: bool,
     handle: HANDLE,
+    path: String,
 }
 
 impl DeviceFile {
+    pub(super) fn path(&self) -> &str {
+        &self.path
+    }
+
     pub(super) fn open(path: &str, access: DeviceAccess) -> Result<Self> {
         let mut file_path = path.to_string();
         if !path.starts_with("\\\\") {
@@ -86,6 +92,7 @@ impl DeviceFile {
         let mut device = DeviceFile {
             is_locked: false,
             handle,
+            path: path.to_string(),
         };
 
         if access == DeviceAccess::Wipe || access == DeviceAccess::WipeOverlapped {
@@ -388,6 +395,10 @@ impl AsyncStorageAccess for OverlappedAccess {
     fn flush(&mut self) -> Result<()> {
         self.device.flush()
     }
+
+    fn hardware_erase(&mut self, method: HardwareEraseMethod) -> Result<()> {
+        self.device.hardware_erase(method)
+    }
 }
 
 impl StorageAccess for DeviceFile {
@@ -433,5 +444,9 @@ impl StorageAccess for DeviceFile {
         unsafe { FlushFileBuffers(self.handle) }
             .map_err(|error| StorageError::from_windows(&error))
             .context("Unable to flush device write buffers.")
+    }
+
+    fn hardware_erase(&mut self, method: HardwareEraseMethod) -> Result<()> {
+        super::erase::hardware_erase(self, method)
     }
 }

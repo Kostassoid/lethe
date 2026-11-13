@@ -238,7 +238,7 @@ fn get_adapter_descriptor(device: &DeviceFile) -> Result<STORAGE_ADAPTER_DESCRIP
         .context("Unable to query the storage adapter.")
 }
 
-fn query_protocol_data(
+pub(super) fn query_protocol_data(
     device: &DeviceFile,
     protocol_type: STORAGE_PROTOCOL_TYPE,
     data_type: u32,
@@ -295,15 +295,19 @@ fn query_protocol_data(
 fn parse_ata_identify(data: &[u8]) -> HardwareEraseCapabilities {
     let word = |index: usize| u16::from_le_bytes([data[index * 2], data[index * 2 + 1]]);
 
+    let sanitize = word(59);
+
     HardwareEraseCapabilities {
         ata_secure_erase: word(82) & (1 << 1) != 0,
         ata_enhanced_secure_erase: word(128) & (1 << 5) != 0,
-        ata_sanitize: word(59) & (1 << 12) != 0,
+        ata_sanitize_crypto: sanitize & (1 << 13) != 0,
+        ata_sanitize_block_erase: sanitize & (1 << 15) != 0,
+        ata_sanitize_overwrite: sanitize & (1 << 14) != 0,
         ..Default::default()
     }
 }
 
-fn detect_ata_capabilities(device: &DeviceFile) -> Result<HardwareEraseCapabilities> {
+pub(super) fn detect_ata_capabilities(device: &DeviceFile) -> Result<HardwareEraseCapabilities> {
     let data = query_protocol_data(
         device,
         ProtocolTypeAta,
@@ -315,7 +319,9 @@ fn detect_ata_capabilities(device: &DeviceFile) -> Result<HardwareEraseCapabilit
     Ok(parse_ata_identify(&data))
 }
 
-fn detect_ata_capabilities_scsi(device: &DeviceFile) -> Result<HardwareEraseCapabilities> {
+pub(super) fn detect_ata_capabilities_scsi(
+    device: &DeviceFile,
+) -> Result<HardwareEraseCapabilities> {
     let mut data = AlignedBuffer::new(512, 512);
     data.as_mut_slice().fill(0);
 
@@ -369,14 +375,18 @@ fn parse_nvme_identify(data: &[u8]) -> HardwareEraseCapabilities {
     let identify: NVME_IDENTIFY_CONTROLLER_DATA =
         unsafe { std::ptr::read_unaligned(data.as_ptr().cast()) };
 
+    let sanicap = identify.SANICAP._bitfield;
+
     HardwareEraseCapabilities {
-        nvme_sanitize: identify.SANICAP._bitfield & 0b111 != 0,
+        nvme_sanitize_crypto: sanicap & 0b001 != 0,
+        nvme_sanitize_block_erase: sanicap & 0b010 != 0,
+        nvme_sanitize_overwrite: sanicap & 0b100 != 0,
         nvme_format: identify.OACS._bitfield & (1 << 1) != 0,
         ..Default::default()
     }
 }
 
-fn detect_nvme_capabilities(device: &DeviceFile) -> Result<HardwareEraseCapabilities> {
+pub(super) fn detect_nvme_capabilities(device: &DeviceFile) -> Result<HardwareEraseCapabilities> {
     let data = query_protocol_data(
         device,
         ProtocolTypeNvme,
@@ -399,8 +409,14 @@ fn merge_capabilities(
             ata_secure_erase: left.ata_secure_erase || right.ata_secure_erase,
             ata_enhanced_secure_erase: left.ata_enhanced_secure_erase
                 || right.ata_enhanced_secure_erase,
-            ata_sanitize: left.ata_sanitize || right.ata_sanitize,
-            nvme_sanitize: left.nvme_sanitize || right.nvme_sanitize,
+            ata_sanitize_crypto: left.ata_sanitize_crypto || right.ata_sanitize_crypto,
+            ata_sanitize_block_erase: left.ata_sanitize_block_erase
+                || right.ata_sanitize_block_erase,
+            ata_sanitize_overwrite: left.ata_sanitize_overwrite || right.ata_sanitize_overwrite,
+            nvme_sanitize_crypto: left.nvme_sanitize_crypto || right.nvme_sanitize_crypto,
+            nvme_sanitize_block_erase: left.nvme_sanitize_block_erase
+                || right.nvme_sanitize_block_erase,
+            nvme_sanitize_overwrite: left.nvme_sanitize_overwrite || right.nvme_sanitize_overwrite,
             nvme_format: left.nvme_format || right.nvme_format,
         }),
     }
@@ -490,14 +506,18 @@ mod test {
         let mut data = [0u8; 512];
         data[82 * 2..82 * 2 + 2].copy_from_slice(&(1u16 << 1).to_le_bytes());
         data[128 * 2..128 * 2 + 2].copy_from_slice(&(1u16 << 5).to_le_bytes());
-        data[59 * 2..59 * 2 + 2].copy_from_slice(&(1u16 << 12).to_le_bytes());
+        data[59 * 2..59 * 2 + 2]
+            .copy_from_slice(&((1u16 << 13) | (1u16 << 14) | (1u16 << 15)).to_le_bytes());
 
         let capabilities = parse_ata_identify(&data);
 
         assert!(capabilities.ata_secure_erase);
         assert!(capabilities.ata_enhanced_secure_erase);
-        assert!(capabilities.ata_sanitize);
-        assert!(!capabilities.nvme_sanitize);
+        assert!(capabilities.ata_sanitize_crypto);
+        assert!(capabilities.ata_sanitize_block_erase);
+        assert!(capabilities.ata_sanitize_overwrite);
+        assert!(capabilities.ata_sanitize());
+        assert!(!capabilities.nvme_sanitize());
     }
 
     #[test]
@@ -512,7 +532,10 @@ mod test {
             unsafe { std::slice::from_raw_parts(std::ptr::from_ref(&identify).cast::<u8>(), 4096) };
         let capabilities = parse_nvme_identify(data);
 
-        assert!(capabilities.nvme_sanitize);
+        assert!(capabilities.nvme_sanitize_crypto);
+        assert!(!capabilities.nvme_sanitize_block_erase);
+        assert!(capabilities.nvme_sanitize_overwrite);
+        assert!(capabilities.nvme_sanitize());
         assert!(capabilities.nvme_format);
         assert!(!capabilities.ata_secure_erase);
     }

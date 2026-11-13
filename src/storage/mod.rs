@@ -50,6 +50,10 @@ pub trait StorageAccess {
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize>;
     fn write(&mut self, data: &[u8]) -> Result<()>;
     fn flush(&mut self) -> Result<()>;
+
+    fn hardware_erase(&mut self, _method: HardwareEraseMethod) -> Result<()> {
+        Err(anyhow!("Hardware erase is not supported for this device."))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,6 +87,10 @@ pub trait AsyncStorageAccess {
     fn drain(&mut self) -> Result<()>;
 
     fn flush(&mut self) -> Result<()>;
+
+    fn hardware_erase(&mut self, _method: HardwareEraseMethod) -> Result<()> {
+        Err(anyhow!("Hardware erase is not supported for this device."))
+    }
 }
 
 /// Adapts a synchronous [`StorageAccess`] to the asynchronous interface with a depth
@@ -201,15 +209,72 @@ impl std::fmt::Display for BusKind {
     }
 }
 
+/// A hardware erase command selected for execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HardwareEraseMethod {
+    Off,
+    Auto,
+    AtaSecure,
+    AtaSanitize,
+    NvmeSanitize,
+    NvmeFormat,
+}
+
+impl std::str::FromStr for HardwareEraseMethod {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "off" => Ok(Self::Off),
+            "auto" => Ok(Self::Auto),
+            "ata-secure" => Ok(Self::AtaSecure),
+            "ata-sanitize" => Ok(Self::AtaSanitize),
+            "nvme-sanitize" => Ok(Self::NvmeSanitize),
+            "nvme-format" => Ok(Self::NvmeFormat),
+            _ => Err(
+                "expected one of: off, auto, ata-secure, ata-sanitize, nvme-sanitize, nvme-format"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for HardwareEraseMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::AtaSecure => "ATA Secure Erase",
+            Self::AtaSanitize => "ATA SANITIZE",
+            Self::NvmeSanitize => "NVMe Sanitize",
+            Self::NvmeFormat => "NVMe Format NVM",
+        })
+    }
+}
+
 /// Hardware erase methods reported by the device itself.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // an independent capability flag per method
 pub struct HardwareEraseCapabilities {
     pub ata_secure_erase: bool,
     pub ata_enhanced_secure_erase: bool,
-    pub ata_sanitize: bool,
-    pub nvme_sanitize: bool,
+    pub ata_sanitize_crypto: bool,
+    pub ata_sanitize_block_erase: bool,
+    pub ata_sanitize_overwrite: bool,
+    pub nvme_sanitize_crypto: bool,
+    pub nvme_sanitize_block_erase: bool,
+    pub nvme_sanitize_overwrite: bool,
     pub nvme_format: bool,
+}
+
+impl HardwareEraseCapabilities {
+    pub fn ata_sanitize(self) -> bool {
+        self.ata_sanitize_crypto || self.ata_sanitize_block_erase || self.ata_sanitize_overwrite
+    }
+
+    pub fn nvme_sanitize(self) -> bool {
+        self.nvme_sanitize_crypto || self.nvme_sanitize_block_erase || self.nvme_sanitize_overwrite
+    }
 }
 
 impl HardwareEraseCapabilities {
@@ -220,13 +285,13 @@ impl HardwareEraseCapabilities {
 
         // Preferred methods first: sanitize covers the whole device and has better
         // reporting than the older format/secure-erase paths.
-        if self.nvme_sanitize {
+        if self.nvme_sanitize() {
             methods.push("NS*");
         }
         if self.nvme_format {
             methods.push("NF*");
         }
-        if self.ata_sanitize {
+        if self.ata_sanitize() {
             methods.push("SA*");
         }
         if self.ata_secure_erase {
@@ -296,8 +361,12 @@ mod test {
         let all = HardwareEraseCapabilities {
             ata_secure_erase: true,
             ata_enhanced_secure_erase: true,
-            ata_sanitize: true,
-            nvme_sanitize: true,
+            ata_sanitize_crypto: true,
+            ata_sanitize_block_erase: true,
+            ata_sanitize_overwrite: true,
+            nvme_sanitize_crypto: true,
+            nvme_sanitize_block_erase: true,
+            nvme_sanitize_overwrite: true,
             nvme_format: true,
         };
 

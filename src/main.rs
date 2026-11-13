@@ -150,13 +150,22 @@ fn main() -> Result<()> {
             let hardware_erase = *cmd
                 .get_one::<args::HardwareEraseMethod>("hardware-erase")
                 .ok_or_else(|| anyhow!("Invalid hardware erase value"))?;
-            let hardware_erase = resolve_hardware_erase(device_details, hardware_erase)?;
 
-            if hardware_erase != args::HardwareEraseMethod::Off {
+            if hardware_erase != args::HardwareEraseMethod::Off && offset != 0 {
                 return Err(anyhow!(
-                    "Hardware erase ({hardware_erase}) is not implemented yet; no wipe was performed."
+                    "Hardware erase operates on the whole drive and cannot be combined with --offset."
                 ));
             }
+
+            let hardware_erase = resolve_hardware_erase(device_details, hardware_erase)?;
+
+            if plan.steps.is_empty() && hardware_erase == args::HardwareEraseMethod::Off {
+                return Err(anyhow!(
+                    "No software wipe passes were selected. Use --scheme=none together with --hardware-erase, or choose a wiping scheme."
+                ));
+            }
+
+            let plan = plan.with_hardware_erase(hardware_erase);
 
             let _sleep_inhibitor = SleepInhibitor::acquire(&format!("Wiping device {device_id}"))
                 .inspect_err(|err| {
@@ -204,27 +213,28 @@ fn resolve_hardware_erase(
     })?;
 
     if requested == args::HardwareEraseMethod::Auto {
-        let selected = if capabilities.nvme_sanitize {
+        let selected = if capabilities.nvme_sanitize() {
             args::HardwareEraseMethod::NvmeSanitize
-        } else if capabilities.nvme_format {
-            args::HardwareEraseMethod::NvmeFormat
-        } else if capabilities.ata_sanitize {
-            args::HardwareEraseMethod::AtaSanitize
         } else if capabilities.ata_secure_erase {
             args::HardwareEraseMethod::AtaSecure
+        } else if capabilities.nvme_format {
+            args::HardwareEraseMethod::NvmeFormat
+        } else if capabilities.ata_sanitize() {
+            args::HardwareEraseMethod::AtaSanitize
         } else {
             return Err(anyhow!(
                 "No supported hardware erase method was reported for this device."
             ));
         };
 
+        ensure_hardware_erase_implemented(selected)?;
         return Ok(selected);
     }
 
     let supported = match requested {
         args::HardwareEraseMethod::AtaSecure => capabilities.ata_secure_erase,
-        args::HardwareEraseMethod::AtaSanitize => capabilities.ata_sanitize,
-        args::HardwareEraseMethod::NvmeSanitize => capabilities.nvme_sanitize,
+        args::HardwareEraseMethod::AtaSanitize => capabilities.ata_sanitize(),
+        args::HardwareEraseMethod::NvmeSanitize => capabilities.nvme_sanitize(),
         args::HardwareEraseMethod::NvmeFormat => capabilities.nvme_format,
         args::HardwareEraseMethod::Off | args::HardwareEraseMethod::Auto => unreachable!(),
     };
@@ -235,7 +245,19 @@ fn resolve_hardware_erase(
         ));
     }
 
+    ensure_hardware_erase_implemented(requested)?;
     Ok(requested)
+}
+
+fn ensure_hardware_erase_implemented(method: args::HardwareEraseMethod) -> Result<()> {
+    if matches!(
+        method,
+        args::HardwareEraseMethod::AtaSanitize | args::HardwareEraseMethod::NvmeFormat
+    ) {
+        return Err(anyhow!("{method} is detected but not implemented yet."));
+    }
+
+    Ok(())
 }
 
 fn hardware_erase_text(details: &StorageDetails) -> String {
@@ -262,6 +284,7 @@ fn print_erase_legend() {
     println!("    Prefer NS over NF, and SA over SE, when both are listed.");
     println!("    Crypto erase is fastest, block erase physically erases, and overwrite writes");
     println!("    a pattern; the actual behavior depends on the drive firmware.");
+    println!("    Execution is currently wired for NS* and SE*; SA* and NF* are detected only.");
     println!(
         "    Probing is currently implemented on Windows and may require administrator rights;"
     );

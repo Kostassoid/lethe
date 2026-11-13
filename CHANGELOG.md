@@ -8,8 +8,11 @@
 * Experimental queued I/O via `--queue-depth`, using `io_uring` on Linux and overlapped I/O on Windows to keep
   multiple positional requests in flight while preserving the existing wipe and verification semantics. The depth
   defaults to `auto`, based on the detected drive type, and can be overridden with a fixed value.
-* Hardware erase capability detection in `list` (ATA Secure Erase/SANITIZE, NVMe Sanitize/Format NVM), with a legend
-  and whole-disk-only validation. The destructive commands are not wired into `wipe` yet.
+* Hardware erase capability detection in `list` (ATA Secure Erase/SANITIZE, NVMe Sanitize/Format NVM) and an
+  experimental `--hardware-erase` final stage on Windows, executing NVMe Sanitize and ATA Secure Erase. ATA SANITIZE
+  and NVMe Format NVM are detected but not executed yet.
+* A `none` scheme for hardware-erase-only runs, and validation rejecting `--hardware-erase` together with a
+  non-zero `--offset`.
 
 ## [v1.0.1] - 2026-11-11
 

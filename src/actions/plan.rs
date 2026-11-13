@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use crate::actions::verification::{Coverage, Verification};
 use crate::actions::wipe::{AsyncWipeSession, WipeEventHandler, WipeSession};
 use crate::sanitization::scheme::Scheme;
-use crate::storage::{AsyncStorageAccess, StorageAccess};
+use crate::storage::{AsyncStorageAccess, HardwareEraseMethod, StorageAccess};
 
 pub type StreamId = usize;
 
@@ -14,6 +14,7 @@ pub type StreamId = usize;
 pub enum Step {
     Write(StreamId),
     Verify(StreamId),
+    HardwareErase(HardwareEraseMethod),
 }
 
 #[derive(Clone, Debug)]
@@ -34,9 +35,6 @@ impl WipePlan {
         range: Range<u64>,
         block_size: usize,
     ) -> Result<WipePlan> {
-        if scheme.stages.is_empty() {
-            Err(anyhow!("The scheme must contain at least one stage"))?;
-        }
         if block_size == 0 || !block_size.is_power_of_two() {
             Err(anyhow!("Block size must be a power of two"))?;
         }
@@ -100,6 +98,15 @@ impl WipePlan {
         AsyncWipeSession::new(self, storage, event_handler, retries, depth).run()
     }
 
+    /// Appends a final hardware erase stage to the plan.
+    pub fn with_hardware_erase(mut self, method: HardwareEraseMethod) -> Self {
+        if method != HardwareEraseMethod::Off && method != HardwareEraseMethod::Auto {
+            self.steps.push(Step::HardwareErase(method));
+        }
+
+        self
+    }
+
     pub fn total_bytes(&self) -> u64 {
         self.range.end - self.range.start
     }
@@ -141,18 +148,17 @@ mod test {
         let (start, end) = (10u64, 5u64); // start after end
         assert!(WipePlan::new(scheme(), Verification::No, start..end, 512).is_err());
 
-        assert!(
-            WipePlan::new(
-                Scheme {
-                    description: "empty".to_string(),
-                    stages: vec![]
-                },
-                Verification::No,
-                0..10,
-                512
-            )
-            .is_err()
-        );
+        let empty = WipePlan::new(
+            Scheme {
+                description: "empty".to_string(),
+                stages: vec![],
+            },
+            Verification::No,
+            0..10,
+            512,
+        )
+        .unwrap();
+        assert_eq!(empty.steps.len(), 0);
     }
 
     #[test]
@@ -177,6 +183,48 @@ mod test {
         let plan = WipePlan::new(scheme, Verification::No, 70_000..100_000, 32_768).unwrap();
 
         assert_eq!(plan.range, 65_536..100_000);
+    }
+
+    #[test]
+    fn test_hardware_erase_step_is_appended() {
+        let scheme = Scheme {
+            description: "test".to_string(),
+            stages: vec![Stage::zero()],
+        };
+        let plan = WipePlan::new(scheme, Verification::No, 0..4096, 512).unwrap();
+
+        let plan = plan
+            .clone()
+            .with_hardware_erase(HardwareEraseMethod::NvmeSanitize);
+        assert_eq!(
+            plan.steps.last(),
+            Some(&Step::HardwareErase(HardwareEraseMethod::NvmeSanitize))
+        );
+
+        let plan = plan.with_hardware_erase(HardwareEraseMethod::Off);
+        assert_eq!(
+            plan.steps
+                .iter()
+                .filter(|step| matches!(step, Step::HardwareErase(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_hardware_erase_only_plan_has_one_step() {
+        let scheme = Scheme {
+            description: "none".to_string(),
+            stages: vec![],
+        };
+        let plan = WipePlan::new(scheme, Verification::No, 0..4096, 512).unwrap();
+        assert_eq!(plan.steps.len(), 0);
+
+        let plan = plan.with_hardware_erase(HardwareEraseMethod::AtaSecure);
+        assert_eq!(
+            plan.steps,
+            vec![Step::HardwareErase(HardwareEraseMethod::AtaSecure)]
+        );
     }
 
     #[test]

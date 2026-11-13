@@ -7,7 +7,9 @@ use crate::actions::bad_blocks::BadBlocks;
 use crate::actions::plan::{Step, StreamId, WipePlan};
 use crate::sanitization::mem::AlignedBuffer;
 use crate::sanitization::stream::Stream;
-use crate::storage::{AsyncStorageAccess, IoKind, StorageAccess, StorageError};
+use crate::storage::{
+    AsyncStorageAccess, HardwareEraseMethod, IoKind, StorageAccess, StorageError,
+};
 
 type StepIndex = usize;
 type BytePosition = u64;
@@ -132,6 +134,7 @@ impl WipeSession {
             let result = match step {
                 Step::Write(stream_id) => self.write_step(stream_id),
                 Step::Verify(stream_id) => self.verify_step(stream_id),
+                Step::HardwareErase(method) => self.hardware_erase_step(method),
             };
 
             match result {
@@ -141,9 +144,9 @@ impl WipeSession {
                     self.state.position = resume_from.take().unwrap_or(self.plan.range.start);
                 }
                 Err(err) => {
-                    self.publish(WipeEvent::StepFailed(self.state.step, err.to_string()));
+                    self.publish(WipeEvent::StepFailed(self.state.step, format!("{err:#}")));
 
-                    if self.state.retries_left == 0 {
+                    if matches!(step, Step::HardwareErase(_)) || self.state.retries_left == 0 {
                         break Err(err.context(failure_context(step)));
                     }
 
@@ -164,7 +167,7 @@ impl WipeSession {
 
         match &result {
             Ok(()) => self.publish(WipeEvent::Completed),
-            Err(err) => self.publish(WipeEvent::Failed(err.to_string())),
+            Err(err) => self.publish(WipeEvent::Failed(format!("{err:#}"))),
         }
 
         result
@@ -249,6 +252,10 @@ impl WipeSession {
         }
 
         Ok(())
+    }
+
+    fn hardware_erase_step(&mut self, method: HardwareEraseMethod) -> Result<()> {
+        self.storage.hardware_erase(method)
     }
 
     fn publish(&mut self, event: WipeEvent) {
@@ -353,6 +360,7 @@ impl AsyncWipeSession {
             let result = match step {
                 Step::Write(stream_id) => self.write_step(stream_id),
                 Step::Verify(stream_id) => self.verify_step(stream_id),
+                Step::HardwareErase(method) => self.hardware_erase_step(method),
             };
 
             match result {
@@ -362,9 +370,9 @@ impl AsyncWipeSession {
                     self.state.position = resume_from.take().unwrap_or(self.plan.range.start);
                 }
                 Err(err) => {
-                    self.publish(WipeEvent::StepFailed(self.state.step, err.to_string()));
+                    self.publish(WipeEvent::StepFailed(self.state.step, format!("{err:#}")));
 
-                    if self.state.retries_left == 0 {
+                    if matches!(step, Step::HardwareErase(_)) || self.state.retries_left == 0 {
                         break Err(err.context(failure_context(step)));
                     }
 
@@ -382,7 +390,7 @@ impl AsyncWipeSession {
 
         match &result {
             Ok(()) => self.publish(WipeEvent::Completed),
-            Err(err) => self.publish(WipeEvent::Failed(err.to_string())),
+            Err(err) => self.publish(WipeEvent::Failed(format!("{err:#}"))),
         }
 
         result
@@ -454,6 +462,10 @@ impl AsyncWipeSession {
         }
 
         Ok(())
+    }
+
+    fn hardware_erase_step(&mut self, method: HardwareEraseMethod) -> Result<()> {
+        self.storage.hardware_erase(method)
     }
 
     fn publish(&mut self, event: WipeEvent) {
@@ -805,6 +817,7 @@ fn failure_context(step: Step) -> &'static str {
     match step {
         Step::Write(_) => "Failed to fill stream",
         Step::Verify(_) => "Failed to verify stream",
+        Step::HardwareErase(_) => "Failed to hardware erase the device",
     }
 }
 

@@ -23,7 +23,7 @@ pub fn explain_schemes(schemes: &SchemeRepo) -> String {
 
 fn describe_scheme(scheme: &Scheme) -> String {
     let stages_count = scheme.stages.len();
-    let passes = if stages_count > 1 { "passes" } else { "pass" };
+    let passes = if stages_count == 1 { "pass" } else { "passes" };
 
     let mut description = format!("{}, {stages_count} {passes}\n", scheme.description);
     for stage in &scheme.stages {
@@ -137,26 +137,38 @@ impl ConsoleEventHandler {
     fn start_step(&mut self, plan: &WipePlan, step: usize) {
         let step_description = format!("Step {}/{}", step + 1, plan.steps.len());
 
-        let (current_stage, at_verification) = match plan.steps[step] {
-            Step::Verify(i) => (&plan.scheme.stages[i], true),
-            Step::Write(i) => (&plan.scheme.stages[i], false),
+        let pb = match plan.steps[step] {
+            Step::HardwareErase(method) => {
+                let pb = ProgressBar::new_spinner();
+                pb.set_style(
+                    ProgressStyle::default_spinner()
+                        .template("{spinner} {elapsed_precise} {msg}")
+                        .unwrap(), // panic is OK here, although some test coverage would be nice
+                );
+                pb.enable_steady_tick(Duration::from_millis(100));
+                pb.println(format!("\n{step_description}: Hardware erase ({method})"));
+                pb.set_message(method.to_string());
+                pb
+            }
+            Step::Verify(i) => {
+                let stage_description = describe_stage(&plan.scheme.stages[i]);
+                let pb = create_progress_bar(plan.total_bytes());
+                pb.println(format!(
+                    "\n{step_description}: Verifying {stage_description}"
+                ));
+                pb.set_message("Checking");
+                pb
+            }
+            Step::Write(i) => {
+                let stage_description = describe_stage(&plan.scheme.stages[i]);
+                let pb = create_progress_bar(plan.total_bytes());
+                pb.println(format!(
+                    "\n{step_description}: Performing {stage_description}"
+                ));
+                pb.set_message("Writing");
+                pb
+            }
         };
-
-        let stage_description = describe_stage(current_stage);
-
-        let pb = create_progress_bar(plan.total_bytes());
-
-        if at_verification {
-            pb.println(format!(
-                "\n{step_description}: Verifying {stage_description}"
-            ));
-            pb.set_message("Checking");
-        } else {
-            pb.println(format!(
-                "\n{step_description}: Performing {stage_description}"
-            ));
-            pb.set_message("Writing");
-        }
 
         self.pb = Some(pb);
         self.stage_started = Some(Instant::now());
@@ -184,6 +196,7 @@ pub fn announce_and_confirm(
         .map(|s| match s {
             Step::Write(_) => "fill",
             Step::Verify(_) => "verify",
+            Step::HardwareErase(_) => "erase",
         })
         .collect::<Vec<_>>()
         .join(", ");

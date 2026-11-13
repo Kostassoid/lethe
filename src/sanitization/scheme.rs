@@ -73,6 +73,14 @@ impl Default for SchemeRepo {
         let mut schemes = BTreeMap::new();
 
         schemes.insert(
+            "none",
+            Scheme {
+                description: "No software passes (hardware erase only)".to_string(),
+                stages: vec![],
+            },
+        );
+
+        schemes.insert(
             "zero",
             Scheme {
                 description: "Single zeroes fill".to_string(),
@@ -157,5 +165,8 @@ mod test {
 
         let scheme = repo.find("random");
         assert!(scheme.is_some());
+
+        let none = repo.find("none").unwrap();
+        assert!(none.stages.is_empty());
     }
 }

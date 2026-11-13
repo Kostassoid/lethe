@@ -4,50 +4,9 @@ use regex::Regex;
 
 use crate::sanitization::SchemeRepo;
 
+pub use crate::storage::HardwareEraseMethod;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Hardware erase method requested on the command line.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HardwareEraseMethod {
-    Off,
-    Auto,
-    AtaSecure,
-    AtaSanitize,
-    NvmeSanitize,
-    NvmeFormat,
-}
-
-impl std::str::FromStr for HardwareEraseMethod {
-    type Err = String;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "off" => Ok(Self::Off),
-            "auto" => Ok(Self::Auto),
-            "ata-secure" => Ok(Self::AtaSecure),
-            "ata-sanitize" => Ok(Self::AtaSanitize),
-            "nvme-sanitize" => Ok(Self::NvmeSanitize),
-            "nvme-format" => Ok(Self::NvmeFormat),
-            _ => Err(
-                "expected one of: off, auto, ata-secure, ata-sanitize, nvme-sanitize, nvme-format"
-                    .to_string(),
-            ),
-        }
-    }
-}
-
-impl std::fmt::Display for HardwareEraseMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Off => "off",
-            Self::Auto => "auto",
-            Self::AtaSecure => "ATA Secure Erase",
-            Self::AtaSanitize => "ATA SANITIZE",
-            Self::NvmeSanitize => "NVMe Sanitize",
-            Self::NvmeFormat => "NVMe Format NVM",
-        })
-    }
-}
 
 /// Queue depth requested on the command line, before drive-based auto detection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,8 +127,9 @@ pub fn build_command(schemes: &SchemeRepo) -> Command {
                         .num_args(1)
                         .value_parser(value_parser!(HardwareEraseMethod))
                         .default_value("off")
-                        .hide(true)
-                        .help("Hardware erase method (not implemented yet)"),
+                        .help(
+                            "Hardware erase method: off, auto, ata-secure, ata-sanitize, nvme-sanitize, nvme-format",
+                        ),
                 )
                 .arg(
                     Arg::new("yes")
