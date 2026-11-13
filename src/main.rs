@@ -215,10 +215,6 @@ fn resolve_hardware_erase(
     if requested == args::HardwareEraseMethod::Auto {
         let selected = if capabilities.nvme_sanitize() {
             args::HardwareEraseMethod::NvmeSanitize
-        } else if capabilities.ata_secure_erase {
-            args::HardwareEraseMethod::AtaSecure
-        } else if capabilities.nvme_format {
-            args::HardwareEraseMethod::NvmeFormat
         } else if capabilities.ata_sanitize() {
             args::HardwareEraseMethod::AtaSanitize
         } else {
@@ -227,15 +223,12 @@ fn resolve_hardware_erase(
             ));
         };
 
-        ensure_hardware_erase_implemented(selected)?;
         return Ok(selected);
     }
 
     let supported = match requested {
-        args::HardwareEraseMethod::AtaSecure => capabilities.ata_secure_erase,
         args::HardwareEraseMethod::AtaSanitize => capabilities.ata_sanitize(),
         args::HardwareEraseMethod::NvmeSanitize => capabilities.nvme_sanitize(),
-        args::HardwareEraseMethod::NvmeFormat => capabilities.nvme_format,
         args::HardwareEraseMethod::Off | args::HardwareEraseMethod::Auto => unreachable!(),
     };
 
@@ -245,19 +238,7 @@ fn resolve_hardware_erase(
         ));
     }
 
-    ensure_hardware_erase_implemented(requested)?;
     Ok(requested)
-}
-
-fn ensure_hardware_erase_implemented(method: args::HardwareEraseMethod) -> Result<()> {
-    if matches!(
-        method,
-        args::HardwareEraseMethod::AtaSanitize | args::HardwareEraseMethod::NvmeFormat
-    ) {
-        return Err(anyhow!("{method} is detected but not implemented yet."));
-    }
-
-    Ok(())
 }
 
 fn hardware_erase_text(details: &StorageDetails) -> String {
@@ -284,7 +265,7 @@ fn print_erase_legend() {
     println!("    Prefer NS over NF, and SA over SE, when both are listed.");
     println!("    Crypto erase is fastest, block erase physically erases, and overwrite writes");
     println!("    a pattern; the actual behavior depends on the drive firmware.");
-    println!("    Execution is currently wired for NS* and SE*; SA* and NF* are detected only.");
+    println!("    Execution is available for NS* and SA*; SE* and NF* are detected only.");
     println!(
         "    Probing is currently implemented on Windows and may require administrator rights;"
     );

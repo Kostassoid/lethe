@@ -220,10 +220,10 @@ mod test {
         let plan = WipePlan::new(scheme, Verification::No, 0..4096, 512).unwrap();
         assert_eq!(plan.steps.len(), 0);
 
-        let plan = plan.with_hardware_erase(HardwareEraseMethod::AtaSecure);
+        let plan = plan.with_hardware_erase(HardwareEraseMethod::AtaSanitize);
         assert_eq!(
             plan.steps,
-            vec![Step::HardwareErase(HardwareEraseMethod::AtaSecure)]
+            vec![Step::HardwareErase(HardwareEraseMethod::AtaSanitize)]
         );
     }
 

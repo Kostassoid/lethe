@@ -9,8 +9,9 @@
   multiple positional requests in flight while preserving the existing wipe and verification semantics. The depth
   defaults to `auto`, based on the detected drive type, and can be overridden with a fixed value.
 * Hardware erase capability detection in `list` (ATA Secure Erase/SANITIZE, NVMe Sanitize/Format NVM) and an
-  experimental `--hardware-erase` final stage on Windows, executing NVMe Sanitize and ATA Secure Erase. ATA SANITIZE
-  and NVMe Format NVM are detected but not executed yet.
+  experimental `--hardware-erase` final stage on Windows, executing NVMe Sanitize and ATA SANITIZE. ATA Secure Erase
+  and NVMe Format NVM are detected but not offered; ATA Secure Erase is avoided because of its temporary-password
+  failure mode.
 * A `none` scheme for hardware-erase-only runs, and validation rejecting `--hardware-erase` together with a
   non-zero `--offset`.
 

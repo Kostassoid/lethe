@@ -194,9 +194,9 @@ pub fn announce_and_confirm(
         .steps
         .iter()
         .map(|s| match s {
-            Step::Write(_) => "fill",
-            Step::Verify(_) => "verify",
-            Step::HardwareErase(_) => "erase",
+            Step::Write(_) => "fill".to_string(),
+            Step::Verify(_) => "verify".to_string(),
+            Step::HardwareErase(method) => format!("erase ({method})"),
         })
         .collect::<Vec<_>>()
         .join(", ");

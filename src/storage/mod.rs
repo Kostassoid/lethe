@@ -214,10 +214,8 @@ impl std::fmt::Display for BusKind {
 pub enum HardwareEraseMethod {
     Off,
     Auto,
-    AtaSecure,
     AtaSanitize,
     NvmeSanitize,
-    NvmeFormat,
 }
 
 impl std::str::FromStr for HardwareEraseMethod {
@@ -227,14 +225,9 @@ impl std::str::FromStr for HardwareEraseMethod {
         match value.to_ascii_lowercase().as_str() {
             "off" => Ok(Self::Off),
             "auto" => Ok(Self::Auto),
-            "ata-secure" => Ok(Self::AtaSecure),
             "ata-sanitize" => Ok(Self::AtaSanitize),
             "nvme-sanitize" => Ok(Self::NvmeSanitize),
-            "nvme-format" => Ok(Self::NvmeFormat),
-            _ => Err(
-                "expected one of: off, auto, ata-secure, ata-sanitize, nvme-sanitize, nvme-format"
-                    .to_string(),
-            ),
+            _ => Err("expected one of: off, auto, ata-sanitize, nvme-sanitize".to_string()),
         }
     }
 }
@@ -244,10 +237,8 @@ impl std::fmt::Display for HardwareEraseMethod {
         f.write_str(match self {
             Self::Off => "off",
             Self::Auto => "auto",
-            Self::AtaSecure => "ATA Secure Erase",
             Self::AtaSanitize => "ATA SANITIZE",
             Self::NvmeSanitize => "NVMe Sanitize",
-            Self::NvmeFormat => "NVMe Format NVM",
         })
     }
 }

@@ -24,7 +24,7 @@ Similar tools exist, but most are proprietary, slow or not cross-platform. Lethe
 - **Queued I/O (experimental)** — automatically picks an I/O queue depth for the detected drive type, using
   `io_uring` on Linux and overlapped I/O on Windows.
 - **Hardware erase (experimental)** — detects ATA Secure Erase/SANITIZE and NVMe Sanitize/Format NVM, and executes
-  NVMe Sanitize and ATA Secure Erase on Windows.
+  NVMe Sanitize and ATA SANITIZE on Windows.
 - **Bad block handling** — tracks, skips and reports bad blocks and other localized errors automatically.
 - **Sleep prevention** — blocks the OS from sleeping while a wipe is in progress.
 
@@ -112,7 +112,7 @@ Prefer `NS` over `NF`, and `SA` over `SE`, when both are listed. There is no uni
 fastest, block erase physically erases, and overwrite writes a pattern; the actual behavior depends on the drive
 firmware.
 
-This is capability detection only; the hardware erase step is not yet wired into `wipe`.
+Only `NS*` and `SA*` are executable; `SE*` and `NF*` are reported for information.
 
 ### Wipe a device
 
@@ -147,7 +147,7 @@ Are you sure? (type 'yes' to confirm):
 | `--offset`, `-o`    | `0`        | Start position in bytes                    |
 | `--retries`, `-r`   | `8`        | Maximum retries per step                   |
 | `--queue-depth`, `-q` | `auto`   | In-flight I/O requests, or a fixed `1`-`256` |
-| `--hardware-erase`  | `off`      | Hardware erase: `auto`, `ata-secure`, `ata-sanitize`, `nvme-sanitize`, `nvme-format` |
+| `--hardware-erase`  | `off`      | Hardware erase: `auto`, `ata-sanitize`, `nvme-sanitize` |
 | `--yes`, `-y`       | off        | Skip the confirmation prompt               |
 
 Sizes accept `k`, `m`, `g` and `t` suffixes (e.g. `128k`, `4m`, `1g`). Use `lethe help wipe` for the full list.
@@ -255,20 +255,20 @@ sudo lethe wipe /dev/nvme0n1 --queue-depth=1
 `--hardware-erase` runs a final device-level erase stage after the software wipe and
 verification:
 
-- `auto` picks NVMe Sanitize for NVMe SSDs or ATA Secure Erase for ATA/SATA SSDs when
+- `auto` picks NVMe Sanitize for NVMe SSDs or ATA SANITIZE for ATA/SATA SSDs when
   supported.
-- `nvme-sanitize`, `ata-secure`, `ata-sanitize`, and `nvme-format` select a method explicitly.
+- `nvme-sanitize` or `ata-sanitize` selects a method explicitly.
 - `off` keeps the normal software-only wipe (default).
 
 Only whole disks are supported; individual partitions and non-zero `--offset` values are
 rejected, since hardware erase always covers the entire drive. For a hardware-erase-only
 run, use `--scheme=none`. The current Windows implementation executes NVMe Sanitize and
-ATA Secure Erase. `ata-sanitize` and `nvme-format` are detected but not executed yet.
-Linux and macOS execution is not implemented yet.
+ATA SANITIZE. ATA Secure Erase and NVMe Format NVM are still reported by `list`, but they
+are not offered as erase options. Linux and macOS execution is not implemented yet.
 
-ATA Secure Erase requires the drive not to be in security frozen state. If it is, power
-cycle or unplug/replug the drive and retry. NVMe Sanitize runs in the background; Lethe
-polls the device until it completes, which can take a while.
+Both ATA SANITIZE and NVMe Sanitize run in the background; Lethe polls the device until
+they complete, which can take a while. If neither method is supported, hardware erase is
+not available for that device.
 
 Hardware erase is a destructive final stage. If it fails, the software wipe and
 verification have already completed; the error is reported separately.
@@ -279,6 +279,9 @@ sudo lethe wipe '\\.\PhysicalDrive3' --hardware-erase=auto
 
 # Hardware erase only, without software passes
 sudo lethe wipe '\\.\PhysicalDrive3' --scheme=none --hardware-erase=auto
+
+# Force ATA SANITIZE
+sudo lethe wipe '\\.\PhysicalDrive3' --hardware-erase=ata-sanitize
 
 # Force NVMe Sanitize
 sudo lethe wipe /dev/nvme0n1 --hardware-erase=nvme-sanitize

@@ -127,9 +127,7 @@ pub fn build_command(schemes: &SchemeRepo) -> Command {
                         .num_args(1)
                         .value_parser(value_parser!(HardwareEraseMethod))
                         .default_value("off")
-                        .help(
-                            "Hardware erase method: off, auto, ata-secure, ata-sanitize, nvme-sanitize, nvme-format",
-                        ),
+                        .help("Hardware erase method: off, auto, ata-sanitize, nvme-sanitize"),
                 )
                 .arg(
                     Arg::new("yes")

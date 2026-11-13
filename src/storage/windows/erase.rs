@@ -2,7 +2,6 @@ use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use rand::Rng;
 use windows::Win32::Storage::IscsiDisc::{
     IOCTL_SCSI_PASS_THROUGH_DIRECT, SCSI_PASS_THROUGH_DIRECT,
 };
@@ -11,20 +10,28 @@ use windows::Win32::System::Ioctl::{
     STORAGE_PROTOCOL_COMMAND, STORAGE_PROTOCOL_STATUS_SUCCESS, STORAGE_PROTOCOL_STRUCTURE_VERSION,
 };
 
-use crate::sanitization::mem::AlignedBuffer;
-use crate::storage::HardwareEraseMethod;
+use crate::storage::{HardwareEraseCapabilities, HardwareEraseMethod};
 
 use super::access::{DeviceAccess, DeviceFile};
-use super::physical_drive::{detect_nvme_capabilities, query_protocol_data};
+use super::physical_drive::{
+    detect_ata_capabilities, detect_ata_capabilities_scsi, detect_nvme_capabilities,
+    query_protocol_data,
+};
 
-const ATA_IDENTIFY: u8 = 0xec;
-const ATA_SECURITY_SET_PASSWORD: u8 = 0xf1;
-const ATA_SECURITY_UNLOCK: u8 = 0xf2;
-const ATA_SECURITY_ERASE_PREPARE: u8 = 0xf3;
-const ATA_SECURITY_ERASE_UNIT: u8 = 0xf4;
-const ATA_SECURITY_DISABLE_PASSWORD: u8 = 0xf6;
+const ATA_SANITIZE: u8 = 0xb4;
+const ATA_SANITIZE_STATUS: u16 = 0x0000;
+const ATA_SANITIZE_CRYPTO_SCRAMBLE: u16 = 0x0011;
+const ATA_SANITIZE_BLOCK_ERASE: u16 = 0x0012;
+const ATA_SANITIZE_OVERWRITE: u16 = 0x0014;
 
-const ATA_SECTOR_BYTES: usize = 512;
+const ATA_SANITIZE_CRYPTO_KEY: u64 = 0x4372_7970; // "Cryp"
+const ATA_SANITIZE_BLOCK_KEY: u64 = 0x426b_4572; // "BkEr"
+const ATA_SANITIZE_OVERWRITE_KEY: u64 = 0x0000_4f57; // "OW"
+
+const ATA_SANITIZE_SUCCEEDED: u8 = 1 << 7;
+const ATA_SANITIZE_IN_PROGRESS: u8 = 1 << 6;
+const ATA_SANITIZE_FROZEN: u8 = 1 << 5;
+
 const ATA_SENSE_BYTES: usize = 64;
 const ATA_TIMEOUT: u32 = 15;
 
@@ -39,6 +46,9 @@ const NVME_SANITIZE_STATUS_COMPLETE: u16 = 1;
 const NVME_SANITIZE_STATUS_FAILED: u16 = 3;
 const NVME_SANITIZE_STATUS_NO_DEALLOC_COMPLETE: u16 = 4;
 
+const SANITIZE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const SANITIZE_TIMEOUT: Duration = Duration::from_hours(24);
+
 pub(super) fn hardware_erase(device: &DeviceFile, method: HardwareEraseMethod) -> Result<()> {
     // Prefer a plain handle for pass-through commands; the wipe handle may be opened
     // with overlapped I/O, which does not mix well with synchronous control requests.
@@ -46,192 +56,123 @@ pub(super) fn hardware_erase(device: &DeviceFile, method: HardwareEraseMethod) -
     let target = query_device.as_ref().unwrap_or(device);
 
     match method {
-        HardwareEraseMethod::AtaSecure => ata_secure_erase(target),
+        HardwareEraseMethod::AtaSanitize => ata_sanitize(target),
         HardwareEraseMethod::NvmeSanitize => nvme_sanitize(target),
-        HardwareEraseMethod::AtaSanitize => Err(anyhow!("ATA SANITIZE is not implemented yet.")),
-        HardwareEraseMethod::NvmeFormat => Err(anyhow!("NVMe Format NVM is not implemented yet.")),
         HardwareEraseMethod::Off | HardwareEraseMethod::Auto => {
             Err(anyhow!("No hardware erase method was selected."))
         }
     }
 }
 
-fn ata_secure_erase(device: &DeviceFile) -> Result<()> {
-    let identify = ata_identify(device)?;
-    let security = AtaSecurity::from_identify(&identify);
+fn ata_sanitize(device: &DeviceFile) -> Result<()> {
+    let capabilities = detect_ata_capabilities(device)
+        .or_else(|_| detect_ata_capabilities_scsi(device))
+        .context("Unable to query ATA sanitize capabilities")?;
+    let (action, key, description) = ata_sanitize_action(capabilities)?;
 
-    if !security.supported {
-        return Err(anyhow!("This device does not report ATA Security support."));
+    ata_pass_through(device, ATA_SANITIZE, action, 0, key, None, ATA_TIMEOUT)
+        .with_context(|| format!("Unable to start {description}"))?;
+
+    poll_ata_sanitize(device, description)
+}
+
+fn ata_sanitize_action(
+    capabilities: HardwareEraseCapabilities,
+) -> Result<(u16, u64, &'static str)> {
+    if capabilities.ata_sanitize_crypto {
+        Ok((
+            ATA_SANITIZE_CRYPTO_SCRAMBLE,
+            ATA_SANITIZE_CRYPTO_KEY,
+            "ATA SANITIZE CRYPTO SCRAMBLE",
+        ))
+    } else if capabilities.ata_sanitize_block_erase {
+        Ok((
+            ATA_SANITIZE_BLOCK_ERASE,
+            ATA_SANITIZE_BLOCK_KEY,
+            "ATA SANITIZE BLOCK ERASE",
+        ))
+    } else if capabilities.ata_sanitize_overwrite {
+        Ok((
+            ATA_SANITIZE_OVERWRITE,
+            (ATA_SANITIZE_OVERWRITE_KEY << 32) | 0x5a5a_5a5a,
+            "ATA SANITIZE OVERWRITE",
+        ))
+    } else {
+        Err(anyhow!(
+            "This device does not report a supported ATA sanitize action."
+        ))
     }
-    if security.frozen {
-        return Err(anyhow!(
-            "The device is in ATA security frozen state. Power-cycle or unplug/replug the drive, then retry."
-        ));
-    }
-    if security.enabled {
-        return Err(anyhow!(
-            "The device already has an ATA security password. Refusing to overwrite it."
-        ));
-    }
+}
 
-    let enhanced = security.enhanced;
-    let timeout = security.erase_timeout_seconds(enhanced);
-    let mut password = [0u8; 32];
-    rand::rng().fill_bytes(&mut password);
+fn poll_ata_sanitize(device: &DeviceFile, description: &str) -> Result<()> {
+    let deadline = Instant::now() + SANITIZE_TIMEOUT;
+    let mut progress_seen = false;
+    let mut idle_polls = 0u32;
 
-    let mut data = security_data(&password, false, false);
-    ata_pass_through(
-        device,
-        ATA_SECURITY_SET_PASSWORD,
-        0,
-        1,
-        0,
-        Some((data.as_mut_slice(), false)),
-        ATA_TIMEOUT,
-    )
-    .context("Unable to set the temporary ATA security password")?;
-
-    let result = (|| -> Result<()> {
-        ata_pass_through(
+    loop {
+        let registers = ata_pass_through(
             device,
-            ATA_SECURITY_ERASE_PREPARE,
-            0,
+            ATA_SANITIZE,
+            ATA_SANITIZE_STATUS,
             0,
             0,
             None,
             ATA_TIMEOUT,
         )
-        .context("SECURITY ERASE PREPARE failed")?;
+        .context("Unable to read ATA sanitize status")?;
 
-        let mut data = security_data(&password, enhanced, true);
-        ata_pass_through(
-            device,
-            ATA_SECURITY_ERASE_UNIT,
-            0,
-            1,
-            0,
-            Some((data.as_mut_slice(), false)),
-            timeout,
-        )
-        .context("SECURITY ERASE UNIT failed")
-    })();
+        let state = registers.sector_count_hob;
+        let progress = (u16::from(registers.lba_mid) << 8) | u16::from(registers.lba_low);
 
-    if let Err(error) = result {
-        let cleanup = ata_security_cleanup(device, &password);
-        let context = match cleanup {
-            Ok(()) => format!(
-                "ATA Secure Erase failed. Temporary password: {}",
-                hex(&password)
-            ),
-            Err(cleanup_error) => format!(
-                "ATA Secure Erase failed. Temporary password: {}; cleanup also failed: {cleanup_error:#}",
-                hex(&password)
-            ),
-        };
-
-        return Err(error.context(context));
-    }
-
-    Ok(())
-}
-
-fn ata_security_cleanup(device: &DeviceFile, password: &[u8; 32]) -> Result<()> {
-    let mut data = security_data(password, false, false);
-    let unlock = ata_pass_through(
-        device,
-        ATA_SECURITY_UNLOCK,
-        0,
-        1,
-        0,
-        Some((data.as_mut_slice(), false)),
-        ATA_TIMEOUT,
-    );
-
-    let mut data = security_data(password, false, false);
-    let disable = ata_pass_through(
-        device,
-        ATA_SECURITY_DISABLE_PASSWORD,
-        0,
-        1,
-        0,
-        Some((data.as_mut_slice(), false)),
-        ATA_TIMEOUT,
-    );
-
-    match (unlock, disable) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), _) => Err(error.context("SECURITY UNLOCK failed during cleanup")),
-        (_, Err(error)) => Err(error.context("SECURITY DISABLE PASSWORD failed during cleanup")),
-    }
-}
-
-#[allow(clippy::struct_excessive_bools)] // independent ATA security status flags
-struct AtaSecurity {
-    supported: bool,
-    enabled: bool,
-    frozen: bool,
-    enhanced: bool,
-    erase_minutes: u16,
-    enhanced_erase_minutes: u16,
-}
-
-impl AtaSecurity {
-    fn from_identify(data: &[u8]) -> Self {
-        let word = |index: usize| u16::from_le_bytes([data[index * 2], data[index * 2 + 1]]);
-        let status = word(128);
-
-        AtaSecurity {
-            supported: word(82) & (1 << 1) != 0,
-            enabled: status & (1 << 1) != 0,
-            frozen: status & (1 << 3) != 0,
-            enhanced: status & (1 << 5) != 0,
-            erase_minutes: word(89),
-            enhanced_erase_minutes: word(90),
+        if state & ATA_SANITIZE_SUCCEEDED != 0 {
+            return Ok(());
         }
-    }
 
-    fn erase_timeout_seconds(&self, enhanced: bool) -> u32 {
-        let raw = if enhanced {
-            self.enhanced_erase_minutes
+        if state & ATA_SANITIZE_FROZEN != 0 {
+            return Err(anyhow!(
+                "The device is in sanitize frozen state and cannot continue {description}."
+            ));
+        }
+
+        if state & ATA_SANITIZE_IN_PROGRESS != 0 {
+            progress_seen = true;
+            idle_polls = 0;
+        } else if progress_seen {
+            return Err(anyhow!(
+                "{description} failed: ATA status {:#04x}, error {:#04x}, progress {progress:#06x}",
+                registers.status,
+                registers.error
+            ));
         } else {
-            self.erase_minutes
-        };
+            idle_polls += 1;
+            if idle_polls >= 15 {
+                return Err(anyhow!(
+                    "{description} did not start: ATA status {:#04x}, error {:#04x}",
+                    registers.status,
+                    registers.error
+                ));
+            }
+        }
 
-        let minutes = match raw {
-            0 | 0xfffe | 0xffff => 30,
-            value => u32::from(value).saturating_mul(2),
-        };
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "Timed out waiting for {description} to complete (ATA status {:#04x}, error {:#04x}, progress {progress:#06x}).",
+                registers.status,
+                registers.error
+            ));
+        }
 
-        minutes.saturating_mul(60).clamp(60, 24 * 3600)
+        std::thread::sleep(SANITIZE_POLL_INTERVAL);
     }
 }
 
-fn security_data(password: &[u8; 32], enhanced: bool, erasing: bool) -> AlignedBuffer {
-    let mut data = AlignedBuffer::new(ATA_SECTOR_BYTES, ATA_SECTOR_BYTES);
-    let bytes = data.as_mut_slice();
-    bytes.fill(0);
-
-    bytes[0] = if erasing && enhanced { 0x02 } else { 0 };
-    bytes[2..34].copy_from_slice(password);
-
-    data
-}
-
-fn ata_identify(device: &DeviceFile) -> Result<Vec<u8>> {
-    let mut data = AlignedBuffer::new(ATA_SECTOR_BYTES, ATA_SECTOR_BYTES);
-    data.as_mut_slice().fill(0);
-
-    ata_pass_through(
-        device,
-        ATA_IDENTIFY,
-        0,
-        1,
-        0,
-        Some((data.as_mut_slice(), true)),
-        ATA_TIMEOUT,
-    )?;
-
-    Ok(data.as_slice().to_vec())
+#[derive(Clone, Copy, Default, Debug)]
+struct AtaRegisters {
+    error: u8,
+    status: u8,
+    sector_count_hob: u8,
+    lba_low: u8,
+    lba_mid: u8,
 }
 
 #[allow(clippy::cast_possible_truncation)] // CDB fields are explicitly packed
@@ -243,7 +184,7 @@ fn ata_pass_through(
     lba: u64,
     data: Option<(&mut [u8], bool)>,
     timeout: u32,
-) -> Result<()> {
+) -> Result<AtaRegisters> {
     let (data_ptr, data_len, data_in) = match data {
         Some((buffer, data_in)) => (
             buffer.as_mut_ptr().cast::<c_void>(),
@@ -312,20 +253,25 @@ fn ata_pass_through(
     let sense = output
         .get(sense_offset..sense_end.min(output.len()))
         .unwrap_or_default();
-    let ata = parse_ata_status(sense);
+    let registers = parse_ata_registers(sense);
     let (sense_key, asc, ascq) = sense_info(sense);
 
-    let failed = match ata {
+    let failed = match registers {
         // Prefer the ATA status register: with CK_COND=1 some SAT layers report
         // CHECK CONDITION plus an ATA descriptor even when the command succeeded.
-        Some((_, status)) => status & 0x01 != 0 || status & 0x20 != 0,
+        Some(registers) => registers.status & 0x01 != 0 || registers.status & 0x20 != 0,
         None => result.ScsiStatus != 0,
     };
 
     if failed {
-        let ata_description = ata.map_or_else(
+        let ata_description = registers.map_or_else(
             || "ATA status unavailable".to_string(),
-            |(error, status)| format!("ATA status {status:#04x}, error {error:#04x}"),
+            |registers| {
+                format!(
+                    "ATA status {:#04x}, error {:#04x}",
+                    registers.status, registers.error
+                )
+            },
         );
 
         return Err(anyhow!(
@@ -335,22 +281,10 @@ fn ata_pass_through(
         ));
     }
 
-    Ok(())
+    Ok(registers.unwrap_or_default())
 }
 
-fn sense_info(sense: &[u8]) -> (u8, u8, u8) {
-    if sense.len() < 4 {
-        return (0, 0, 0);
-    }
-
-    match sense[0] & 0x7f {
-        0x72 | 0x73 => (sense[1] & 0x0f, sense[2], sense[3]),
-        0x70 | 0x71 if sense.len() >= 14 => (sense[2] & 0x0f, sense[12], sense[13]),
-        _ => (0, 0, 0),
-    }
-}
-
-fn parse_ata_status(sense: &[u8]) -> Option<(u8, u8)> {
+fn parse_ata_registers(sense: &[u8]) -> Option<AtaRegisters> {
     let response = *sense.first()? & 0x7f;
     if response != 0x72 && response != 0x73 {
         return None;
@@ -368,13 +302,31 @@ fn parse_ata_status(sense: &[u8]) -> Option<(u8, u8)> {
 
         if descriptor_type == 0x09 && descriptor_length >= 10 {
             let data = &sense[offset + 2..end];
-            return Some((data[0], data[9]));
+            return Some(AtaRegisters {
+                error: data[0],
+                sector_count_hob: data[2],
+                lba_low: data[3],
+                lba_mid: data[5],
+                status: data[9],
+            });
         }
 
         offset = end;
     }
 
     None
+}
+
+fn sense_info(sense: &[u8]) -> (u8, u8, u8) {
+    if sense.len() < 4 {
+        return (0, 0, 0);
+    }
+
+    match sense[0] & 0x7f {
+        0x72 | 0x73 => (sense[1] & 0x0f, sense[2], sense[3]),
+        0x70 | 0x71 if sense.len() >= 14 => (sense[2] & 0x0f, sense[12], sense[13]),
+        _ => (0, 0, 0),
+    }
 }
 
 fn nvme_sanitize(device: &DeviceFile) -> Result<()> {
@@ -455,7 +407,7 @@ fn nvme_sanitize_command(device: &DeviceFile, action: u32) -> Result<()> {
 }
 
 fn poll_nvme_sanitize(device: &DeviceFile) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_hours(24);
+    let deadline = Instant::now() + SANITIZE_TIMEOUT;
     let mut last_error = None;
     let mut zero_status_seen = 0u8;
 
@@ -482,7 +434,7 @@ fn poll_nvme_sanitize(device: &DeviceFile) -> Result<()> {
                     }
                     0 => {
                         zero_status_seen += 1;
-                        if zero_status_seen >= 3 {
+                        if zero_status_seen >= 15 {
                             return Err(anyhow!(
                                 "NVMe Sanitize did not start (sanitize status remains idle)."
                             ));
@@ -502,14 +454,15 @@ fn poll_nvme_sanitize(device: &DeviceFile) -> Result<()> {
                 .unwrap_or_else(|| anyhow!("Timed out waiting for NVMe Sanitize to complete.")));
         }
 
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::sleep(SANITIZE_POLL_INTERVAL);
     }
 }
 
 fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        use std::fmt::Write as _;
         let _ = write!(output, "{byte:02x}");
     }
     output
@@ -520,27 +473,62 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_security_data_layout() {
-        let password = [0x5a; 32];
-        let data = security_data(&password, true, true);
+    fn test_ata_sanitize_action_preferences() {
+        let capabilities = HardwareEraseCapabilities {
+            ata_sanitize_crypto: true,
+            ata_sanitize_block_erase: true,
+            ata_sanitize_overwrite: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            ata_sanitize_action(capabilities).unwrap(),
+            (
+                ATA_SANITIZE_CRYPTO_SCRAMBLE,
+                ATA_SANITIZE_CRYPTO_KEY,
+                "ATA SANITIZE CRYPTO SCRAMBLE"
+            )
+        );
 
-        assert_eq!(data.as_slice()[0], 0x02);
-        assert_eq!(&data.as_slice()[2..34], &password);
-        assert!(data.as_slice()[34..].iter().all(|byte| *byte == 0));
+        let capabilities = HardwareEraseCapabilities {
+            ata_sanitize_block_erase: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            ata_sanitize_action(capabilities).unwrap().0,
+            ATA_SANITIZE_BLOCK_ERASE
+        );
+
+        let capabilities = HardwareEraseCapabilities {
+            ata_sanitize_overwrite: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            ata_sanitize_action(capabilities).unwrap().0,
+            ATA_SANITIZE_OVERWRITE
+        );
     }
 
     #[test]
-    fn test_erase_timeout_uses_device_estimate() {
-        let security = AtaSecurity {
-            supported: true,
-            enabled: false,
-            frozen: false,
-            enhanced: true,
-            erase_minutes: 2,
-            enhanced_erase_minutes: 5,
-        };
+    fn test_parse_ata_registers() {
+        let mut sense = [0u8; 24];
+        sense[0] = 0x72;
+        sense[7] = 0x0e;
+        sense[8] = 0x09;
+        sense[9] = 0x0c;
+        sense[10] = 0x04;
+        sense[11] = 0x50;
+        sense[12] = 0x00;
+        sense[13] = 0x12;
+        sense[14] = 0x00;
+        sense[15] = 0x34;
+        sense[16] = 0x00;
+        sense[19] = 0x50;
 
-        assert_eq!(security.erase_timeout_seconds(false), 4 * 60);
-        assert_eq!(security.erase_timeout_seconds(true), 10 * 60);
+        let registers = parse_ata_registers(&sense).unwrap();
+
+        assert_eq!(registers.error, 0x04);
+        assert_eq!(registers.status, 0x50);
+        assert_eq!(registers.lba_low, 0x12);
+        assert_eq!(registers.lba_mid, 0x34);
     }
 }
