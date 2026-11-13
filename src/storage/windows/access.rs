@@ -21,8 +21,8 @@ use windows::Win32::System::Threading::CreateEventW;
 use windows::core::{Error as WindowsError, HSTRING};
 
 use crate::storage::{
-    AsyncStorageAccess, HardwareEraseMethod, IoCompletion, IoKind, StorageAccess, StorageError,
-    StorageRef,
+    AsyncStorageAccess, HardwareEraseMethod, HardwareEraseOutcome, IoCompletion, IoKind,
+    StorageAccess, StorageError, StorageRef,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -396,7 +396,7 @@ impl AsyncStorageAccess for OverlappedAccess {
         self.device.flush()
     }
 
-    fn hardware_erase(&mut self, method: HardwareEraseMethod) -> Result<()> {
+    fn hardware_erase(&mut self, method: HardwareEraseMethod) -> Result<HardwareEraseOutcome> {
         self.device.hardware_erase(method)
     }
 }
@@ -446,7 +446,7 @@ impl StorageAccess for DeviceFile {
             .context("Unable to flush device write buffers.")
     }
 
-    fn hardware_erase(&mut self, method: HardwareEraseMethod) -> Result<()> {
+    fn hardware_erase(&mut self, method: HardwareEraseMethod) -> Result<HardwareEraseOutcome> {
         super::erase::hardware_erase(self, method)
     }
 }

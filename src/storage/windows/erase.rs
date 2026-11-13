@@ -10,7 +10,7 @@ use windows::Win32::System::Ioctl::{
     STORAGE_PROTOCOL_COMMAND, STORAGE_PROTOCOL_STATUS_SUCCESS, STORAGE_PROTOCOL_STRUCTURE_VERSION,
 };
 
-use crate::storage::{HardwareEraseCapabilities, HardwareEraseMethod};
+use crate::storage::{HardwareEraseCapabilities, HardwareEraseMethod, HardwareEraseOutcome};
 
 use super::access::{DeviceAccess, DeviceFile};
 use super::physical_drive::{
@@ -49,7 +49,10 @@ const NVME_SANITIZE_STATUS_NO_DEALLOC_COMPLETE: u16 = 4;
 const SANITIZE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const SANITIZE_TIMEOUT: Duration = Duration::from_hours(24);
 
-pub(super) fn hardware_erase(device: &DeviceFile, method: HardwareEraseMethod) -> Result<()> {
+pub(super) fn hardware_erase(
+    device: &DeviceFile,
+    method: HardwareEraseMethod,
+) -> Result<HardwareEraseOutcome> {
     // Prefer a plain handle for pass-through commands; the wipe handle may be opened
     // with overlapped I/O, which does not mix well with synchronous control requests.
     let query_device = DeviceFile::open(device.path(), DeviceAccess::QueryIo).ok();
@@ -64,7 +67,7 @@ pub(super) fn hardware_erase(device: &DeviceFile, method: HardwareEraseMethod) -
     }
 }
 
-fn ata_sanitize(device: &DeviceFile) -> Result<()> {
+fn ata_sanitize(device: &DeviceFile) -> Result<HardwareEraseOutcome> {
     let capabilities = detect_ata_capabilities(device)
         .or_else(|_| detect_ata_capabilities_scsi(device))
         .context("Unable to query ATA sanitize capabilities")?;
@@ -104,7 +107,7 @@ fn ata_sanitize_action(
     }
 }
 
-fn poll_ata_sanitize(device: &DeviceFile, description: &str) -> Result<()> {
+fn poll_ata_sanitize(device: &DeviceFile, description: &str) -> Result<HardwareEraseOutcome> {
     let deadline = Instant::now() + SANITIZE_TIMEOUT;
     let mut progress_seen = false;
     let mut idle_polls = 0u32;
@@ -129,7 +132,7 @@ fn poll_ata_sanitize(device: &DeviceFile, description: &str) -> Result<()> {
         let progress = (u16::from(registers.lba_mid) << 8) | u16::from(registers.lba_low);
 
         if state & ATA_SANITIZE_SUCCEEDED != 0 {
-            return Ok(());
+            return Ok(HardwareEraseOutcome::confirmed());
         }
 
         if state & ATA_SANITIZE_FROZEN != 0 {
@@ -149,12 +152,11 @@ fn poll_ata_sanitize(device: &DeviceFile, description: &str) -> Result<()> {
             ));
         } else {
             idle_polls += 1;
-            if idle_polls >= 15 {
-                return Err(anyhow!(
-                    "{description} did not start, or the device does not report ATA sanitize status (ATA status {:#04x}, error {:#04x}, progress {progress:#06x}). The sanitize command may still be running; check the drive before retrying.",
-                    registers.status,
-                    registers.error
-                ));
+            if idle_polls >= 5 {
+                return Ok(HardwareEraseOutcome::unconfirmed(format!(
+                    "{description} was accepted, but this device or its USB bridge does not report ATA sanitize status (ATA status {:#04x}, error {:#04x}, progress {progress:#06x}). The sanitize is expected to continue in the background; do not retry until it has finished.",
+                    registers.status, registers.error
+                )));
             }
         }
 
@@ -356,7 +358,7 @@ fn sense_info(sense: &[u8]) -> (u8, u8, u8) {
     }
 }
 
-fn nvme_sanitize(device: &DeviceFile) -> Result<()> {
+fn nvme_sanitize(device: &DeviceFile) -> Result<HardwareEraseOutcome> {
     let capabilities =
         detect_nvme_capabilities(device).context("Unable to query NVMe sanitize capabilities")?;
 
@@ -433,7 +435,7 @@ fn nvme_sanitize_command(device: &DeviceFile, action: u32) -> Result<()> {
     Ok(())
 }
 
-fn poll_nvme_sanitize(device: &DeviceFile) -> Result<()> {
+fn poll_nvme_sanitize(device: &DeviceFile) -> Result<HardwareEraseOutcome> {
     let deadline = Instant::now() + SANITIZE_TIMEOUT;
     let mut last_error = None;
     let mut zero_status_seen = 0u8;
@@ -451,7 +453,7 @@ fn poll_nvme_sanitize(device: &DeviceFile) -> Result<()> {
 
                 match status {
                     NVME_SANITIZE_STATUS_COMPLETE | NVME_SANITIZE_STATUS_NO_DEALLOC_COMPLETE => {
-                        return Ok(());
+                        return Ok(HardwareEraseOutcome::confirmed());
                     }
                     NVME_SANITIZE_STATUS_FAILED => {
                         return Err(anyhow!("NVMe Sanitize completed with a failure status."));
@@ -461,9 +463,9 @@ fn poll_nvme_sanitize(device: &DeviceFile) -> Result<()> {
                     }
                     0 => {
                         zero_status_seen += 1;
-                        if zero_status_seen >= 15 {
-                            return Err(anyhow!(
-                                "NVMe Sanitize did not start (sanitize status remains idle)."
+                        if zero_status_seen >= 5 {
+                            return Ok(HardwareEraseOutcome::unconfirmed(
+                                "NVMe Sanitize was accepted, but the device does not report sanitize status. The sanitize is expected to continue in the background; do not retry until it has finished.",
                             ));
                         }
                     }

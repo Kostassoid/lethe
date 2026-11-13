@@ -119,6 +119,13 @@ impl WipeEventHandler for ConsoleEventHandler {
                 );
                 sleep(Duration::from_secs(u64::from(RETRY_BACKOFF_SECONDS)));
             }
+            WipeEvent::Warning(message) => {
+                if let Some(pb) = &self.pb {
+                    pb.println(format!("Warning: {message}"));
+                } else {
+                    eprintln!("Warning: {message}");
+                }
+            }
             WipeEvent::Completed => self.print_summary(plan, state),
             WipeEvent::Failed(err) => {
                 eprintln!("❌ Unexpected error: {err:#}");

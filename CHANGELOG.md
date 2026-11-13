@@ -15,6 +15,12 @@
 * A `none` scheme for hardware-erase-only runs, and validation rejecting `--hardware-erase` together with a
   non-zero `--offset`.
 
+### Fixed
+
+* ATA SANITIZE and NVMe Sanitize now report an accepted-but-unconfirmed outcome when the device or its USB bridge
+  does not expose erase status, instead of failing after a short wait. A warning is shown and automatic retries
+  remain disabled.
+
 ## [v1.0.1] - 2026-11-11
 
 ### Added

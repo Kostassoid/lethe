@@ -51,7 +51,7 @@ pub trait StorageAccess {
     fn write(&mut self, data: &[u8]) -> Result<()>;
     fn flush(&mut self) -> Result<()>;
 
-    fn hardware_erase(&mut self, _method: HardwareEraseMethod) -> Result<()> {
+    fn hardware_erase(&mut self, _method: HardwareEraseMethod) -> Result<HardwareEraseOutcome> {
         Err(anyhow!("Hardware erase is not supported for this device."))
     }
 }
@@ -88,7 +88,7 @@ pub trait AsyncStorageAccess {
 
     fn flush(&mut self) -> Result<()>;
 
-    fn hardware_erase(&mut self, _method: HardwareEraseMethod) -> Result<()> {
+    fn hardware_erase(&mut self, _method: HardwareEraseMethod) -> Result<HardwareEraseOutcome> {
         Err(anyhow!("Hardware erase is not supported for this device."))
     }
 }
@@ -240,6 +240,31 @@ impl std::fmt::Display for HardwareEraseMethod {
             Self::AtaSanitize => "ATA SANITIZE",
             Self::NvmeSanitize => "NVMe Sanitize",
         })
+    }
+}
+
+/// Result of a hardware erase request.
+#[derive(Clone, Debug)]
+pub struct HardwareEraseOutcome {
+    /// Whether the device confirmed that the operation completed.
+    pub confirmed: bool,
+    /// Optional explanation, especially when completion could not be confirmed.
+    pub message: Option<String>,
+}
+
+impl HardwareEraseOutcome {
+    pub fn confirmed() -> Self {
+        HardwareEraseOutcome {
+            confirmed: true,
+            message: None,
+        }
+    }
+
+    pub fn unconfirmed(message: impl Into<String>) -> Self {
+        HardwareEraseOutcome {
+            confirmed: false,
+            message: Some(message.into()),
+        }
     }
 }
 

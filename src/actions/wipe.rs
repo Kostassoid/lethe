@@ -27,6 +27,7 @@ pub enum WipeEvent {
     StepCompleted(StepIndex),
     StepFailed(StepIndex, String),
     Retrying(StepIndex, BytePosition),
+    Warning(String),
     Completed,
     Failed(String),
 }
@@ -255,7 +256,13 @@ impl WipeSession {
     }
 
     fn hardware_erase_step(&mut self, method: HardwareEraseMethod) -> Result<()> {
-        self.storage.hardware_erase(method)
+        let outcome = self.storage.hardware_erase(method)?;
+        if !outcome.confirmed
+            && let Some(message) = outcome.message
+        {
+            self.publish(WipeEvent::Warning(message));
+        }
+        Ok(())
     }
 
     fn publish(&mut self, event: WipeEvent) {
@@ -465,7 +472,13 @@ impl AsyncWipeSession {
     }
 
     fn hardware_erase_step(&mut self, method: HardwareEraseMethod) -> Result<()> {
-        self.storage.hardware_erase(method)
+        let outcome = self.storage.hardware_erase(method)?;
+        if !outcome.confirmed
+            && let Some(message) = outcome.message
+        {
+            self.publish(WipeEvent::Warning(message));
+        }
+        Ok(())
     }
 
     fn publish(&mut self, event: WipeEvent) {
@@ -995,7 +1008,7 @@ mod test {
     use crate::actions::verification::{Percent, Verification};
     use crate::sanitization::stream::RANDOM_SEED_SIZE;
     use crate::sanitization::{Scheme, SchemeRepo, Stage};
-    use crate::storage::IoCompletion;
+    use crate::storage::{HardwareEraseOutcome, IoCompletion};
     use WipeEvent::*;
     use anyhow::Result;
     use assert_matches::*;
@@ -1012,6 +1025,58 @@ mod test {
         assert!(WipePlan::new(scheme.clone(), Verification::No, 0..1 << 35, 8).is_ok());
         assert!(WipePlan::new(scheme.clone(), Verification::No, 0..1 << 33, 1).is_err());
         assert!(WipePlan::new(scheme.clone(), Verification::No, 0..1 << 36, 8).is_err());
+    }
+
+    #[test]
+    fn test_unconfirmed_hardware_erase_completes_with_warning() {
+        struct EraseOnlyStorage;
+
+        impl StorageAccess for EraseOnlyStorage {
+            fn seek(&mut self, _position: u64) -> Result<u64> {
+                unreachable!("the hardware erase step does not seek")
+            }
+
+            fn read(&mut self, _buffer: &mut [u8]) -> Result<usize> {
+                unreachable!("the hardware erase step does not read")
+            }
+
+            fn write(&mut self, _data: &[u8]) -> Result<()> {
+                unreachable!("the hardware erase step does not write")
+            }
+
+            fn flush(&mut self) -> Result<()> {
+                unreachable!("the hardware erase step does not flush")
+            }
+
+            fn hardware_erase(
+                &mut self,
+                _method: HardwareEraseMethod,
+            ) -> Result<HardwareEraseOutcome> {
+                Ok(HardwareEraseOutcome::unconfirmed(
+                    "sanitize status unavailable",
+                ))
+            }
+        }
+
+        let schemes = SchemeRepo::default();
+        let scheme = schemes.find("none").unwrap();
+        let receiver = StubReceiver::new();
+        let plan = WipePlan::new(scheme.clone(), Verification::No, 0..1024, 512)
+            .unwrap()
+            .with_hardware_erase(HardwareEraseMethod::AtaSanitize);
+
+        let result = plan.execute(Box::new(EraseOnlyStorage), Box::new(receiver.clone()), 0);
+
+        assert!(result.is_ok());
+        let collected = receiver.collected.borrow();
+        let mut events = collected.iter();
+        assert_matches!(events.next(), Some(Created));
+        assert_matches!(events.next(), Some(Started));
+        assert_matches!(events.next(), Some(StepStarted(0)));
+        assert_matches!(events.next(), Some(Warning(message)) if message == "sanitize status unavailable");
+        assert_matches!(events.next(), Some(StepCompleted(0)));
+        assert_matches!(events.next(), Some(Completed));
+        assert!(events.next().is_none());
     }
 
     #[test]

@@ -4,13 +4,18 @@
 
 # Lethe
 
-A secure, free, cross-platform and open-source drive wiping utility for HDDs, SSDs (see [Limitations](#limitations))
-and flash drives.
+Lethe is a secure, open-source, cross-platform drive sanitization utility for HDDs, SSDs, and flash drives. It
+combines verified overwrite wiping with device-level hardware erase, with first-class support for modern SSDs:
+Lethe detects supported ATA and NVMe sanitize capabilities, selects an appropriate I/O queue depth, and executes
+NVMe Sanitize or ATA SANITIZE where available.
 
-Most drive wiping methods, including those allegedly used by government agencies, rely on destructive writes:
-overwriting existing data with random data or static patterns over one or more passes. Lethe does exactly that.
+For devices that do not support hardware erase, Lethe overwrites existing data with random or static patterns over
+one or more passes and can read it back to verify the result. The supported methods are designed to align with the
+Clear, Purge, and Destroy categories in [NIST SP 800-88 Rev. 2](#nist-sp-800-88-rev-2); see that section for the
+method mapping, verification limits, and practical caveats.
 
-Similar tools exist, but most are proprietary, slow or not cross-platform. Lethe aims to be none of those.
+Lethe is free of proprietary components and is developed as open source. Platform support and known limitations are
+described below.
 
 ## Features
 
@@ -340,8 +345,11 @@ ATA SANITIZE. ATA Secure Erase and NVMe Format NVM are still reported by `list`,
 are not offered as erase options. Linux and macOS execution is not implemented yet.
 
 Both ATA SANITIZE and NVMe Sanitize run in the background; Lethe polls the device until
-they complete, which can take a while. If neither method is supported, hardware erase is
-not available for that device.
+they complete, which can take a while. Some USB bridges accept ATA SANITIZE but do not
+expose its status. After a short grace period, Lethe reports the command as accepted but
+unconfirmed instead of failing, and warns you not to retry until the erase has finished.
+Because completion cannot be verified through such a bridge, check the drive before
+reuse. If neither method is supported, hardware erase is not available for that device.
 
 Hardware erase is a destructive final stage. If it fails, the software wipe and
 verification have already completed; the error is reported separately.
