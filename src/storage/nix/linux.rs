@@ -329,6 +329,7 @@ fn build_device_info(d: &Block) -> Option<StorageRef> {
         label: resolve_fs_label(&device_path).unwrap_or(None),
         drive_kind: drive_kind(d),
         bus: bus_kind(d),
+        hardware_erase: None,
     };
 
     Some(StorageRef {

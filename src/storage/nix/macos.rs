@@ -161,6 +161,7 @@ impl DiskUtilCli {
             label: info.volume_name.to_owned(),
             drive_kind,
             bus,
+            hardware_erase: None,
         })
     }
 }

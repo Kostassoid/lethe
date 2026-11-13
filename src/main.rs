@@ -13,7 +13,7 @@ mod ui;
 use actions::{Percent, Verification, WipePlan};
 use power::SleepInhibitor;
 use sanitization::SchemeRepo;
-use storage::{StorageDevice, StorageReadiness, StorageRef, System};
+use storage::{StorageDetails, StorageDevice, StorageReadiness, StorageRef, StorageType, System};
 use ui::{args, cli, storage_repo};
 
 fn main() -> Result<()> {
@@ -34,6 +34,7 @@ fn main() -> Result<()> {
                 "Bus",
                 "Drive",
                 "QD",
+                "Erase",
                 "Label",
                 "Mount Point",
             ]);
@@ -54,6 +55,7 @@ fn main() -> Result<()> {
                         Cell::new(&details.bus.to_string()),
                         Cell::new(&details.drive_kind.to_string()),
                         Cell::new(&details.recommended_queue_depth().to_string()),
+                        Cell::new(&hardware_erase_text(details)),
                         Cell::new(details.label.as_deref().unwrap_or("")),
                         Cell::new(details.mount_point.as_deref().unwrap_or("")),
                     ]),
@@ -62,6 +64,7 @@ fn main() -> Result<()> {
                         short_id_cell,
                         Cell::new(&HumanBytes(0).to_string()),
                         Cell::new("locked"),
+                        Cell::new("-"),
                         Cell::new("-"),
                         Cell::new("-"),
                         Cell::new("-"),
@@ -87,6 +90,7 @@ fn main() -> Result<()> {
                 }
             }
             t.printstd();
+            print_erase_legend();
         }
         Some(("wipe", cmd)) => {
             let storage_repo = enumerate_storage_repo();
@@ -143,6 +147,17 @@ fn main() -> Result<()> {
                 block_size,
             )?;
 
+            let hardware_erase = *cmd
+                .get_one::<args::HardwareEraseMethod>("hardware-erase")
+                .ok_or_else(|| anyhow!("Invalid hardware erase value"))?;
+            let hardware_erase = resolve_hardware_erase(device_details, hardware_erase)?;
+
+            if hardware_erase != args::HardwareEraseMethod::Off {
+                return Err(anyhow!(
+                    "Hardware erase ({hardware_erase}) is not implemented yet; no wipe was performed."
+                ));
+            }
+
             let _sleep_inhibitor = SleepInhibitor::acquire(&format!("Wiping device {device_id}"))
                 .inspect_err(|err| {
                     eprintln!("Warning: unable to prevent the system from sleeping: {err:#}");
@@ -166,6 +181,84 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_hardware_erase(
+    details: &StorageDetails,
+    requested: args::HardwareEraseMethod,
+) -> Result<args::HardwareEraseMethod> {
+    if requested == args::HardwareEraseMethod::Off {
+        return Ok(args::HardwareEraseMethod::Off);
+    }
+
+    if matches!(details.storage_type, StorageType::Partition) {
+        return Err(anyhow!(
+            "Hardware erase works on the whole drive; select the physical drive instead of a partition."
+        ));
+    }
+
+    let capabilities = details.hardware_erase.ok_or_else(|| {
+        anyhow!(
+            "Hardware erase capabilities could not be probed. Run `lethe list` with administrator/root privileges."
+        )
+    })?;
+
+    if requested == args::HardwareEraseMethod::Auto {
+        let selected = if capabilities.nvme_sanitize {
+            args::HardwareEraseMethod::NvmeSanitize
+        } else if capabilities.nvme_format {
+            args::HardwareEraseMethod::NvmeFormat
+        } else if capabilities.ata_sanitize {
+            args::HardwareEraseMethod::AtaSanitize
+        } else if capabilities.ata_secure_erase {
+            args::HardwareEraseMethod::AtaSecure
+        } else {
+            return Err(anyhow!(
+                "No supported hardware erase method was reported for this device."
+            ));
+        };
+
+        return Ok(selected);
+    }
+
+    let supported = match requested {
+        args::HardwareEraseMethod::AtaSecure => capabilities.ata_secure_erase,
+        args::HardwareEraseMethod::AtaSanitize => capabilities.ata_sanitize,
+        args::HardwareEraseMethod::NvmeSanitize => capabilities.nvme_sanitize,
+        args::HardwareEraseMethod::NvmeFormat => capabilities.nvme_format,
+        args::HardwareEraseMethod::Off | args::HardwareEraseMethod::Auto => unreachable!(),
+    };
+
+    if !supported {
+        return Err(anyhow!(
+            "{requested} is not reported as supported by this device."
+        ));
+    }
+
+    Ok(requested)
+}
+
+fn hardware_erase_text(details: &StorageDetails) -> String {
+    match &details.hardware_erase {
+        Some(capabilities) => capabilities.abbreviations(),
+        None => "?".to_string(),
+    }
+}
+
+fn print_erase_legend() {
+    println!();
+    println!("  * Hardware erase methods reported by the device:");
+    println!("    SE*  ATA Secure Erase, normal or enhanced (whole disk)");
+    println!("    SA*  ATA SANITIZE (whole disk)");
+    println!("    NS*  NVMe Sanitize (whole device)");
+    println!("    NF*  NVMe Format NVM secure erase (whole namespace)");
+    println!("    ?    Not probed or unsupported on this platform");
+    println!("    -    No hardware erase method reported");
+    println!("    Hardware erase applies to the whole drive, never to a single partition.");
+    println!(
+        "    Probing is currently implemented on Windows and may require administrator rights;"
+    );
+    println!("    USB bridges often need elevated pass-through access.");
 }
 
 /// Discovers storage devices, or exits with a user-facing explanation. Device discovery

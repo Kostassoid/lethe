@@ -23,6 +23,8 @@ Similar tools exist, but most are proprietary, slow or not cross-platform. Lethe
 - **Tunable block size** — override the OS-recommended block size for faster operations.
 - **Queued I/O (experimental)** — automatically picks an I/O queue depth for the detected drive type, using
   `io_uring` on Linux and overlapped I/O on Windows.
+- **Hardware erase detection (experimental)** — reports ATA Secure Erase/SANITIZE and NVMe Sanitize/Format NVM
+  capabilities in `list`.
 - **Bad block handling** — tracks, skips and reports bad blocks and other localized errors automatically.
 - **Sleep prevention** — blocks the OS from sleeping while a wipe is in progress.
 
@@ -88,7 +90,22 @@ sudo lethe list
 ```
 
 Every device gets a full ID (`/dev/sda`, `/dev/rdisk2`, `\\.\PhysicalDrive0`) and a short ID. Both are accepted by
-`wipe`. The listing also shows the detected bus, drive kind and the queue depth that `--queue-depth=auto` will use.
+`wipe`. The listing also shows the detected bus, drive kind, the queue depth that `--queue-depth=auto` will use, and
+the hardware erase methods reported by the device.
+
+Hardware erase operates on the whole drive, never on an individual partition. Probing is currently implemented on
+Windows and may require administrator rights; USB bridges often need elevated pass-through access.
+
+| Code  | Meaning                                              |
+|-------|------------------------------------------------------|
+| `SE*` | ATA Secure Erase (normal or enhanced)                |
+| `SA*` | ATA SANITIZE                                         |
+| `NS*` | NVMe Sanitize                                        |
+| `NF*` | NVMe Format NVM secure erase                         |
+| `?`   | Not probed or unsupported on this platform           |
+| `-`   | No hardware erase method reported                    |
+
+This is capability detection only; the hardware erase step is not yet wired into `wipe`.
 
 ### Wipe a device
 

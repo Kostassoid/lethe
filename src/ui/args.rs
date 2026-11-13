@@ -6,6 +6,49 @@ use crate::sanitization::SchemeRepo;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Hardware erase method requested on the command line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HardwareEraseMethod {
+    Off,
+    Auto,
+    AtaSecure,
+    AtaSanitize,
+    NvmeSanitize,
+    NvmeFormat,
+}
+
+impl std::str::FromStr for HardwareEraseMethod {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "off" => Ok(Self::Off),
+            "auto" => Ok(Self::Auto),
+            "ata-secure" => Ok(Self::AtaSecure),
+            "ata-sanitize" => Ok(Self::AtaSanitize),
+            "nvme-sanitize" => Ok(Self::NvmeSanitize),
+            "nvme-format" => Ok(Self::NvmeFormat),
+            _ => Err(
+                "expected one of: off, auto, ata-secure, ata-sanitize, nvme-sanitize, nvme-format"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for HardwareEraseMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::AtaSecure => "ATA Secure Erase",
+            Self::AtaSanitize => "ATA SANITIZE",
+            Self::NvmeSanitize => "NVMe Sanitize",
+            Self::NvmeFormat => "NVMe Format NVM",
+        })
+    }
+}
+
 /// Queue depth requested on the command line, before drive-based auto detection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueueDepth {
@@ -120,6 +163,15 @@ pub fn build_command(schemes: &SchemeRepo) -> Command {
                         .help("I/O queue depth: 'auto' or 1..256"),
                 )
                 .arg(
+                    Arg::new("hardware-erase")
+                        .long("hardware-erase")
+                        .num_args(1)
+                        .value_parser(value_parser!(HardwareEraseMethod))
+                        .default_value("off")
+                        .hide(true)
+                        .help("Hardware erase method (not implemented yet)"),
+                )
+                .arg(
                     Arg::new("yes")
                         .long("yes")
                         .short('y')
@@ -198,6 +250,25 @@ mod test {
     fn test_block_size_parser_bad() {
         assert_matches!(parse_block_size("4095"), Err(_));
         assert_matches!(parse_block_size("13M"), Err(_));
+    }
+
+    #[test]
+    fn test_hardware_erase_parser() {
+        use std::str::FromStr;
+
+        assert_eq!(
+            HardwareEraseMethod::from_str("off").unwrap(),
+            HardwareEraseMethod::Off
+        );
+        assert_eq!(
+            HardwareEraseMethod::from_str("AUTO").unwrap(),
+            HardwareEraseMethod::Auto
+        );
+        assert_eq!(
+            HardwareEraseMethod::from_str("nvme-sanitize").unwrap(),
+            HardwareEraseMethod::NvmeSanitize
+        );
+        assert!(HardwareEraseMethod::from_str("unknown").is_err());
     }
 
     #[test]

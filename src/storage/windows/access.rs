@@ -27,6 +27,8 @@ use crate::storage::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeviceAccess {
     Query,
+    /// A readable handle for pass-through queries that require more than zero access.
+    QueryIo,
     Wipe,
     /// A write handle for asynchronous I/O, opened with `FILE_FLAG_OVERLAPPED`.
     WipeOverlapped,
@@ -46,14 +48,22 @@ impl DeviceFile {
 
         let desired_access = match access {
             DeviceAccess::Query => 0,
-            DeviceAccess::Wipe | DeviceAccess::WipeOverlapped => GENERIC_READ.0 | GENERIC_WRITE.0,
+            DeviceAccess::QueryIo | DeviceAccess::Wipe | DeviceAccess::WipeOverlapped => {
+                GENERIC_READ.0 | GENERIC_WRITE.0
+            }
         };
 
-        let mut flags = FILE_ATTRIBUTE_NORMAL
-            | FILE_FLAG_NO_BUFFERING
-            | FILE_FLAG_WRITE_THROUGH
-            | FILE_FLAG_SEQUENTIAL_SCAN
-            | FILE_FLAG_RANDOM_ACCESS;
+        let mut flags = match access {
+            // Pass-through queries are buffered by Windows; keep this handle plain.
+            DeviceAccess::QueryIo => FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS,
+            _ => {
+                FILE_ATTRIBUTE_NORMAL
+                    | FILE_FLAG_NO_BUFFERING
+                    | FILE_FLAG_WRITE_THROUGH
+                    | FILE_FLAG_SEQUENTIAL_SCAN
+                    | FILE_FLAG_RANDOM_ACCESS
+            }
+        };
 
         if access == DeviceAccess::WipeOverlapped {
             flags |= FILE_FLAG_OVERLAPPED;
@@ -129,6 +139,26 @@ impl DeviceFile {
         let mut output = T::default();
         self.ioctl_into(code, Some(input), &mut output)?;
         Ok(output)
+    }
+
+    pub(super) fn ioctl_raw(&self, code: u32, input: &[u8], output: &mut [u8]) -> Result<u32> {
+        let mut returned = 0u32;
+
+        unsafe {
+            DeviceIoControl(
+                self.handle,
+                code,
+                Some(input.as_ptr().cast::<c_void>()),
+                u32::try_from(input.len()).expect("ioctl input is too large"),
+                Some(output.as_mut_ptr().cast::<c_void>()),
+                u32::try_from(output.len()).expect("ioctl output is too large"),
+                Some(&raw mut returned),
+                None,
+            )
+        }
+        .map_err(|error| StorageError::from_windows(&error))?;
+
+        Ok(returned)
     }
 
     pub(super) fn ioctl_into<I, T>(

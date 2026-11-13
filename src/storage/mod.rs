@@ -201,6 +201,44 @@ impl std::fmt::Display for BusKind {
     }
 }
 
+/// Hardware erase methods reported by the device itself.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // an independent capability flag per method
+pub struct HardwareEraseCapabilities {
+    pub ata_secure_erase: bool,
+    pub ata_enhanced_secure_erase: bool,
+    pub ata_sanitize: bool,
+    pub nvme_sanitize: bool,
+    pub nvme_format: bool,
+}
+
+impl HardwareEraseCapabilities {
+    /// Short list for the device table. Each method is marked with `*` because the
+    /// abbreviations are explained below the table.
+    pub fn abbreviations(self) -> String {
+        let mut methods = Vec::new();
+
+        if self.ata_secure_erase {
+            methods.push("SE*");
+        }
+        if self.ata_sanitize {
+            methods.push("SA*");
+        }
+        if self.nvme_sanitize {
+            methods.push("NS*");
+        }
+        if self.nvme_format {
+            methods.push("NF*");
+        }
+
+        if methods.is_empty() {
+            "-".to_string()
+        } else {
+            methods.join(" ")
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StorageDetails {
     pub size: u64,
@@ -213,6 +251,8 @@ pub struct StorageDetails {
     pub label: Option<String>,
     pub drive_kind: DriveKind,
     pub bus: BusKind,
+    /// `None` means the platform could not probe the device.
+    pub hardware_erase: Option<HardwareEraseCapabilities>,
 }
 
 impl std::fmt::Display for DriveKind {
