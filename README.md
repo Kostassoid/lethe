@@ -93,17 +93,24 @@ Every device gets a full ID (`/dev/sda`, `/dev/rdisk2`, `\\.\PhysicalDrive0`) an
 `wipe`. The listing also shows the detected bus, drive kind, the queue depth that `--queue-depth=auto` will use, and
 the hardware erase methods reported by the device.
 
-Hardware erase operates on the whole drive, never on an individual partition. Probing is currently implemented on
-Windows and may require administrator rights; USB bridges often need elevated pass-through access.
+Hardware erase operates on the whole drive, never on an individual partition, so partitions are left blank in this
+column. Probing is currently implemented on Windows and may require administrator rights; USB bridges often need
+elevated pass-through access.
 
-| Code  | Meaning                                              |
-|-------|------------------------------------------------------|
-| `SE*` | ATA Secure Erase (normal or enhanced)                |
-| `SA*` | ATA SANITIZE                                         |
-| `NS*` | NVMe Sanitize                                        |
-| `NF*` | NVMe Format NVM secure erase                         |
-| `?`   | Not probed or unsupported on this platform           |
-| `-`   | No hardware erase method reported                    |
+Methods are listed in the recommended order:
+
+| Code  | Meaning                                                                        |
+|-------|--------------------------------------------------------------------------------|
+| `NS*` | NVMe Sanitize — preferred for NVMe; covers the whole device                     |
+| `NF*` | NVMe Format NVM — namespace-scoped fallback when Sanitize is unavailable        |
+| `SA*` | ATA SANITIZE — preferred for SATA; covers the whole device                      |
+| `SE*` | ATA Secure Erase — older command; effective on many drives but behavior varies  |
+| `?`   | Not probed or unsupported on this platform                                      |
+| `-`   | No hardware erase method reported                                               |
+
+Prefer `NS` over `NF`, and `SA` over `SE`, when both are listed. There is no universal winner: crypto erase is
+fastest, block erase physically erases, and overwrite writes a pattern; the actual behavior depends on the drive
+firmware.
 
 This is capability detection only; the hardware erase step is not yet wired into `wipe`.
 

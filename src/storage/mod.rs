@@ -218,17 +218,19 @@ impl HardwareEraseCapabilities {
     pub fn abbreviations(self) -> String {
         let mut methods = Vec::new();
 
-        if self.ata_secure_erase {
-            methods.push("SE*");
-        }
-        if self.ata_sanitize {
-            methods.push("SA*");
-        }
+        // Preferred methods first: sanitize covers the whole device and has better
+        // reporting than the older format/secure-erase paths.
         if self.nvme_sanitize {
             methods.push("NS*");
         }
         if self.nvme_format {
             methods.push("NF*");
+        }
+        if self.ata_sanitize {
+            methods.push("SA*");
+        }
+        if self.ata_secure_erase {
+            methods.push("SE*");
         }
 
         if methods.is_empty() {
@@ -288,6 +290,20 @@ pub struct System;
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_hardware_erase_abbreviations_are_in_preferred_order() {
+        let all = HardwareEraseCapabilities {
+            ata_secure_erase: true,
+            ata_enhanced_secure_erase: true,
+            ata_sanitize: true,
+            nvme_sanitize: true,
+            nvme_format: true,
+        };
+
+        assert_eq!(all.abbreviations(), "NS* NF* SA* SE*");
+        assert_eq!(HardwareEraseCapabilities::default().abbreviations(), "-");
+    }
 
     #[test]
     fn test_recommended_queue_depth() {

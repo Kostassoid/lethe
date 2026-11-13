@@ -239,6 +239,10 @@ fn resolve_hardware_erase(
 }
 
 fn hardware_erase_text(details: &StorageDetails) -> String {
+    if matches!(details.storage_type, StorageType::Partition) {
+        return String::new();
+    }
+
     match &details.hardware_erase {
         Some(capabilities) => capabilities.abbreviations(),
         None => "?".to_string(),
@@ -247,14 +251,17 @@ fn hardware_erase_text(details: &StorageDetails) -> String {
 
 fn print_erase_legend() {
     println!();
-    println!("  * Hardware erase methods reported by the device:");
-    println!("    SE*  ATA Secure Erase, normal or enhanced (whole disk)");
-    println!("    SA*  ATA SANITIZE (whole disk)");
-    println!("    NS*  NVMe Sanitize (whole device)");
-    println!("    NF*  NVMe Format NVM secure erase (whole namespace)");
+    println!("  * Hardware erase methods (whole disk only; partitions are left blank).");
+    println!("    Methods are listed in the recommended order:");
+    println!("    NS*  NVMe Sanitize — preferred for NVMe; covers the whole device");
+    println!("    NF*  NVMe Format NVM — namespace-scoped fallback when Sanitize is unavailable");
+    println!("    SA*  ATA SANITIZE — preferred for SATA; covers the whole device");
+    println!("    SE*  ATA Secure Erase — older command; effective on many drives but varies");
     println!("    ?    Not probed or unsupported on this platform");
     println!("    -    No hardware erase method reported");
-    println!("    Hardware erase applies to the whole drive, never to a single partition.");
+    println!("    Prefer NS over NF, and SA over SE, when both are listed.");
+    println!("    Crypto erase is fastest, block erase physically erases, and overwrite writes");
+    println!("    a pattern; the actual behavior depends on the drive firmware.");
     println!(
         "    Probing is currently implemented on Windows and may require administrator rights;"
     );
