@@ -121,7 +121,11 @@ fn poll_ata_sanitize(device: &DeviceFile, description: &str) -> Result<()> {
         )
         .context("Unable to read ATA sanitize status")?;
 
-        let state = registers.sector_count_hob;
+        let state = if registers.sector_count_hob != 0 {
+            registers.sector_count_hob
+        } else {
+            registers.sector_count
+        };
         let progress = (u16::from(registers.lba_mid) << 8) | u16::from(registers.lba_low);
 
         if state & ATA_SANITIZE_SUCCEEDED != 0 {
@@ -147,7 +151,7 @@ fn poll_ata_sanitize(device: &DeviceFile, description: &str) -> Result<()> {
             idle_polls += 1;
             if idle_polls >= 15 {
                 return Err(anyhow!(
-                    "{description} did not start: ATA status {:#04x}, error {:#04x}",
+                    "{description} did not start, or the device does not report ATA sanitize status (ATA status {:#04x}, error {:#04x}, progress {progress:#06x}). The sanitize command may still be running; check the drive before retrying.",
                     registers.status,
                     registers.error
                 ));
@@ -170,6 +174,7 @@ fn poll_ata_sanitize(device: &DeviceFile, description: &str) -> Result<()> {
 struct AtaRegisters {
     error: u8,
     status: u8,
+    sector_count: u8,
     sector_count_hob: u8,
     lba_low: u8,
     lba_mid: u8,
@@ -256,11 +261,16 @@ fn ata_pass_through(
     let registers = parse_ata_registers(sense);
     let (sense_key, asc, ascq) = sense_info(sense);
 
-    let failed = match registers {
-        // Prefer the ATA status register: with CK_COND=1 some SAT layers report
-        // CHECK CONDITION plus an ATA descriptor even when the command succeeded.
-        Some(registers) => registers.status & 0x01 != 0 || registers.status & 0x20 != 0,
-        None => result.ScsiStatus != 0,
+    // CK_COND=1 makes successful commands complete with CHECK CONDITION and
+    // "ATA PASS-THROUGH INFORMATION AVAILABLE" sense data.
+    let informational =
+        result.ScsiStatus == 2 && matches!(sense_key, 0x00 | 0x01) && asc == 0 && ascq == 0x1d;
+
+    let failed = if let Some(registers) = registers {
+        registers.status & (0x01 | 0x20) != 0
+            || (registers.status == 0 && result.ScsiStatus != 0 && !informational)
+    } else {
+        result.ScsiStatus != 0 && !informational
     };
 
     if failed {
@@ -286,6 +296,22 @@ fn ata_pass_through(
 
 fn parse_ata_registers(sense: &[u8]) -> Option<AtaRegisters> {
     let response = *sense.first()? & 0x7f;
+
+    if response == 0x70 || response == 0x71 {
+        if sense.len() < 12 {
+            return None;
+        }
+
+        return Some(AtaRegisters {
+            error: sense[3],
+            status: sense[4],
+            sector_count: sense[6],
+            sector_count_hob: 0,
+            lba_low: sense[11],
+            lba_mid: sense[10],
+        });
+    }
+
     if response != 0x72 && response != 0x73 {
         return None;
     }
@@ -304,10 +330,11 @@ fn parse_ata_registers(sense: &[u8]) -> Option<AtaRegisters> {
             let data = &sense[offset + 2..end];
             return Some(AtaRegisters {
                 error: data[0],
+                status: data[9],
+                sector_count: data[1],
                 sector_count_hob: data[2],
                 lba_low: data[3],
                 lba_mid: data[5],
-                status: data[9],
             });
         }
 
@@ -528,7 +555,35 @@ mod test {
 
         assert_eq!(registers.error, 0x04);
         assert_eq!(registers.status, 0x50);
+        assert_eq!(registers.sector_count, 0x50);
+        assert_eq!(registers.sector_count_hob, 0x00);
         assert_eq!(registers.lba_low, 0x12);
+        assert_eq!(registers.lba_mid, 0x34);
+    }
+
+    #[test]
+    fn test_parse_fixed_sense_registers() {
+        let mut sense = [0u8; 18];
+        sense[0] = 0x70;
+        sense[2] = 0x01;
+        sense[3] = 0x04;
+        sense[4] = 0x50;
+        sense[5] = 0x00;
+        sense[6] = 0x12;
+        sense[7] = 0x0a;
+        sense[9] = 0x00;
+        sense[10] = 0x34;
+        sense[11] = 0x56;
+        sense[12] = 0x00;
+        sense[13] = 0x1d;
+
+        let registers = parse_ata_registers(&sense).unwrap();
+
+        assert_eq!(registers.error, 0x04);
+        assert_eq!(registers.status, 0x50);
+        assert_eq!(registers.sector_count, 0x12);
+        assert_eq!(registers.sector_count_hob, 0x00);
+        assert_eq!(registers.lba_low, 0x56);
         assert_eq!(registers.lba_mid, 0x34);
     }
 }
