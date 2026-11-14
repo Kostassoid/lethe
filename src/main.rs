@@ -254,18 +254,13 @@ fn hardware_erase_text(details: &StorageDetails) -> String {
 
 fn print_erase_legend() {
     println!();
-    println!("  * Hardware erase methods (whole disk only; partitions are left blank).");
-    println!("    Methods are listed in the recommended order:");
-    println!("    NS*  NVMe Sanitize — preferred for NVMe; covers the whole device");
-    println!("    NF*  NVMe Format NVM — namespace-scoped fallback when Sanitize is unavailable");
-    println!("    SA*  ATA SANITIZE — preferred for SATA; covers the whole device");
-    println!("    SE*  ATA Secure Erase — older command; effective on many drives but varies");
+    println!("  * Hardware erase methods (whole disk only).");
+    println!("    NS*  NVMe Sanitize — preferred for NVMe");
+    println!("    NF*  NVMe Format NVM (not supported by the application; detected only)");
+    println!("    SA*  ATA SANITIZE — preferred for SATA");
+    println!("    SE*  ATA Secure Erase — older command; effective on many drives but varies (not supported by the application; detected only)");
     println!("    ?    Not probed or unsupported on this platform");
     println!("    -    No hardware erase method reported");
-    println!("    Prefer NS over NF, and SA over SE, when both are listed.");
-    println!("    Crypto erase is fastest, block erase physically erases, and overwrite writes");
-    println!("    a pattern; the actual behavior depends on the drive firmware.");
-    println!("    Execution is available for NS* and SA*; SE* and NF* are detected only.");
     println!(
         "    Probing is currently implemented on Windows and may require administrator rights;"
     );

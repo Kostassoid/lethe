@@ -5,17 +5,13 @@
 # Lethe
 
 Lethe is a secure, open-source, cross-platform drive sanitization utility for HDDs, SSDs, and flash drives. It
-combines verified overwrite wiping with device-level hardware erase, with first-class support for modern SSDs:
-Lethe detects supported ATA and NVMe sanitize capabilities, selects an appropriate I/O queue depth, and executes
-NVMe Sanitize or ATA SANITIZE where available.
+combines verified overwrite wiping with device-level hardware erase. With the recent update, there's now support for 
+modern SSDs: using supported ATA and NVMe sanitize capabilities as well as various optimizations for faster IO 
+(ex. queue depth).
 
-For devices that do not support hardware erase, Lethe overwrites existing data with random or static patterns over
-one or more passes and can read it back to verify the result. The supported methods are designed to align with the
-Clear, Purge, and Destroy categories in [NIST SP 800-88 Rev. 2](#nist-sp-800-88-rev-2); see that section for the
-method mapping, verification limits, and practical caveats.
+The supported methods are designed to align with the Clear and Purge categories in [NIST SP 800-88 Rev. 2](#nist-sp-800-88-rev-2); see that section for the method mapping, verification limits, and practical caveats.
 
-Lethe is free of proprietary components and is developed as open source. Platform support and known limitations are
-described below.
+Platform support and known limitations are described below.
 
 ## Features
 
@@ -95,7 +91,7 @@ organization.
 
 #### Destroy
 
-Not supported. Use an approved physical destruction process for media that must meet the Destroy method.
+Not supported.
 
 ### Assurance
 
@@ -186,11 +182,7 @@ Methods are listed in the recommended order:
 | `?`   | Not probed or unsupported on this platform                                      |
 | `-`   | No hardware erase method reported                                               |
 
-Prefer `NS` over `NF`, and `SA` over `SE`, when both are listed. There is no universal winner: crypto erase is
-fastest, block erase physically erases, and overwrite writes a pattern; the actual behavior depends on the drive
-firmware.
-
-Only `NS*` and `SA*` are executable; `SE*` and `NF*` are reported for information.
+Only `NS*` and `SA*` are supported; `SE*` and `NF*` are reported for information.
 
 ### Wipe a device
 
@@ -347,7 +339,7 @@ are not offered as erase options. Linux and macOS execution is not implemented y
 Both ATA SANITIZE and NVMe Sanitize run in the background; Lethe polls the device until
 they complete, which can take a while. Some USB bridges accept ATA SANITIZE but do not
 expose its status. After a short grace period, Lethe reports the command as accepted but
-unconfirmed instead of failing, and warns you not to retry until the erase has finished.
+unconfirmed instead of failing.
 Because completion cannot be verified through such a bridge, check the drive before
 reuse. If neither method is supported, hardware erase is not available for that device.
 
